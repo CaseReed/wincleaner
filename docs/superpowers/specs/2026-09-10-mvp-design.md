@@ -105,3 +105,10 @@ Fenêtre unique, barre latérale : Nettoyage, Démarrage. Thème clair/sombre.
 - Front : Vitest sur les composants de liste et de rapport.
 - Commandes de vérification : `cargo test` dans `src-tauri`, `npm test` à la racine,
   `npm run tauri build` pour le binaire.
+
+## Post-MVP : signature du binaire
+
+Smart App Control (actif par défaut sur les Windows 11 récents) bloque tout exécutable
+non signé par une autorité du Trusted Root Program. Avant toute distribution publique,
+signer l'exécutable et l'installeur (SignPath, gratuit pour l'open source, ou Azure
+Trusted Signing). Hors périmètre MVP ; le développement se fait avec SAC désactivé.
