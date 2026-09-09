@@ -172,9 +172,21 @@ pub fn scan_rule(rule: &Rule) -> Result<ScanResult, RuleError> {
     scan_rule_with(rule, &system_env)
 }
 
-/// Implémentée en Task 5 via `SHQueryRecycleBinW`.
+/// Interroge la corbeille de tous les volumes. Lecture seule.
+/// Renvoie `(nombre d'éléments, octets occupés)`.
 pub fn query_recycle_bin() -> Result<(u64, u64), String> {
-    Err("interrogation de la corbeille non implémentée".to_string())
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+
+    let mut info = SHQUERYRBINFO {
+        cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+        i64Size: 0,
+        i64NumItems: 0,
+    };
+    // PCWSTR::null() => tous les volumes du poste.
+    unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) }
+        .map_err(|e| format!("SHQueryRecycleBinW a échoué : {e}"))?;
+    Ok((info.i64NumItems.max(0) as u64, info.i64Size.max(0) as u64))
 }
 
 #[cfg(test)]
@@ -302,5 +314,53 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let lookup = lookup_for(dir.path());
         assert!(scan_rule_with_api(&rule, &lookup, &recycle_absent).is_err());
+    }
+
+    #[test]
+    fn le_scan_dune_regle_corbeille_utilise_lapi_et_ignore_les_globs() {
+        let dir = faux_profil();
+        let lookup = lookup_for(dir.path());
+        let rule = Rule {
+            id: "windows.recycle-bin".into(),
+            category: "Système".into(),
+            label: "Corbeille".into(),
+            paths: vec![],
+            exclude: vec![],
+            risk: Risk::Low,
+            kind: RuleKind::RecycleBin,
+        };
+        let query = || Ok((7u64, 700u64));
+        let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();
+        assert_eq!(res.file_count, 7);
+        assert_eq!(res.total_bytes, 700);
+        assert!(res.paths.is_empty());
+        assert_eq!(res.skipped, 0);
+    }
+
+    #[test]
+    fn un_echec_de_linterrogation_corbeille_compte_un_skipped() {
+        let dir = faux_profil();
+        let lookup = lookup_for(dir.path());
+        let rule = Rule {
+            id: "windows.recycle-bin".into(),
+            category: "Système".into(),
+            label: "Corbeille".into(),
+            paths: vec![],
+            exclude: vec![],
+            risk: Risk::Low,
+            kind: RuleKind::RecycleBin,
+        };
+        let query = || Err("échec".to_string());
+        let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();
+        assert_eq!(res.file_count, 0);
+        assert_eq!(res.total_bytes, 0);
+        assert_eq!(res.skipped, 1);
+    }
+
+    #[test]
+    fn query_recycle_bin_ne_panique_pas() {
+        // Appel en lecture seule sur la vraie corbeille : n'efface rien.
+        let res = query_recycle_bin();
+        assert!(res.is_ok(), "SHQueryRecycleBinW a échoué : {res:?}");
     }
 }

@@ -111,9 +111,18 @@ pub fn clean_rule(rule: &Rule, mode: CleanMode) -> Result<CleanReport, RuleError
     clean_rule_with(rule, mode, &system_env)
 }
 
-/// Implémentée en Task 5 via `SHEmptyRecycleBinW`.
+/// Vide la corbeille de tous les volumes, sans confirmation, sans barre de
+/// progression et sans son. Irréversible : n'est appelée que par la règle
+/// `windows.recycle-bin`.
 pub fn empty_recycle_bin() -> Result<(), String> {
-    Err("vidage de la corbeille non implémenté".to_string())
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        SHEmptyRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND,
+    };
+
+    let flags = SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND;
+    unsafe { SHEmptyRecycleBinW(None, PCWSTR::null(), flags) }
+        .map_err(|e| format!("SHEmptyRecycleBinW a échoué : {e}"))
 }
 
 #[cfg(test)]
