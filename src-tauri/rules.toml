@@ -1,0 +1,73 @@
+[[rule]]
+id = "windows.temp"
+category = "Système"
+label = "Fichiers temporaires"
+paths = ["%TEMP%\\**\\*"]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "windows.recycle-bin"
+category = "Système"
+label = "Corbeille"
+kind = "recycle-bin"
+paths = []
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "windows.thumbnails"
+category = "Système"
+label = "Cache des miniatures"
+paths = ["%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db"]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "windows.explorer-recent"
+category = "Système"
+label = "Éléments récents"
+paths = ["%APPDATA%\\Microsoft\\Windows\\Recent\\**\\*"]
+exclude = []
+risk = "medium"
+
+[[rule]]
+id = "windows.user-logs"
+category = "Système"
+label = "Journaux utilisateur"
+paths = [
+  "%LOCALAPPDATA%\\Temp\\*.log",
+  "%LOCALAPPDATA%\\CrashDumps\\*.dmp",
+]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "edge.cache"
+category = "Navigateurs"
+label = "Cache Microsoft Edge"
+paths = [
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache\\**\\*",
+]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "chrome.cache"
+category = "Navigateurs"
+label = "Cache Google Chrome"
+paths = [
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache\\**\\*",
+]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "firefox.cache"
+category = "Navigateurs"
+label = "Cache Mozilla Firefox"
+paths = ["%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2\\**\\*"]
+exclude = []
+risk = "low"
