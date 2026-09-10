@@ -1,9 +1,11 @@
 use crate::rules::{
-    resolved_excludes_with, resolved_paths_with, system_env, EnvLookup, Rule, RuleError, RuleKind,
+    profile_canon_with, resolved_excludes_with, resolved_paths_with, system_env, EnvLookup, Rule,
+    RuleError, RuleKind,
 };
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::Path;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,21 +100,68 @@ fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
     })
 }
 
-/// Parcourt les motifs de la règle et renvoie, pour chaque fichier retenu,
-/// son chemin Windows et sa taille. Les entrées illisibles sont comptées
-/// dans `skipped` et jamais propagées.
-fn collect(patterns: &[String], excludes: &[String]) -> Result<(BTreeMap<String, u64>, u32), RuleError> {
-    let include = build_set(patterns)?;
-    let exclude = build_set(excludes)?;
-    let mut found: BTreeMap<String, u64> = BTreeMap::new();
-    let mut skipped: u32 = 0;
+/// `FILE_ATTRIBUTE_REPARSE_POINT` : jonction, lien symbolique, point de
+/// montage de volume, espace réservé de synchronisation cloud. Tous font
+/// qu'un chemin ne désigne pas le répertoire qu'il a l'air de désigner.
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
+pub(crate) fn est_point_danalyse(md: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        md.file_type().is_symlink()
+    }
+}
+
+/// Verdict du confinement d'une racine de marche.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Racine {
+    /// Répertoire réel, résolu sous le profil : on peut marcher.
+    Marchable,
+    /// Absente du disque : la règle ne s'applique pas sur cette machine.
+    /// Ce n'est pas une anomalie, rien n'est compté.
+    Absente,
+    /// Point d'analyse, ou chemin résolu hors du profil : on ne marche pas.
+    Refusee,
+}
+
+/// Confronte une racine de marche au disque avant d'y descendre.
+///
+/// C'est le cœur du confinement : la vérification faite au chargement des
+/// règles est textuelle, et `walkdir` descend dans sa racine de marche même
+/// quand celle-ci est un point d'analyse. Une jonction posée sur `%TEMP%` —
+/// que `mklink /J` crée sans aucun privilège — suffirait sinon à faire
+/// supprimer un arbre entier hors du profil, voire hors du volume système.
+pub(crate) fn racine_confinee(win_root: &str, profile_canon: &Path) -> Racine {
+    let md = match std::fs::symlink_metadata(win_root) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Racine::Absente,
+        Err(_) => return Racine::Refusee,
+    };
+    // Refusé même quand la cible reste sous le profil : on ne marche que sur
+    // des répertoires réels, jamais sur une indirection.
+    if est_point_danalyse(&md) {
+        return Racine::Refusee;
+    }
+    match std::fs::canonicalize(win_root) {
+        Ok(reel) if reel.starts_with(profile_canon) => Racine::Marchable,
+        Ok(_) => Racine::Refusee,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Racine::Absente,
+        Err(_) => Racine::Refusee,
+    }
+}
+
+/// Racines de marche minimales d'un jeu de motifs : une racine incluse dans
+/// une autre serait parcourue deux fois.
+pub(crate) fn walk_roots(patterns: &[String]) -> Vec<String> {
     let mut roots: Vec<String> = patterns.iter().map(|p| glob_root(&to_slash(p))).collect();
     roots.sort();
     roots.dedup();
-    // Une racine incluse dans une autre serait parcourue deux fois : on
-    // ne garde que les racines qui ne sont préfixe d'aucune autre.
-    let minimal: Vec<String> = roots
+    roots
         .iter()
         .filter(|r| {
             !roots
@@ -120,10 +169,55 @@ fn collect(patterns: &[String], excludes: &[String]) -> Result<(BTreeMap<String,
                 .any(|other| other != *r && r.starts_with(&format!("{other}/")))
         })
         .cloned()
-        .collect();
+        .collect()
+}
 
-    for root in minimal {
-        for entry in WalkDir::new(root.replace('/', "\\")).follow_links(false) {
+/// Parcourt les motifs de la règle et renvoie, pour chaque fichier retenu,
+/// son chemin Windows et sa taille. Les entrées illisibles, les racines
+/// refusées et les points d'analyse rencontrés sont comptés dans `skipped`
+/// et jamais propagés.
+fn collect(
+    patterns: &[String],
+    excludes: &[String],
+    profile_canon: &Path,
+) -> Result<(BTreeMap<String, u64>, u32), RuleError> {
+    let include = build_set(patterns)?;
+    let exclude = build_set(excludes)?;
+    let mut found: BTreeMap<String, u64> = BTreeMap::new();
+    let mut skipped: u32 = 0;
+
+    for root in walk_roots(patterns) {
+        let win_root = root.replace('/', "\\");
+        match racine_confinee(&win_root, profile_canon) {
+            Racine::Marchable => {}
+            Racine::Absente => continue,
+            Racine::Refusee => {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        // `follow_links(false)` arrête déjà jonctions et liens symboliques
+        // sous la racine ; `filter_entry` ferme les autres points d'analyse
+        // (espaces réservés cloud, conteneurs), que Rust ne classe pas comme
+        // des liens et dans lesquels `walkdir` descendrait.
+        let sautees = std::cell::Cell::new(0u32);
+        let marche = WalkDir::new(&win_root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                if e.depth() > 0 && e.file_type().is_dir() {
+                    if let Ok(md) = e.metadata() {
+                        if est_point_danalyse(&md) {
+                            sautees.set(sautees.get() + 1);
+                            return false;
+                        }
+                    }
+                }
+                true
+            });
+
+        for entry in marche {
             let entry = match entry {
                 Ok(e) => e,
                 Err(err) => {
@@ -151,6 +245,7 @@ fn collect(patterns: &[String], excludes: &[String]) -> Result<(BTreeMap<String,
                 Err(_) => skipped += 1,
             }
         }
+        skipped += sautees.get();
     }
     Ok((found, skipped))
 }
@@ -181,7 +276,8 @@ pub fn scan_rule_with_api(
 
     let patterns = resolved_paths_with(rule, lookup)?;
     let excludes = resolved_excludes_with(rule, lookup)?;
-    let (found, skipped) = collect(&patterns, &excludes)?;
+    let profile_canon = profile_canon_with(lookup)?;
+    let (found, skipped) = collect(&patterns, &excludes, &profile_canon)?;
     Ok(ScanResult {
         rule_id: rule.id.clone(),
         file_count: found.len() as u64,
@@ -217,7 +313,6 @@ mod tests {
     use super::*;
     use crate::rules::{Risk, Rule, RuleKind};
     use std::fs;
-    use std::path::Path;
     use tempfile::TempDir;
 
     /// Crée un faux profil :
@@ -259,6 +354,92 @@ mod tests {
 
     fn recycle_absent() -> Result<(u64, u64), String> {
         panic!("l'API corbeille ne doit pas être appelée pour une règle « files »");
+    }
+
+    /// Crée une jonction de répertoire. `mklink /J` n'exige aucun privilège,
+    /// contrairement à `mklink /D` : le test tourne sans élévation. Le lien et
+    /// sa cible vivent tous les deux dans le `TempDir` du test.
+    fn jonction(lien: &Path, cible: &Path) {
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(lien)
+            .arg(cible)
+            .output()
+            .expect("mklink n'a pas pu être lancé");
+        assert!(
+            out.status.success(),
+            "mklink /J a échoué : {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// `<base>/profil` (faux profil), `<base>/dehors/precieux.txt`.
+    fn profil_et_dehors(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let profil = base.join("profil");
+        let dehors = base.join("dehors");
+        fs::create_dir_all(profil.join("AppData").join("Local")).unwrap();
+        fs::create_dir_all(&dehors).unwrap();
+        fs::write(dehors.join("precieux.txt"), b"precieux").unwrap();
+        (profil, dehors)
+    }
+
+    #[test]
+    fn une_racine_qui_est_une_jonction_hors_profil_nest_pas_parcourue() {
+        let base = TempDir::new().unwrap();
+        let (profil, dehors) = profil_et_dehors(base.path());
+        // %TEMP% est une jonction vers un répertoire hors du faux profil :
+        // exactement la configuration d'un poste où Temp a été déplacé.
+        jonction(&profil.join("AppData").join("Local").join("Temp"), &dehors);
+
+        let lookup = lookup_for(&profil);
+        let rule = regle_temp(vec![r"%TEMP%\**\*"], vec![]);
+        let res = scan_rule_with_api(&rule, &lookup, &recycle_absent).unwrap();
+
+        assert_eq!(res.file_count, 0, "paths = {:?}", res.paths);
+        assert_eq!(res.total_bytes, 0);
+        assert_eq!(res.skipped, 1, "la racine refusée doit être signalée");
+        assert!(dehors.join("precieux.txt").exists());
+    }
+
+    #[test]
+    fn une_jonction_sous_la_racine_nest_pas_suivie() {
+        let base = TempDir::new().unwrap();
+        let (profil, dehors) = profil_et_dehors(base.path());
+        let temp = profil.join("AppData").join("Local").join("Temp");
+        fs::create_dir_all(&temp).unwrap();
+        fs::write(temp.join("a.txt"), b"aaa").unwrap();
+        jonction(&temp.join("lien"), &dehors);
+
+        let lookup = lookup_for(&profil);
+        let rule = regle_temp(vec![r"%TEMP%\**\*"], vec![]);
+        let res = scan_rule_with_api(&rule, &lookup, &recycle_absent).unwrap();
+
+        assert_eq!(res.file_count, 1, "paths = {:?}", res.paths);
+        assert!(res.paths[0].ends_with("a.txt"));
+        assert!(res.paths.iter().all(|p| !p.contains("precieux")));
+    }
+
+    #[test]
+    fn une_racine_qui_est_une_jonction_vers_le_profil_est_refusee_aussi() {
+        // Même pointant à l'intérieur du profil, un point d'analyse à la racine
+        // de marche est refusé : on ne marche que sur des répertoires réels.
+        let base = TempDir::new().unwrap();
+        let profil = base.path().join("profil");
+        let ailleurs = profil.join("Ailleurs");
+        fs::create_dir_all(profil.join("AppData").join("Local")).unwrap();
+        fs::create_dir_all(&ailleurs).unwrap();
+        fs::write(ailleurs.join("a.txt"), b"aaa").unwrap();
+        jonction(&profil.join("AppData").join("Local").join("Temp"), &ailleurs);
+
+        let lookup = lookup_for(&profil);
+        let rule = regle_temp(vec![r"%TEMP%\**\*"], vec![]);
+        let res = scan_rule_with_api(&rule, &lookup, &recycle_absent).unwrap();
+
+        assert_eq!(res.file_count, 0, "paths = {:?}", res.paths);
+        assert_eq!(res.skipped, 1);
+        assert!(ailleurs.join("a.txt").exists());
     }
 
     #[test]

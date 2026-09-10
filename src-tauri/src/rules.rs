@@ -60,6 +60,9 @@ pub enum RuleError {
     ParentSegment(String),
     /// Le chemin résolu sort de `%USERPROFILE%`.
     OutsideProfile(String),
+    /// `%USERPROFILE%` ne se résout pas sur le disque : sans référence réelle,
+    /// aucun confinement ne peut être vérifié, donc rien n'est parcouru.
+    UnresolvableProfile(String),
     /// Deux règles portent le même `id`.
     DuplicateId(String),
     /// Une règle `kind = "files"` n'a aucun chemin.
@@ -91,6 +94,10 @@ impl fmt::Display for RuleError {
             RuleError::OutsideProfile(p) => {
                 write!(f, "le chemin « {p} » sort du profil utilisateur")
             }
+            RuleError::UnresolvableProfile(m) => write!(
+                f,
+                "le profil utilisateur ne se résout pas sur le disque : {m}"
+            ),
             RuleError::DuplicateId(id) => write!(f, "l'identifiant de règle « {id} » est dupliqué"),
             RuleError::EmptyPaths(id) => write!(
                 f,
@@ -202,6 +209,17 @@ fn resolve_one(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
         return Err(RuleError::OutsideProfile(raw.to_string()));
     }
     Ok(normalized)
+}
+
+/// Chemin réel du profil utilisateur, résolu sur le disque.
+///
+/// Le confinement vérifié au chargement est purement textuel : il ne dit rien
+/// de ce que le disque fait réellement d'un chemin (jonction, lien, forme 8.3).
+/// C'est cette valeur — et elle seule — qui sert de référence au confinement
+/// réel, au moment de marcher et au moment de supprimer.
+pub fn profile_canon_with(lookup: EnvLookup) -> Result<std::path::PathBuf, RuleError> {
+    let raw = lookup("USERPROFILE").ok_or_else(|| RuleError::MissingVar("USERPROFILE".into()))?;
+    std::fs::canonicalize(&raw).map_err(|e| RuleError::UnresolvableProfile(format!("{raw} : {e}")))
 }
 
 pub fn resolved_paths_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<String>, RuleError> {

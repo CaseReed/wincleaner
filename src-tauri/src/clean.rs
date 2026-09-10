@@ -1,6 +1,7 @@
-use crate::rules::{system_env, EnvLookup, Risk, Rule, RuleError, RuleKind};
-use crate::scan::{query_recycle_bin, scan_rule_with_api, RecycleQuery};
+use crate::rules::{profile_canon_with, system_env, EnvLookup, Risk, Rule, RuleError, RuleKind};
+use crate::scan::{est_point_danalyse, query_recycle_bin, scan_rule_with_api, RecycleQuery};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +46,38 @@ pub fn effective_mode(mode: CleanMode, risk: Risk) -> CleanMode {
     }
 }
 
+/// Retire le préfixe verbatim que `canonicalize` ajoute. `IFileOperation`,
+/// derrière `trash::delete`, n'accepte pas un chemin `\?\`.
+fn sans_prefixe_verbatim(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy().to_string();
+    match s.strip_prefix(r"\?\UNC\") {
+        Some(reste) => PathBuf::from(format!(r"\{reste}")),
+        None => PathBuf::from(s.strip_prefix(r"\?\").unwrap_or(&s)),
+    }
+}
+
+/// Dernière vérification avant de supprimer : le re-scan a beau être
+/// immédiat, un processus tournant sous le même compte peut remplacer un
+/// nom entre le `metadata()` du parcours et l'appel de suppression. On exige
+/// donc, sur le chemin lui-même et non sur ce qu'il pointe, un fichier
+/// régulier dont l'emplacement réel reste sous le profil.
+///
+/// Rend le chemin à supprimer et sa taille.
+fn chemin_supprimable(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64), String> {
+    let md = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if est_point_danalyse(&md) {
+        return Err("le chemin est devenu un point d'analyse".to_string());
+    }
+    if !md.is_file() {
+        return Err("le chemin n'est plus un fichier régulier".to_string());
+    }
+    let reel = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    if !reel.starts_with(profile_canon) {
+        return Err("le chemin sort du profil utilisateur au moment de la suppression".to_string());
+    }
+    Ok((sans_prefixe_verbatim(&reel), md.len()))
+}
+
 pub fn clean_rule_with_api(
     rule: &Rule,
     mode: CleanMode,
@@ -75,13 +108,23 @@ pub fn clean_rule_with_api(
     }
 
     let target = effective_mode(mode, rule.risk);
+    let profile_canon = profile_canon_with(lookup)?;
     let mut report = CleanReport::default();
 
     for path in &scan.paths {
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let (reel, size) = match chemin_supprimable(path, &profile_canon) {
+            Ok(v) => v,
+            Err(reason) => {
+                report.skipped.push(SkippedItem {
+                    path: path.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
         let outcome = match target {
-            CleanMode::Permanent => std::fs::remove_file(path).map_err(|e| e.to_string()),
-            CleanMode::Trash => trash::delete(path).map_err(|e| e.to_string()),
+            CleanMode::Permanent => std::fs::remove_file(&reel).map_err(|e| e.to_string()),
+            CleanMode::Trash => trash::delete(&reel).map_err(|e| e.to_string()),
             CleanMode::Auto => unreachable!("effective_mode ne renvoie jamais Auto"),
         };
         match outcome {
@@ -182,6 +225,77 @@ mod tests {
 
     fn recycle_interdit_empty() -> Result<(), String> {
         panic!("l'API corbeille ne doit pas être appelée pour une règle « files »");
+    }
+
+    fn jonction(lien: &Path, cible: &Path) {
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(lien)
+            .arg(cible)
+            .output()
+            .expect("mklink n'a pas pu être lancé");
+        assert!(
+            out.status.success(),
+            "mklink /J a échoué : {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn un_fichier_reel_sous_le_profil_est_supprimable() {
+        let dir = TempDir::new().unwrap();
+        let profil = std::fs::canonicalize(dir.path()).unwrap();
+        let f = dir.path().join("a.txt");
+        fs::write(&f, b"aaa").unwrap();
+        let (_, taille) =
+            chemin_supprimable(&f.to_string_lossy(), &profil).expect("devrait être supprimable");
+        assert_eq!(taille, 3);
+    }
+
+    #[test]
+    fn un_chemin_devenu_repertoire_entre_le_scan_et_la_suppression_est_ignore() {
+        let dir = TempDir::new().unwrap();
+        let profil = std::fs::canonicalize(dir.path()).unwrap();
+        let d = dir.path().join("a.txt");
+        fs::create_dir(&d).unwrap();
+        let err = chemin_supprimable(&d.to_string_lossy(), &profil).unwrap_err();
+        assert!(err.contains("fichier régulier"), "raison = {err}");
+    }
+
+    #[test]
+    fn un_chemin_devenu_jonction_entre_le_scan_et_la_suppression_est_ignore() {
+        let base = TempDir::new().unwrap();
+        let profil_dir = base.path().join("profil");
+        let dehors = base.path().join("dehors");
+        fs::create_dir_all(&profil_dir).unwrap();
+        fs::create_dir_all(&dehors).unwrap();
+        fs::write(dehors.join("precieux.txt"), b"precieux").unwrap();
+        let profil = std::fs::canonicalize(&profil_dir).unwrap();
+        // Le nom qui avait été analysé comme un fichier est devenu une jonction.
+        let piege = profil_dir.join("a.txt");
+        jonction(&piege, &dehors);
+
+        let err = chemin_supprimable(&piege.to_string_lossy(), &profil).unwrap_err();
+        assert!(err.contains("point d'analyse"), "raison = {err}");
+        assert!(dehors.join("precieux.txt").exists());
+    }
+
+    #[test]
+    fn un_fichier_hors_du_profil_nest_pas_supprimable() {
+        let base = TempDir::new().unwrap();
+        let profil_dir = base.path().join("profil");
+        let dehors = base.path().join("dehors");
+        fs::create_dir_all(&profil_dir).unwrap();
+        fs::create_dir_all(&dehors).unwrap();
+        let f = dehors.join("precieux.txt");
+        fs::write(&f, b"precieux").unwrap();
+        let profil = std::fs::canonicalize(&profil_dir).unwrap();
+
+        let err = chemin_supprimable(&f.to_string_lossy(), &profil).unwrap_err();
+        assert!(err.contains("sort du profil"), "raison = {err}");
+        assert!(f.exists());
     }
 
     #[test]
