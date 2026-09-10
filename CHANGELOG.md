@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sandbox mode.** Settings → Sandbox builds the synthetic profile the safety
+  harness runs against — junk, decoy documents, credential stores, lookalike
+  cache directories and junctions pointing outside it — under your temporary
+  directory, and points the whole engine at it. Analyze and Clean then run for
+  real against that profile and nothing else, and a "Sandbox verdict" card
+  reads the disk back afterwards: sentinels intact, junk removed, files outside
+  the profile untouched, junctions refused. While a sandbox is active, all four
+  rule variables resolve inside its root, the Recycle Bin is replaced by no-op
+  stand-ins (Recycle Bin mode moves files to a bin inside the sandbox), and the
+  Startup screen steps aside because it reads the real registry. See
+  [`docs/safety-harness.md`](docs/safety-harness.md).
+
 - **Safety harness.** An end-to-end test (`src-tauri/tests/safety_harness.rs`)
   runs the real scan and clean code against a synthetic Windows profile built
   under a temporary directory — decoy documents, private keys, browser

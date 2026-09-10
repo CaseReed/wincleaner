@@ -258,3 +258,43 @@ The only honest check is a real upgrade.
    from step to step with no sliding animation, and still reach N / N.
 6. Analyze a second time straight after the first: the counter must restart at
    1 / N, never resume where the previous run stopped.
+
+## VM-17 — Sandbox mode — to be run by the user
+
+Not run automatically: it is the whole point of the item that a human watches
+the real engine clean a real tree. Nothing of yours is reachable while it runs,
+but only your own eyes can confirm that.
+
+1. Note what your Windows Recycle Bin holds, and open **Task Manager > Startup
+   apps** to note what is enabled there. Both must be untouched at the end.
+2. Run `npm run tauri dev`, **Settings > Sandbox**. Read the two sentences,
+   then click **Create a sandbox profile**.
+3. A banner must appear above every screen: "Sandbox mode — cleaning affects
+   only the test profile at `%TEMP%\wincleaner-sandbox-<id>`". Switch screens:
+   the banner follows.
+4. Open that directory in Explorer. It must hold `profile\`, `outside\`,
+   `outside2\`, `outside3\`, `outside4\` and `control\`. Open
+   `profile\Documents` and confirm `thesis.docx` is there — that file must
+   still be there at the end, byte for byte.
+5. **Startup** screen: it must show the notice, not the table. Nothing in Task
+   Manager > Startup apps may have changed.
+6. **Cleanup** screen: the rule list is the sandbox's own. Click **Analyze**.
+   The reclaimable total must be non-zero and every native rule must report
+   something.
+7. Choose **Permanent** in the bottom bar, click **Clean**, then **Confirm
+   cleanup**.
+8. A **Sandbox verdict** card must appear, green, reading "Sentinels intact
+   N / N", "Junk removed M / M", "Files outside the profile untouched K / K"
+   and "Junctions refused: yes". If it is red, read the paths it lists and stop
+   — that is a real containment failure.
+9. Check Explorer again: `profile\Documents\thesis.docx`, `profile\.ssh\`,
+   `outside\secret.txt` and `control\untouched.dat` must all still be there;
+   `profile\AppData\Local\Temp` must be empty of the junk.
+10. Repeat steps 6–8 with **Recycle Bin** mode on a fresh sandbox: the removed
+    files must land in `<root>\recycle-bin`, and your **real** Recycle Bin must
+    still hold exactly what it held at step 1 — nothing added, nothing emptied.
+11. Click **Leave** in the banner. The banner disappears, the rule list goes
+    back to the machine's own catalogue, the Startup screen lists your real
+    entries again, and `%TEMP%\wincleaner-sandbox-<id>` is gone from Explorer.
+12. Confirm one last time that your Recycle Bin and your startup entries are
+    exactly as they were at step 1.

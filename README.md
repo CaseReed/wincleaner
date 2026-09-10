@@ -87,6 +87,11 @@ apps.
   recording the assertion that fires; one guard is documented as defence in
   depth that no unelevated test can exercise — see
   [`docs/safety-harness.md`](docs/safety-harness.md).
+- **Provable on your own machine.** Settings → Sandbox builds that same
+  synthetic profile under your temporary directory and points the whole engine
+  at it, so you can run a real Analyze and a real Clean and read the verdict —
+  sentinels intact, junk removed, nothing outside touched — without a single
+  file of your own being reachable.
 
 One exception deserves its own paragraph: the **Recycle Bin** rule goes through
 the Windows `SHEmptyRecycleBinW` API, which empties the recycle bin of **every

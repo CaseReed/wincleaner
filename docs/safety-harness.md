@@ -96,6 +96,45 @@ own path, so a silent **rewrite** is caught as well as a deletion.
 Two junctions are planted with `mklink /J`, which needs no privilege: one on
 the `%TEMP%` walk, one buried inside `Chrome\User Data\Default\Cache\`.
 
+## Try it yourself
+
+The builder lives in the library, not in `tests/`: **Sandbox mode** builds this
+exact tree on your own machine, points the whole engine at it, and lets you run
+a real Analyze and a real Clean against it. What you watch is what CI proves —
+one builder, one catalogue, one set of guards.
+
+1. **Settings → Sandbox → Create a sandbox profile.** WinCleaner creates
+   `%TEMP%\wincleaner-sandbox-<id>`, fills it with the junk, the sentinels and
+   the junctions above, and tells you how many of each. A banner appears above
+   every screen naming the root, so you can never forget which profile you are
+   looking at.
+2. **Cleanup → Analyze**, then **Clean**. The rule list is the sandbox's own:
+   the nine native rules plus the Winapp2 entries the fixture makes detected.
+   Both run the real code, on the real disk.
+3. **Read the verdict.** After the clean, a "Sandbox verdict" card reads the
+   disk back against the manifest the sandbox promised: sentinels intact, junk
+   removed, files outside the profile untouched, junctions refused. Green means
+   every count added up; red names the files that were damaged or survived.
+4. **Settings → Leave the sandbox** (or the banner's *Leave*) removes the
+   directory and hands the real catalogue back.
+
+Nothing of yours is reachable while a sandbox is active:
+
+| Sandbox mode | Instead of |
+| --- | --- |
+| `%USERPROFILE%`, `%LOCALAPPDATA%`, `%APPDATA%`, `%TEMP%` all mapped inside the sandbox root | `rules::system_env` |
+| a query answering `(0, 0)` | `SHQueryRecycleBinW` |
+| an empty that does nothing | `SHEmptyRecycleBinW` |
+| `Trash` mode **moves** the file to `<root>\recycle-bin` | `trash::delete` |
+| Winapp2 registry probe always answering `false` | `winapp2::registry_key_exists` |
+| `list_startup` / `set_startup_enabled` refuse with a message | the real `HKCU` startup keys |
+
+Because all four variables resolve inside the root, the containment the
+application already enforces — the textual `under_profile` check, then
+`confined_root` and `deletable_path` replayed on disk — confines every walk and
+every deletion to the sandbox. `commands::tests::a_sandbox_scan_never_lists_a_path_outside_the_sandbox_root`
+asserts exactly that.
+
 ## The six tests
 
 1. **`the_nine_native_rules_delete_their_junk_and_spare_every_sentinel`** —
@@ -182,10 +221,10 @@ containment, not as a count that no longer adds up.
 
 **A new rule needs a junk fixture.** Add at least one file matching each of
 its patterns in `Fixture::populate_junk`
-(`src-tauri/tests/support/fake_profile.rs`). Without one the harness fails at
+(`src-tauri/src/sandbox.rs`). Without one the harness fails at
 
 ```
-rule "<id>" matched no junk: add a fixture in tests/support/fake_profile.rs
+rule "<id>" matched no junk: add a fixture in src/sandbox.rs
 ```
 
 If the new rule walks a directory that also holds data a user would miss, add

@@ -47,8 +47,14 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
 - Tests: never against the real profile, the real recycle bin or the real Run
   keys. `TempDir` and `HKCU\Software\wincleaner-test` only.
 - The safety harness (`src-tauri/tests/safety_harness.rs`) must pass; a new
-  rule needs a junk fixture in `tests/support/fake_profile.rs`, or the harness
+  rule needs a junk fixture in `src-tauri/src/sandbox.rs`, or the harness
   fails with "rule <id> matched no junk". See `docs/safety-harness.md`.
+- The fixture builder lives in the **library** (`src-tauri/src/sandbox.rs`),
+  not in `tests/`: Sandbox mode builds the very same tree on a user's machine
+  so what they watch is what CI proves. While a sandbox is active the four
+  rule variables all resolve inside its root, the recycle-bin query/empty are
+  no-op stand-ins, `Trash` mode moves the file to `<root>ecycle-bin` instead
+  of calling `trash::delete`, and both startup commands refuse.
 - One network call and one only: `check_for_updates` (`src-tauri/src/update.rs`)
   does a single unauthenticated `GET` on
   `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, from

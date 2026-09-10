@@ -252,7 +252,7 @@ fn the_nine_native_rules_delete_their_junk_and_spare_every_sentinel() {
         match rule.kind {
             RuleKind::Files => assert!(
                 scan.file_count > 0,
-                "rule \"{}\" matched no junk: add a fixture in tests/support/fake_profile.rs",
+                "rule \"{}\" matched no junk: add a fixture in src/sandbox.rs",
                 rule.id
             ),
             RuleKind::RecycleBin => {
