@@ -47,9 +47,21 @@ pub fn run() {
         std::process::exit(1);
     }
 
+    // Parsing the embedded Winapp2 base and probing the registry costs about a
+    // second. Started here, off the main thread, so the window opens at once
+    // and the first `list_rules` finds the catalogue already built.
+    tauri::async_runtime::spawn_blocking(|| {
+        if let Err(err) = commands::catalogue() {
+            // Not fatal: the native rules alone still make a usable
+            // application, and `list_rules` will report this same error.
+            eprintln!("catalogue: {err}");
+        }
+    });
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::list_rules,
+            commands::rules_summary,
             commands::scan,
             commands::clean,
             commands::running_browsers,

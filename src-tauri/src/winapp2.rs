@@ -417,6 +417,117 @@ pub fn convert_with(src: &str, lookup: EnvLookup) -> (Vec<ConvertedRule>, Conver
     (out, report)
 }
 
+
+/// A detection probe, injected so that tests never depend on what happens to
+/// be installed on the machine running them.
+pub type Probe<'a> = &'a dyn Fn(&str) -> bool;
+
+/// Read-only existence check on a `DetectN=HKCU\..` / `HKLM\..` key. Opening a
+/// key with `KEY_READ` writes nothing and needs no privilege; a hive we do not
+/// know is simply "not detected".
+pub fn registry_key_exists(key: &str) -> bool {
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let key = key.trim().trim_matches('"');
+    let Some((root, sub)) = key.split_once('\\') else {
+        return false;
+    };
+    let hive = match root.to_ascii_uppercase().as_str() {
+        "HKCU" | "HKEY_CURRENT_USER" => HKEY_CURRENT_USER,
+        "HKLM" | "HKEY_LOCAL_MACHINE" => HKEY_LOCAL_MACHINE,
+        _ => return false,
+    };
+    RegKey::predef(hive)
+        .open_subkey_with_flags(sub, KEY_READ)
+        .is_ok()
+}
+
+/// Expands `%VAR%\rest` for a probe, WITHOUT `globset::escape`: this string is
+/// handed to the file system, not to a glob compiler.
+fn expand_raw(mapped: &str, lookup: EnvLookup) -> Option<String> {
+    let end = mapped[1..].find('%')? + 1;
+    let value = lookup(&mapped[1..end])?;
+    Some(format!(
+        "{}{}",
+        value.trim_end_matches('\\'),
+        &mapped[end + 1..]
+    ))
+}
+
+/// `DetectFileN=<path>`, read-only. A trailing `\*` means "any child": the
+/// directory must exist AND hold at least one entry, otherwise an empty
+/// left-over folder would keep an uninstalled application visible forever.
+///
+/// The probe is confined to the profile like everything else. It only ever
+/// reads metadata, but the allow-list is what keeps a `%WinDir%` path from
+/// being stat-ed at all.
+pub fn detect_file_exists_with(raw: &str, lookup: EnvLookup) -> bool {
+    let raw = raw.trim().trim_matches('"');
+    let any_child = raw.ends_with(r"\*");
+    let base = raw.trim_end_matches('*').trim_end_matches('\\');
+    let Some(mapped) = map_path(base) else {
+        return false;
+    };
+    let Some(path) = expand_raw(&mapped, lookup) else {
+        return false;
+    };
+    let Some(profile) = lookup("USERPROFILE") else {
+        return false;
+    };
+    if !crate::rules::under_profile(&path, &profile) {
+        return false;
+    }
+    if any_child {
+        std::fs::read_dir(&path)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false)
+    } else {
+        std::fs::symlink_metadata(&path).is_ok()
+    }
+}
+
+/// One matching `Detect` or `DetectFile` is enough. An entry with none of
+/// either stays hidden: showing 2,000 rules for applications that are not
+/// installed is how a cleaner ends up deleting something nobody meant to
+/// select.
+pub fn is_detected_with(entry: &ConvertedRule, registry: Probe, file: Probe) -> bool {
+    entry.detects.iter().any(|key| registry(key))
+        || entry.detect_files.iter().any(|path| file(path))
+}
+
+pub fn detected_rules_with(
+    converted: Vec<ConvertedRule>,
+    registry: Probe,
+    file: Probe,
+) -> Vec<Rule> {
+    converted
+        .into_iter()
+        .filter(|c| is_detected_with(c, registry, file))
+        .map(|c| c.rule)
+        .collect()
+}
+
+/// The detected Winapp2 rules and what the conversion did with the rest.
+pub struct Winapp2Catalogue {
+    pub rules: Vec<Rule>,
+    pub report: ConversionReport,
+}
+
+/// Parses, converts and probes the embedded base with the real environment.
+/// Costs on the order of a second: the caller caches it (see
+/// `commands::catalogue`).
+pub fn embedded_winapp2() -> Winapp2Catalogue {
+    let (converted, report) = convert_with(WINAPP2_INI, &crate::rules::system_env);
+    // Same reason as inside `convert_with`: every probe asks for its own
+    // variable and for `%USERPROFILE%`, and `system_env` pays a
+    // `GetLongPathNameW` per answer.
+    let memoized = crate::rules::memoized_env(&crate::rules::system_env);
+    let file = |path: &str| detect_file_exists_with(path, &memoized);
+    let rules = detected_rules_with(converted, &registry_key_exists, &file);
+    Winapp2Catalogue { rules, report }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,5 +875,90 @@ FileKey1=%AppData%\\Cafe|*.*\r
             crate::rules::check_rule_with(&c.rule, &env)
                 .unwrap_or_else(|e| panic!("{} failed validation: {e}", c.rule.id));
         }
+    }
+
+    /// Test subkey, created and deleted by the test itself. Never point this
+    /// at a real application key.
+    struct ScratchKey(String);
+
+    impl ScratchKey {
+        fn new(suffix: &str) -> Self {
+            use winreg::enums::HKEY_CURRENT_USER;
+            use winreg::RegKey;
+            let path = format!(r"Software\wincleaner-test\{suffix}");
+            RegKey::predef(HKEY_CURRENT_USER)
+                .create_subkey(&path)
+                .unwrap();
+            ScratchKey(path)
+        }
+    }
+
+    impl Drop for ScratchKey {
+        fn drop(&mut self) {
+            use winreg::enums::HKEY_CURRENT_USER;
+            use winreg::RegKey;
+            let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn detects_an_existing_registry_key_and_only_the_two_user_hives() {
+        let scratch = ScratchKey::new("detect-probe");
+        assert!(registry_key_exists(&format!(r"HKCU\{}", scratch.0)));
+        assert!(registry_key_exists(&format!(
+            r"HKEY_CURRENT_USER\{}",
+            scratch.0
+        )));
+        assert!(!registry_key_exists(
+            r"HKCU\Software\wincleaner-test\never-created"
+        ));
+        assert!(!registry_key_exists(r"HKCR\Something"));
+        assert!(!registry_key_exists("no-backslash"));
+    }
+
+    #[test]
+    fn detects_a_file_a_directory_and_a_non_empty_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let lookup = move |name: &str| match name {
+            "USERPROFILE" | "LOCALAPPDATA" => Some(root.clone()),
+            _ => None,
+        };
+        std::fs::create_dir(dir.path().join("App")).unwrap();
+        std::fs::write(dir.path().join("App").join("x.dat"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("Empty")).unwrap();
+
+        assert!(detect_file_exists_with(r"%LocalAppData%\App", &lookup));
+        assert!(detect_file_exists_with(r"%LocalAppData%\App\x.dat", &lookup));
+        // A trailing `\*` means "any child": the empty directory does not
+        // count as an installed application.
+        assert!(detect_file_exists_with(r"%LocalAppData%\App\*", &lookup));
+        assert!(!detect_file_exists_with(r"%LocalAppData%\Empty\*", &lookup));
+        assert!(!detect_file_exists_with(r"%LocalAppData%\Missing", &lookup));
+        // Outside the allow-list: not detectable, never probed.
+        assert!(!detect_file_exists_with(r"%ProgramFiles%\App", &lookup));
+    }
+
+    #[test]
+    fn an_entry_without_any_detect_key_is_hidden() {
+        let src = "[Seen]\nDetect=HKCU\\Software\\Yes\nFileKey1=%LocalAppData%\\A|*.*\n\
+                   [Unseen]\nDetect=HKCU\\Software\\No\nFileKey1=%LocalAppData%\\B|*.*\n\
+                   [NoDetect]\nFileKey1=%LocalAppData%\\C|*.*\n";
+        let (converted, report) = convert_with(src, &fake_env);
+        assert_eq!(report.retained, 3);
+        let registry = |key: &str| key.ends_with("Yes");
+        let never = |_: &str| false;
+        let rules = detected_rules_with(converted, &registry, &never);
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["winapp2.seen"]);
+    }
+
+    #[test]
+    fn a_detect_file_match_is_enough_on_its_own() {
+        let src = "[A]\nDetectFile=%LocalAppData%\\A\nFileKey1=%LocalAppData%\\A|*.*\n";
+        let (converted, _) = convert_with(src, &fake_env);
+        let never = |_: &str| false;
+        let always = |_: &str| true;
+        assert_eq!(detected_rules_with(converted, &never, &always).len(), 1);
     }
 }

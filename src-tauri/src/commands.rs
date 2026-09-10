@@ -3,6 +3,7 @@ use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::scan::{scan_rule, ScanResult};
 use crate::startup::StartupEntry;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use sysinfo::System;
 
 /// Processes considered "an open browser" for the warning banner.
@@ -19,14 +20,62 @@ pub struct RuleSummary {
     pub kind: RuleKind,
     /// Checkbox ticked on first launch (see `rules.toml`).
     pub default_checked: bool,
+    /// Inline warning shown under the rule row (Winapp2 `Warning=`).
+    pub note: Option<String>,
     /// Set when the rule does not apply on this machine. The front end greys
     /// the row out and shows this reason; the rule is neither scanned nor
     /// cleaned, even if its id were sent.
     pub unavailable_reason: Option<String>,
 }
 
+/// What the rule list is made of, for the summary line in the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RulesSummary {
+    /// Rules declared in `rules.toml`.
+    pub native: u32,
+    /// Winapp2 entries that survived conversion and validation.
+    pub winapp2_retained: u32,
+    /// ... of which are shown, because the application was detected.
+    pub winapp2_detected: u32,
+    /// Winapp2 entries dropped, all reasons together.
+    pub winapp2_dropped: u32,
+}
+
+/// The rule list of this session: the native rules first, then the Winapp2
+/// rules whose application was detected.
+pub struct Catalogue {
+    pub rules: Vec<Rule>,
+    pub summary: RulesSummary,
+}
+
+fn build_catalogue() -> Result<Catalogue, String> {
+    let native = embedded_rules().map_err(|e| e.to_string())?;
+    let winapp2 = crate::winapp2::embedded_winapp2();
+    let summary = RulesSummary {
+        native: native.len() as u32,
+        winapp2_retained: winapp2.report.retained,
+        winapp2_detected: winapp2.rules.len() as u32,
+        winapp2_dropped: winapp2.report.dropped(),
+    };
+    let mut rules = native;
+    rules.extend(winapp2.rules);
+    Ok(Catalogue { rules, summary })
+}
+
+static CATALOGUE: OnceLock<Result<Catalogue, String>> = OnceLock::new();
+
+/// Built once and cached for the session: parsing a few megabytes of ini and
+/// probing the registry for 2,000 entries costs about a second, and the answer
+/// cannot change while the application runs.
+pub fn catalogue() -> Result<&'static Catalogue, String> {
+    CATALOGUE
+        .get_or_init(build_catalogue)
+        .as_ref()
+        .map_err(|e| e.clone())
+}
+
 fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
-    let all = embedded_rules().map_err(|e| e.to_string())?;
+    let all = &catalogue()?.rules;
     rule_ids
         .iter()
         .map(|id| {
@@ -36,6 +85,23 @@ fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
                 .ok_or_else(|| format!("unknown rule: \"{id}\""))
         })
         .collect()
+}
+
+fn summarize(rule: Rule) -> RuleSummary {
+    RuleSummary {
+        id: rule.id,
+        category: rule.category,
+        label: rule.label,
+        risk: rule.risk,
+        kind: rule.kind,
+        default_checked: rule.default_checked && rule.unavailable_reason.is_none(),
+        note: rule.note,
+        unavailable_reason: rule.unavailable_reason,
+    }
+}
+
+pub fn rule_summaries() -> Result<Vec<RuleSummary>, String> {
+    Ok(catalogue()?.rules.iter().cloned().map(summarize).collect())
 }
 
 pub fn running_browsers_from(process_names: &[String]) -> Vec<String> {
@@ -49,21 +115,17 @@ pub fn running_browsers_from(process_names: &[String]) -> Vec<String> {
     out
 }
 
+/// Async like the other heavy commands: the first call builds the catalogue if
+/// the startup warm-up has not finished yet, and that must not happen on the
+/// thread pumping the window events.
 #[tauri::command]
-pub fn list_rules() -> Result<Vec<RuleSummary>, String> {
-    let rules = embedded_rules().map_err(|e| e.to_string())?;
-    Ok(rules
-        .into_iter()
-        .map(|r| RuleSummary {
-            id: r.id,
-            category: r.category,
-            label: r.label,
-            risk: r.risk,
-            kind: r.kind,
-            default_checked: r.default_checked && r.unavailable_reason.is_none(),
-            unavailable_reason: r.unavailable_reason,
-        })
-        .collect())
+pub async fn list_rules() -> Result<Vec<RuleSummary>, String> {
+    blocking(rule_summaries).await
+}
+
+#[tauri::command]
+pub async fn rules_summary() -> Result<RulesSummary, String> {
+    blocking(|| Ok(catalogue()?.summary)).await
 }
 
 /// Runs blocking work off the main thread. A synchronous Tauri command runs on
@@ -228,9 +290,13 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_summary_carries_the_eight_embedded_rules() {
-        let summaries = list_rules().unwrap();
-        assert_eq!(summaries.len(), 8);
+    fn the_catalogue_starts_with_the_native_rules() {
+        let summaries = rule_summaries().unwrap();
+        let native: Vec<&RuleSummary> = summaries
+            .iter()
+            .filter(|s| !s.id.starts_with("winapp2."))
+            .collect();
+        assert_eq!(native.len() as u32, catalogue().unwrap().summary.native);
         assert_eq!(summaries[0].id, "windows.temp");
         assert_eq!(summaries[1].kind, crate::rules::RuleKind::RecycleBin);
     }
@@ -239,7 +305,7 @@ mod tests {
     /// cross the IPC, everything becomes checked by default again.
     #[test]
     fn the_summary_carries_the_default_checkbox_state() {
-        let summaries = list_rules().unwrap();
+        let summaries = rule_summaries().unwrap();
         let recycle_bin = summaries
             .iter()
             .find(|r| r.id == "windows.recycle-bin")
@@ -247,6 +313,59 @@ mod tests {
         assert!(!recycle_bin.default_checked);
         let temp = summaries.iter().find(|r| r.id == "windows.temp").unwrap();
         assert!(temp.default_checked);
+    }
+
+    /// A duplicate id would make `find_rules` return the wrong rule — the
+    /// wrong paths — for one of the two.
+    #[test]
+    fn every_catalogue_id_is_unique_and_winapp2_rules_are_unchecked() {
+        let mut seen = std::collections::HashSet::new();
+        for rule in &catalogue().unwrap().rules {
+            assert!(seen.insert(rule.id.clone()), "duplicate id {}", rule.id);
+            if rule.id.starts_with("winapp2.") {
+                assert!(!rule.default_checked, "{}", rule.id);
+                assert_eq!(rule.category, "Applications");
+            }
+        }
+    }
+
+    #[test]
+    fn the_rules_summary_counts_add_up() {
+        let summary = catalogue().unwrap().summary;
+        assert!(summary.native >= 8);
+        assert!(summary.winapp2_retained >= 500);
+        assert!(summary.winapp2_detected <= summary.winapp2_retained);
+        assert!(summary.winapp2_dropped > 0);
+    }
+
+    /// The catalogue is built once: a second call must not re-parse the ini.
+    #[test]
+    fn the_catalogue_is_cached() {
+        let first = catalogue().unwrap();
+        let second = catalogue().unwrap();
+        assert!(std::ptr::eq(first, second));
+    }
+
+    #[test]
+    fn a_winapp2_warning_reaches_the_front_end_as_a_note() {
+        // Not every machine has a rule carrying a Warning, so this asserts the
+        // plumbing on a rule built here, not on the machine's catalogue.
+        let rule = Rule {
+            id: "winapp2.x".into(),
+            category: "Applications".into(),
+            label: "X".into(),
+            paths: vec![r"%LOCALAPPDATA%\X\*".into()],
+            exclude: vec![],
+            risk: Risk::Medium,
+            kind: RuleKind::Files,
+            default_checked: false,
+            note: Some("This deletes the saved sessions.".into()),
+            unavailable_reason: None,
+        };
+        assert_eq!(
+            summarize(rule).note.as_deref(),
+            Some("This deletes the saved sessions.")
+        );
     }
 
     /// The whole point of the item: a synchronous command would run on the
