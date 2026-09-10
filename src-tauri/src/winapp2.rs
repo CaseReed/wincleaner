@@ -74,12 +74,9 @@ pub fn parse_ini(src: &str) -> Vec<Winapp2Entry> {
     out
 }
 
-use crate::rules::{
-    check_rule_with, resolved_excludes_with, resolved_paths_with, EnvLookup, Risk, Rule, RuleError,
-    RuleKind,
-};
+use crate::rules::{check_rule_with, EnvLookup, Risk, Rule, RuleError, RuleKind};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 /// The embedded community rule base, "Non-CCleaner" flavour. A few megabytes
 /// of `&'static str`: parsed once at startup, never read from disk.
@@ -123,21 +120,49 @@ pub fn map_path(raw: &str) -> Option<String> {
     if rest.contains(['[', ']', '{', '}', '?']) {
         return None;
     }
+    // A second variable further down the path (`%USERPROFILE%\AppData%\...`,
+    // `...\%UserName%`: upstream typos) would stay literal, and an inert
+    // literal directory silently matches nothing.
+    if rest.contains('%') {
+        return None;
+    }
     if rest.split('\\').any(|seg| seg == "..") {
         return None;
     }
     Some(format!("{mapped}{rest}"))
 }
 
-/// `*.*` means "every file" in Winapp2 and matches nothing in globset: it
-/// becomes `*`. A `;`-separated list becomes one glob each. A spec carrying a
-/// metacharacter we cannot keep literal is dropped.
+/// A spec we can keep literal in a glob. `[`, `]`, `{` and `}` would silently
+/// change what the pattern matches.
+fn representable(spec: &str) -> bool {
+    !spec.contains(['[', ']', '{', '}'])
+}
+
+/// `*.*` means "every file" in Winapp2 and matches nothing in globset.
+fn spec_glob(spec: &str) -> String {
+    if spec == "*.*" { "*" } else { spec }.to_string()
+}
+
+fn split_specs(field: &str) -> impl Iterator<Item = &str> {
+    field.split(';').map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Specs of a `FileKey`: a `;`-separated list becomes one glob each, and a
+/// spec we cannot represent is dropped — that only narrows what the rule
+/// deletes.
 fn specs(field: &str) -> Vec<String> {
-    field
-        .split(';')
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.contains(['[', ']', '{', '}']))
-        .map(|s| if s == "*.*" { "*" } else { s }.to_string())
+    split_specs(field)
+        .filter(|s| representable(s))
+        .map(spec_glob)
+        .collect()
+}
+
+/// Specs of an `ExcludeKey`: `None` as soon as ONE spec is unrepresentable.
+/// Dropping it would keep the entry with a weaker exclude, and delete a file
+/// upstream asks us to keep.
+fn exclude_specs(field: &str) -> Option<Vec<String>> {
+    split_specs(field)
+        .map(|s| representable(s).then(|| spec_glob(s)))
         .collect()
 }
 
@@ -168,40 +193,53 @@ fn file_key_globs(value: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Why an `ExcludeKey` could not be turned into globs. Both drop the entry —
+/// keeping a rule without its exclude would delete more than upstream intends
+/// — but they are counted apart, because one says "this path is outside what
+/// we clean" and the other "we cannot express this pattern".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExcludeDrop {
+    /// The path does not start with one of the four variables we map.
+    Variable,
+    /// Unknown exclude kind, or a spec we cannot keep literal in a glob.
+    Unrepresentable,
+}
+
 /// `ExcludeKeyN=FILE|path|spec`, `PATH|path[|spec]` or `REG|key`.
 ///
-/// `Some(vec![])` means "nothing to exclude on the file system" (a `REG|`
+/// An empty `Vec` means "nothing to exclude on the file system" (a `REG|`
 /// exclude: we never clean the registry, so ignoring it changes nothing).
-/// `None` means "this exclude cannot be represented", and the caller must drop
-/// the whole entry: keeping the rule without its exclude would delete more
-/// than upstream intends. Specs are always applied recursively — excluding too
-/// much is safe, excluding too little is not.
-fn exclude_key_globs(value: &str) -> Option<Vec<String>> {
+/// Specs are always applied recursively — excluding too much is safe,
+/// excluding too little is not.
+fn exclude_key_globs(value: &str) -> Result<Vec<String>, ExcludeDrop> {
     let mut parts = value.split('|');
-    let kind = parts.next()?.trim().to_ascii_uppercase();
+    let kind = parts
+        .next()
+        .ok_or(ExcludeDrop::Unrepresentable)?
+        .trim()
+        .to_ascii_uppercase();
     if kind == "REG" {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
     if kind != "FILE" && kind != "PATH" {
-        return None;
+        return Err(ExcludeDrop::Unrepresentable);
     }
-    let base = map_path(parts.next()?)?;
+    let raw = parts.next().ok_or(ExcludeDrop::Unrepresentable)?;
+    let base = map_path(raw).ok_or(ExcludeDrop::Variable)?;
     match parts.next().map(str::trim).filter(|s| !s.is_empty()) {
         Some(field) => {
-            let specs = specs(field);
+            let specs = exclude_specs(field).ok_or(ExcludeDrop::Unrepresentable)?;
             if specs.is_empty() {
-                return None;
+                return Err(ExcludeDrop::Unrepresentable);
             }
-            Some(
-                specs
-                    .into_iter()
-                    .map(|spec| format!(r"{base}\**\{spec}"))
-                    .collect(),
-            )
+            Ok(specs
+                .into_iter()
+                .map(|spec| format!(r"{base}\**\{spec}"))
+                .collect())
         }
         // `FILE|path` designates one file; `PATH|path` a whole directory.
-        None if kind == "FILE" => Some(vec![base]),
-        None => Some(vec![format!(r"{base}\**\*")]),
+        None if kind == "FILE" => Ok(vec![base]),
+        None => Ok(vec![format!(r"{base}\**\*")]),
     }
 }
 
@@ -230,15 +268,20 @@ pub fn slug(label: &str) -> String {
 
 /// Section names repeat in the upstream file: the second `App` becomes
 /// `app-2`, the third `app-3`. A duplicate id would be fatal for the whole
-/// catalogue.
-fn unique_slug(label: &str, used: &mut HashMap<String, u32>) -> String {
+/// catalogue, so the ids already issued are remembered rather than counted:
+/// `[App]`, `[App]`, `[App 2]` would otherwise mint `app-2` twice.
+fn unique_slug(label: &str, used: &mut HashSet<String>) -> String {
     let base = slug(label);
-    let count = used.entry(base.clone()).or_insert(0);
-    *count += 1;
-    if *count == 1 {
-        base
-    } else {
-        format!("{base}-{count}")
+    if used.insert(base.clone()) {
+        return base;
+    }
+    let mut n: u32 = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
     }
 }
 
@@ -258,53 +301,77 @@ pub struct ConversionReport {
     pub retained: u32,
     /// No `FileKey` survived the variable allow-list, or the entry had none.
     pub dropped_no_file_key: u32,
-    /// An `ExcludeKey` used a variable we refuse, or the rule does not apply
-    /// on this machine (`MissingVar`, `OutsideProfile`).
+    /// An `ExcludeKey` path used a variable outside the four we map.
     pub dropped_variable: u32,
-    /// Refused by the rule validation or by the glob compiler.
+    /// An `ExcludeKey` we cannot express as a glob (unknown kind, or a spec
+    /// carrying a metacharacter we cannot keep literal). Kept apart from
+    /// `dropped_variable`: this one is a limit of our pattern language, not of
+    /// the paths we accept to clean.
+    pub dropped_exclude: u32,
+    /// Refused by the rule validation — including a variable this machine does
+    /// not define or one resolving outside the profile — or by the glob
+    /// compiler.
     pub dropped_invalid: u32,
 }
 
 impl ConversionReport {
     pub fn dropped(&self) -> u32 {
-        self.dropped_no_file_key + self.dropped_variable + self.dropped_invalid
+        self.dropped_no_file_key
+            + self.dropped_variable
+            + self.dropped_exclude
+            + self.dropped_invalid
     }
 }
 
 /// Validation of a converted rule: the same confinement as a rules.toml rule,
 /// plus a glob compilation, because an upstream pattern we cannot compile must
-/// be dropped here rather than surface as a scan error later.
+/// be dropped here rather than surface as a scan error later. The patterns
+/// resolved by `check_rule_with` are the ones compiled: resolving them a second
+/// time would double the cost of the conversion for nothing.
 fn accept(rule: &Rule, lookup: EnvLookup) -> Result<(), RuleError> {
-    check_rule_with(rule, lookup)?;
-    crate::scan::build_set(&resolved_paths_with(rule, lookup)?)?;
-    crate::scan::build_set(&resolved_excludes_with(rule, lookup)?)?;
+    let resolved = check_rule_with(rule, lookup)?;
+    crate::scan::build_set(&resolved.paths)?;
+    crate::scan::build_set(&resolved.excludes)?;
     Ok(())
 }
 
 /// Converts the whole ini. Never fails: a refused entry is counted, never
 /// fatal.
 pub fn convert_with(src: &str, lookup: EnvLookup) -> (Vec<ConvertedRule>, ConversionReport) {
+    // Every path of every entry is resolved against `%USERPROFILE%` and its own
+    // variable: without a cache the real file costs tens of thousands of
+    // `GetLongPathNameW` calls. The cache lives exactly as long as this call.
+    let memoized = crate::rules::memoized_env(lookup);
+    let lookup: EnvLookup = &memoized;
+
     let mut report = ConversionReport::default();
-    let mut used: HashMap<String, u32> = HashMap::new();
+    let mut used: HashSet<String> = HashSet::new();
     let mut out: Vec<ConvertedRule> = Vec::new();
 
     for entry in parse_ini(src) {
         // Excludes first: one we cannot represent sinks the entry, and there
         // is no point slugging an id we are about to throw away.
         let mut exclude: Vec<String> = Vec::new();
-        let mut exclude_failed = false;
+        let mut exclude_failed = None;
         for raw in &entry.exclude_keys {
             match exclude_key_globs(raw) {
-                Some(globs) => exclude.extend(globs),
-                None => {
-                    exclude_failed = true;
+                Ok(globs) => exclude.extend(globs),
+                Err(reason) => {
+                    exclude_failed = Some(reason);
                     break;
                 }
             }
         }
-        if exclude_failed {
-            report.dropped_variable += 1;
-            continue;
+        match exclude_failed {
+            Some(ExcludeDrop::Variable) => {
+                report.dropped_variable += 1;
+                continue;
+            }
+            Some(ExcludeDrop::Unrepresentable) => {
+                report.dropped_exclude += 1;
+                continue;
+            }
+            None => {}
         }
 
         let mut paths: Vec<String> = Vec::new();
@@ -331,19 +398,13 @@ pub fn convert_with(src: &str, lookup: EnvLookup) -> (Vec<ConvertedRule>, Conver
             note: entry.warning.clone(),
             unavailable_reason: None,
         };
-        match accept(&rule, lookup) {
-            Ok(()) => {}
-            // The machine does not have this variable, or has it outside the
-            // profile: the rule would be permanently greyed out. Dropped
-            // rather than shown as noise among hundreds of others.
-            Err(RuleError::MissingVar(_) | RuleError::OutsideProfile(_)) => {
-                report.dropped_variable += 1;
-                continue;
-            }
-            Err(_) => {
-                report.dropped_invalid += 1;
-                continue;
-            }
+        // A rule refused here would be permanently greyed out (the machine does
+        // not define the variable, or defines it outside the profile) or would
+        // surface as a scan error (an uncompilable glob): dropped rather than
+        // shown as noise among thousands of others.
+        if accept(&rule, lookup).is_err() {
+            report.dropped_invalid += 1;
+            continue;
         }
         report.retained += 1;
         out.push(ConvertedRule {
@@ -539,6 +600,98 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(report.dropped_variable, 1);
     }
 
+    /// A `;`-separated exclude list where only ONE spec is unrepresentable:
+    /// keeping the entry with the remaining specs would delete a file upstream
+    /// asks us to keep. The whole entry goes.
+    #[test]
+    fn one_unrepresentable_spec_in_an_exclude_list_drops_the_whole_entry() {
+        let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*\nExcludeKey1=FILE|%LocalAppData%\\A|keep[1].dat;notes.txt\n";
+        let (converted, report) = convert_with(src, &fake_env);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_exclude, 1);
+        assert_eq!(report.dropped(), 1);
+    }
+
+    /// A `FileKey` spec we cannot represent only narrows what the rule
+    /// deletes: the key keeps its other specs and the entry survives.
+    #[test]
+    fn an_unrepresentable_file_key_spec_narrows_the_rule_instead_of_dropping_it() {
+        let src = "[A]\nFileKey1=%LocalAppData%\\A|cache[1].dat;*.log\n";
+        let (converted, report) = convert_with(src, &fake_env);
+        assert_eq!(report.retained, 1);
+        assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\A\*.log"]);
+    }
+
+    /// The conversion resolves every path of every entry, and every resolution
+    /// asks the environment for the variable AND for `%USERPROFILE%`. Without
+    /// a cache the real file costs tens of thousands of `GetLongPathNameW`
+    /// calls; with one, the count is bounded by the four variables, not by the
+    /// number of keys.
+    #[test]
+    fn the_environment_is_looked_up_once_per_variable_not_once_per_key() {
+        let mut src = String::new();
+        for i in 0..50 {
+            src.push_str(&format!(
+                "[App {i}]\nFileKey1=%LocalAppData%\\A{i}|*.*\nFileKey2=%AppData%\\A{i}|*.*\nExcludeKey1=FILE|%Temp%\\A{i}|keep.dat\n"
+            ));
+        }
+        let calls = std::cell::Cell::new(0u32);
+        let counting = |name: &str| {
+            calls.set(calls.get() + 1);
+            fake_env(name)
+        };
+        let (converted, _) = convert_with(&src, &counting);
+        assert_eq!(converted.len(), 50);
+        assert!(
+            calls.get() <= 4,
+            "{} environment lookups for 50 entries",
+            calls.get()
+        );
+    }
+
+    /// Counting occurrences instead of remembering what was issued mints the
+    /// same id twice: `[App]`, `[App]`, `[App 2]` gave `app`, `app-2`,
+    /// `app-2`. A duplicate id is fatal for the whole catalogue.
+    #[test]
+    fn a_generated_id_never_collides_with_a_section_named_after_it() {
+        let src = "[App]\nFileKey1=%LocalAppData%\\A|*.*\n[App]\nFileKey1=%LocalAppData%\\B|*.*\n[App 2]\nFileKey1=%LocalAppData%\\C|*.*\n";
+        let (converted, _) = convert_with(src, &fake_env);
+        let ids: Vec<&str> = converted.iter().map(|c| c.rule.id.as_str()).collect();
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), 3, "{ids:?}");
+        assert_eq!(ids[0], "winapp2.app");
+        assert_eq!(ids[1], "winapp2.app-2");
+    }
+
+    /// A variable this machine does not define is a validation failure, not a
+    /// mapping failure: it is counted apart from the entries we refuse to map.
+    #[test]
+    fn a_variable_the_machine_does_not_define_is_counted_as_invalid() {
+        let src = "[A]\nFileKey1=%AppData%\\A|*.*\n";
+        let without_appdata = |name: &str| match name {
+            "APPDATA" => None,
+            _ => fake_env(name),
+        };
+        let (converted, report) = convert_with(src, &without_appdata);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_invalid, 1);
+        assert_eq!(report.dropped(), 1);
+    }
+
+    /// Upstream typos like `%USERPROFILE%\AppData%\LocalLow\X` or a trailing
+    /// `%UserName%`: mapping only the leading variable leaves an inert literal
+    /// directory that matches nothing. The key goes instead.
+    #[test]
+    fn a_variable_left_literal_inside_the_path_drops_the_key() {
+        assert_eq!(map_path(r"%USERPROFILE%\AppData%\LocalLow\X"), None);
+        assert_eq!(map_path(r"%LocalAppData%\A\%UserName%"), None);
+        let src = "[A]\nFileKey1=%UserProfile%\\AppData%\\LocalLow\\A|*.*\n[B]\nFileKey1=%LocalAppData%\\B|*.*\nExcludeKey1=FILE|%LocalAppData%\\B\\%UserName%|keep.dat\n";
+        let (converted, report) = convert_with(src, &fake_env);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_no_file_key, 1);
+        assert_eq!(report.dropped_variable, 1);
+    }
+
     /// A `REG|` exclude concerns the registry, which we never clean: ignoring
     /// it changes nothing about which files are deleted.
     #[test]
@@ -583,7 +736,24 @@ FileKey1=%AppData%\\Cafe|*.*\r
             report.dropped()
         );
         assert_eq!(converted.len(), report.retained as usize);
+        // Every entry is either retained or counted under exactly one reason:
+        // a rule that vanishes without a counter would be invisible.
+        assert_eq!(
+            report.retained + report.dropped(),
+            parse_ini(WINAPP2_INI).len() as u32,
+            "retained={} dropped={} (no_file_key={} variable={} exclude={} invalid={})",
+            report.retained,
+            report.dropped(),
+            report.dropped_no_file_key,
+            report.dropped_variable,
+            report.dropped_exclude,
+            report.dropped_invalid
+        );
         let mut ids = std::collections::HashSet::new();
+        // The same real values as `system_env`, asked for once instead of once
+        // per path: the check below is unchanged, it just stops paying a
+        // syscall per pattern.
+        let env = crate::rules::memoized_env(&crate::rules::system_env);
         for c in &converted {
             assert!(c.rule.id.starts_with("winapp2."), "{}", c.rule.id);
             assert!(ids.insert(c.rule.id.clone()), "duplicate id {}", c.rule.id);
@@ -591,7 +761,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
             assert!(!c.rule.default_checked, "{}", c.rule.id);
             assert_eq!(c.rule.risk, crate::rules::Risk::Medium);
             assert!(c.rule.unavailable_reason.is_none(), "{}", c.rule.id);
-            crate::rules::check_rule_with(&c.rule, &crate::rules::system_env)
+            crate::rules::check_rule_with(&c.rule, &env)
                 .unwrap_or_else(|e| panic!("{} failed validation: {e}", c.rule.id));
         }
     }

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// Contents of `src-tauri/rules.toml`, embedded in the binary.
@@ -171,6 +172,27 @@ pub fn system_env(name: &str) -> Option<String> {
     }
 }
 
+/// Wraps a lookup in a cache that lives as long as the returned closure.
+///
+/// Resolving one rule path asks the environment for the path's own variable
+/// AND for `%USERPROFILE%`, and `system_env` pays two `GetLongPathNameW` calls
+/// per answer. Over the thousands of rules the Winapp2 conversion builds, that
+/// is tens of thousands of syscalls for four distinct answers. Deliberately not
+/// a process-wide cache: a resolver is injected precisely so that a caller can
+/// choose its environment, and a static cache would leak one caller's
+/// environment into the next.
+pub fn memoized_env<'a>(lookup: EnvLookup<'a>) -> impl Fn(&str) -> Option<String> + 'a {
+    let cache: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
+    move |name: &str| {
+        if let Some(hit) = cache.borrow().get(name) {
+            return hit.clone();
+        }
+        let value = lookup(name);
+        cache.borrow_mut().insert(name.to_string(), value.clone());
+        value
+    }
+}
+
 /// Replaces the leading `%VAR%`. A single variable is accepted, and only at
 /// the front: a rule path always has the form `%VAR%\rest`.
 pub fn expand_env_with(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
@@ -246,18 +268,29 @@ pub fn resolved_excludes_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<Stri
     rule.exclude.iter().map(|p| resolve_one(p, lookup)).collect()
 }
 
+/// The resolved, confined form of a rule: its paths and its excludes, both
+/// absolute. Returned by `check_rule_with` so that a caller that needs them —
+/// the Winapp2 converter compiles both into a `GlobSet` — does not resolve the
+/// very same patterns a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRule {
+    pub paths: Vec<String>,
+    pub excludes: Vec<String>,
+}
+
 /// Resolution and confinement of a single rule, whether it comes from
 /// `rules.toml` or was built in memory by the Winapp2 converter. The caller
 /// decides what to do with the error: `load_rules_with` turns `MissingVar` and
 /// `OutsideProfile` into an `unavailable_reason`, the converter drops the
 /// entry.
-pub fn check_rule_with(rule: &Rule, lookup: EnvLookup) -> Result<(), RuleError> {
+pub fn check_rule_with(rule: &Rule, lookup: EnvLookup) -> Result<ResolvedRule, RuleError> {
     if rule.kind == RuleKind::Files && rule.paths.is_empty() {
         return Err(RuleError::EmptyPaths(rule.id.clone()));
     }
-    resolved_paths_with(rule, lookup)?;
-    resolved_excludes_with(rule, lookup)?;
-    Ok(())
+    Ok(ResolvedRule {
+        paths: resolved_paths_with(rule, lookup)?,
+        excludes: resolved_excludes_with(rule, lookup)?,
+    })
 }
 
 /// Separates "rules.toml is badly written" — a bug in the binary, fatal —
@@ -274,7 +307,7 @@ pub fn load_rules_with(src: &str, lookup: EnvLookup) -> Result<Vec<Rule>, RuleEr
             return Err(RuleError::DuplicateId(rule.id.clone()));
         }
         match check_rule_with(&rule, lookup) {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(e @ (RuleError::MissingVar(_) | RuleError::OutsideProfile(_))) => {
                 rule.unavailable_reason = Some(e.to_string());
             }
