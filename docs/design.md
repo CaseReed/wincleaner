@@ -8,8 +8,13 @@ An open source Windows cleaner, modern, telemetry-free, covering the essentials
 of CCleaner: cleaning up junk files and managing startup programs. The MVP runs
 without administrator rights and only acts within the user profile.
 
-Out of scope for the MVP: registry cleaner (never), uninstaller, winapp2.ini
-import, scheduling, notification-area icon, UAC elevation.
+Out of scope for the MVP: registry cleaner (never), uninstaller, scheduling,
+notification-area icon, UAC elevation.
+
+The winapp2.ini import, out of scope for the MVP, was designed and implemented
+afterwards: see [`design-winapp2.md`](design-winapp2.md). The rules it produces
+are ordinary `Rule` values and go through the validation, containment and
+deletion guards described below without exception.
 
 ## Stack
 

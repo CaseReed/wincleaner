@@ -143,3 +143,33 @@ version of the same invariant lives in `scan.rs`
 
 1. Toggle "Dark theme" / "Light theme": both screens must stay legible, with no
    dark text on a dark background.
+
+## VM-12 — Applications category and Winapp2 detection — to be run by the user
+
+Not run automatically: the result depends on what is installed on the machine.
+
+1. Launch the release binary, Cleanup screen.
+2. The summary line under the search field must report a non-zero number of
+   built-in rules, a number of detected Winapp2 rules, and a number of
+   converted rules at least as large as the detected one.
+3. The "Applications" category must be **folded**, showing its name and its
+   rule count.
+4. Unfold it: every row must be **unchecked**, carry the "medium risk" badge,
+   and the attribution "Community rules from Winapp2 (CC-BY-SA 4.0)" must sit
+   under the list.
+5. Pick a rule whose application you know is **not** installed (for example a
+   browser you have never used): it must be absent from the list.
+6. Type a few letters of a rule label in the search field: matching rules from
+   every category must show, including from the folded Applications category,
+   and non-matching categories must disappear entirely.
+7. Clear the search field: the Applications category must be folded again.
+8. Check one Applications rule, Analyze, and expand its paths: every listed
+   path must be under the user profile.
+
+## VM-13 — Sort by size — to be run by the user
+
+1. Cleanup screen, check a few rules across two categories, Analyze.
+2. Tick "Sort by size" in the hero: inside each category the largest rule must
+   come first, and the category with the largest total must come first.
+3. Close and relaunch the application: the toggle must still be ticked, and
+   untick it before a scan — it must be greyed out until the next Analyze.

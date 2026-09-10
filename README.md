@@ -24,9 +24,12 @@ network access, no registry cleaner.
 
 ## What it cleans
 
-Nine built-in rules across three categories, plus the community rules converted
-from [Winapp2](https://github.com/MoscaDotTo/Winapp2), which are shown only
-when the application they target is detected and are never checked by default.
+Nine built-in rules across three categories, plus community rules converted
+from [Winapp2](https://github.com/MoscaDotTo/Winapp2): each one is shown only
+when the application it targets is detected on the machine, always carries the
+**medium risk** badge, and is **never checked by default**. When a converted
+rule's paths overlap a built-in rule, the built-in rule wins and the converted
+one is dropped, so the same bytes are never counted or deleted twice.
 
 | Category | Rule | Default | Risk |
 | --- | --- | --- | --- |

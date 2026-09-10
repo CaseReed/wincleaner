@@ -55,6 +55,19 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
 - Fonts and icons are embedded (fontsource, lucide).
 - Heavy commands (`scan`, `clean`, startup) run `async` + `spawn_blocking`: a
   sync command blocks the window.
+- Winapp2 entries are converted into ordinary `rules::Rule` values and go
+  through the same `check_rule_with` validation and the same containment and
+  deletion guards as native rules — there is no separate Winapp2 deletion
+  path.
+- The nine curated native rules take precedence: a converted Winapp2 rule
+  whose paths overlap a native rule is dropped at conversion time
+  (`dropped_overlap`), never counted or deleted twice.
+- A Winapp2 rule is shown only when its `Detect`/`DetectFile` key matches on
+  this machine, always carries `risk = medium` and `default_checked = false`,
+  and lives in the `Applications` category, folded by default.
+- `npm run winapp2:update` refreshes the embedded `Winapp2.ini` by hand; the
+  application itself never fetches it (no runtime network). The rule base is
+  CC-BY-SA-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 
 ## Dev machine
 - Smart App Control must be disabled for cargo to work (it blocks any locally

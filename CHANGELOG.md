@@ -12,13 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Embedded the [Winapp2](https://github.com/MoscaDotTo/Winapp2) community rule
   base (`Non-CCleaner/Winapp2.ini`, snapshot 2026-09-10, CC-BY-SA-4.0) under
   `src-tauri/third_party/winapp2/`, refreshed with `npm run winapp2:update`.
+- Winapp2 entries are converted into native rules at startup and shown in a new
+  `Applications` category, folded by default, unchecked by default and flagged
+  medium risk. A rule appears only when its `Detect`/`DetectFile` key matches
+  on this machine; registry keys (`RegKeyN`) are never imported.
+- The nine curated native rules take precedence over the community ones: a
+  converted Winapp2 rule whose paths overlap a `rules.toml` rule is dropped at
+  conversion time (`dropped_overlap`), so the same bytes are never counted or
+  deleted twice. This also drops the ~41 Winapp2 browser companion entries
+  (history, cookies, saved passwords, sync data): those are user data, not
+  cache, and the native browser rules already own that directory.
 - One native rule for the package-manager cache Winapp2 does not cover: npm
   cache (`%LOCALAPPDATA%\npm-cache`), low risk and checked by default. pip's
   cache is not duplicated: Winapp2's `[Python *]` section already covers
-  `%LOCALAPPDATA%\Pip\cache`.
-- The curated native rules now take precedence over the community ones: a
-  converted Winapp2 rule whose paths overlap a `rules.toml` rule is dropped at
-  conversion time, so the same bytes are never counted twice.
+  `%LOCALAPPDATA%\Pip\cache`, so the candidate pip rule was dropped instead of
+  added.
+- A search field filtering rules by label across every category, a summary line
+  reporting how many rules were detected, converted and dropped, and a
+  "Sort by size" toggle that puts the biggest wins first and is remembered
+  between sessions.
 
 ## [0.1.0] - 2026-09-10
 
