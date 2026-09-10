@@ -15,6 +15,9 @@ click Check for updates or enable automatic checks (off by default).
   (`src-tauri/rules.toml`) — nothing is hidden in the code.
 - **Measure before you delete.** Analyze reports the reclaimable size per rule,
   with the exact list of files it would touch.
+- **Everything is measured, only the checked rules are cleaned.** Analyze sizes
+  every rule that applies to this machine, checked or not, so you can see what
+  ticking one would free before ticking it.
 - **Two deletion modes plus Auto.** Auto sends low-risk items to permanent
   deletion and everything else to the recycle bin.
 - **Startup manager.** Enable or disable what starts with your session, without
@@ -148,3 +151,23 @@ MIT — see [`LICENSE`](LICENSE).
 
 The bundled [Winapp2](https://github.com/MoscaDotTo/Winapp2) rule base is
 CC-BY-SA-4.0; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+Team roles:
+
+- **Authors**: [CaseReed](https://github.com/CaseReed)
+- **Reviewers**: [CaseReed](https://github.com/CaseReed)
+- **Approvers**: [CaseReed](https://github.com/CaseReed)
+
+Every release is built by GitHub Actions from the tagged source of this
+repository and signed only after manual approval of the signing request.
+
+Privacy policy: WinCleaner does not collect, store or transmit any user data.
+Its only network access is the optional update check (off by default, or one
+explicit click), which sends a single request to `api.github.com` carrying no
+identifier other than the application version. See the
+[Safety model](#safety-model) section above.
