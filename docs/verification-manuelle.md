@@ -81,14 +81,28 @@ réactivation).
 1. Écran Démarrage : toute entrée de source « Registre (RunOnce) » doit avoir
    son interrupteur grisé et non cliquable.
 
-## VM-7 — Règles invalides bloquantes
+## VM-7 — Règles invalides bloquantes — à exécuter sur le binaire release
+
+Le binaire release est compilé avec `windows_subsystem = "windows"` : il n'a
+pas de console, la sortie d'erreur n'est visible nulle part. La porte de
+démarrage doit donc passer par une boîte de dialogue. Vérifier sur le binaire
+release, pas en `dev`, sinon le test ne prouve rien.
 
 1. Modifier temporairement `src-tauri/rules.toml` : mettre `risk = "high"`
    sur la première règle.
-2. Lancer `npm run tauri dev`.
-3. Vérifier que l'application s'arrête avec un message clair sur la sortie
-   d'erreur et que la fenêtre ne s'ouvre pas.
-4. Rétablir `rules.toml` (`git checkout -- src-tauri/rules.toml`).
+2. `npm run tauri build`.
+3. Lancer `src-tauri/target/release/WinCleaner.exe` depuis l'Explorateur
+   (double-clic, pas depuis un terminal).
+4. Vérifier qu'une boîte de dialogue « WinCleaner » à icône d'erreur apparaît,
+   qu'elle nomme `rules.toml` et reprend le message d'erreur, et que la
+   fenêtre principale ne s'ouvre pas.
+5. Fermer la boîte : le processus doit se terminer (code de sortie 1).
+6. Rétablir `rules.toml` (`git checkout -- src-tauri/rules.toml`) et
+   reconstruire.
+
+Le texte de la boîte est construit par `wincleaner_lib::startup_error_message`,
+couvert par le test `le_message_de_la_porte_de_demarrage_reprend_lerreur`.
+L'affichage lui-même (`MessageBoxW`) n'est pas testable automatiquement.
 
 ## VM-8 — Absence de réseau
 
