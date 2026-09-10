@@ -52,7 +52,7 @@ describe("SettingsPanel", () => {
       screen.getByRole("heading", { name: `What's new in ${whatsNew.version}` }),
     ).toBeInTheDocument();
     const body = screen.getByTestId("whats-new");
-    expect(body).toHaveTextContent("Winapp2");
+    expect(whatsNew.body.length).toBeGreaterThan(0);
     // Plain text only: the bullets are literal "- ", and no markup was parsed.
     expect(body.textContent).toBe(whatsNew.body);
     expect(body.querySelector("a")).toBeNull();
