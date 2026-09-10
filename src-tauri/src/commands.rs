@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use sysinfo::System;
+use tauri::Emitter;
 
 /// Processes considered "an open browser" for the warning banner.
 pub const BROWSER_PROCESSES: [&str; 3] = ["msedge.exe", "chrome.exe", "firefox.exe"];
@@ -42,6 +43,26 @@ pub struct RulesSummary {
     pub winapp2_detected: u32,
     /// Winapp2 entries dropped, all reasons together.
     pub winapp2_dropped: u32,
+}
+
+/// One step of an Analyze, sent to the front end after each measured rule.
+/// Measuring eighty-odd rules takes ten to thirty seconds on a loaded profile:
+/// without this, the only feedback is a spinner that says nothing about how
+/// far along the walk is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanProgress {
+    /// Rules measured so far, this one included. Starts at 1.
+    pub done: u32,
+    /// Rules this scan will measure. `done == total` marks the last event.
+    pub total: u32,
+    /// The rule that has just been measured.
+    pub rule_id: String,
+    /// Its label, shown as is next to the counter.
+    pub label: String,
+    /// Bytes measured **since the start of this scan**, not the size of this
+    /// one rule: the hero shows this number verbatim, so a dropped or
+    /// duplicated event cannot make the running total drift.
+    pub total_bytes: u64,
 }
 
 /// The rule list of this session: the native rules first, then the Winapp2
@@ -154,37 +175,68 @@ where
 
 /// Scans each rule, refusing on the spot those that do not apply to this
 /// machine. `run` is injected so that the test exercises that refusal right
-/// here, and not in a copy of the loop.
+/// here, and not in a copy of the loop; `progress` likewise, so the sequence
+/// the front end draws is asserted without a Tauri application. Rules are
+/// measured in catalogue order and `progress` is called once per rule,
+/// unavailable ones included — they cost nothing to "measure", but dropping
+/// them from the count would leave the bar short of its end.
 fn scan_rules_with(
     rules: &[Rule],
     mut run: impl FnMut(&Rule) -> Result<ScanResult, String>,
+    progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<Vec<ScanResult>, String> {
-    rules
-        .iter()
-        .map(|r| match &r.unavailable_reason {
+    let total = rules.len() as u32;
+    let mut measured = 0u64;
+    let mut out = Vec::with_capacity(rules.len());
+    for (index, r) in rules.iter().enumerate() {
+        let result = match &r.unavailable_reason {
             // The rule does not apply on this machine: nothing to walk, and
             // above all nothing to delete. Counted as "skipped", not an error.
-            Some(_) => Ok(ScanResult {
+            Some(_) => ScanResult {
                 rule_id: r.id.clone(),
                 file_count: 0,
                 total_bytes: 0,
                 paths: Vec::new(),
                 skipped: 1,
-            }),
-            None => run(r),
-        })
-        .collect()
+            },
+            None => run(r)?,
+        };
+        measured += result.total_bytes;
+        progress(ScanProgress {
+            done: index as u32 + 1,
+            total,
+            rule_id: r.id.clone(),
+            label: r.label.clone(),
+            total_bytes: measured,
+        });
+        out.push(result);
+    }
+    Ok(out)
 }
 
-fn scan_rules(rule_ids: &[String]) -> Result<Vec<ScanResult>, String> {
-    scan_rules_with(&find_rules(rule_ids)?, |r| {
-        scan_rule(r).map_err(|e| e.to_string())
-    })
+fn scan_rules(
+    rule_ids: &[String],
+    progress: &mut dyn FnMut(ScanProgress),
+) -> Result<Vec<ScanResult>, String> {
+    scan_rules_with(
+        &find_rules(rule_ids)?,
+        |r| scan_rule(r).map_err(|e| e.to_string()),
+        progress,
+    )
 }
 
+/// Emits `scan-progress` after each rule. The event goes out from inside the
+/// blocking closure — the point is to reach the window *while* the walk runs,
+/// not once it has returned. An emit that fails (window already gone) must
+/// never abort a scan that is still legitimate work.
 #[tauri::command]
-pub async fn scan(rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
-    blocking(move || scan_rules(&rule_ids)).await
+pub async fn scan(app: tauri::AppHandle, rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
+    blocking(move || {
+        scan_rules(&rule_ids, &mut |step| {
+            let _ = app.emit("scan-progress", step);
+        })
+    })
+    .await
 }
 
 /// The recycle bin is emptied FIRST, whatever the order in rules.toml or the
@@ -448,11 +500,16 @@ mod tests {
         assert_ne!(caller, inside);
     }
 
-    /// Goes through the async command, and therefore through `spawn_blocking`:
-    /// checks that the work moved off the main thread does return its result.
+    /// Goes through `blocking`, and therefore through `spawn_blocking`, exactly
+    /// like the `scan` command: checks that the work moved off the main thread
+    /// does return its result. The command itself is not called here because it
+    /// now takes an `AppHandle`, which only a running Tauri application has.
     #[test]
     fn scanning_an_unknown_id_is_an_error() {
-        let err = tauri::async_runtime::block_on(scan(vec!["nonexistent".to_string()])).unwrap_err();
+        let err = tauri::async_runtime::block_on(blocking(|| {
+            scan_rules(&["nonexistent".to_string()], &mut |_| {})
+        }))
+        .unwrap_err();
         assert!(err.contains("nonexistent"));
     }
 
@@ -507,6 +564,77 @@ mod tests {
         }
     }
 
+    /// The progress the front end draws is produced here, once per rule, in
+    /// catalogue order — not by a copy of the loop living in the command.
+    #[test]
+    fn every_rule_reports_its_progress_in_catalogue_order() {
+        let rules = vec![rule("a"), rule("b"), rule("c")];
+        let mut seen: Vec<ScanProgress> = Vec::new();
+        let scans = scan_rules_with(
+            &rules,
+            |r| {
+                Ok(ScanResult {
+                    rule_id: r.id.clone(),
+                    file_count: 1,
+                    total_bytes: 100,
+                    paths: Vec::new(),
+                    skipped: 0,
+                })
+            },
+            &mut |p| seen.push(p),
+        )
+        .unwrap();
+
+        assert_eq!(scans.len(), 3);
+        assert_eq!(
+            seen.iter().map(|p| p.rule_id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert_eq!(seen.iter().map(|p| p.done).collect::<Vec<_>>(), [1, 2, 3]);
+        assert!(seen.iter().all(|p| p.total == 3));
+        // `total_bytes` is the running total, so the hero can show it verbatim
+        // without adding events up itself.
+        assert_eq!(
+            seen.iter().map(|p| p.total_bytes).collect::<Vec<_>>(),
+            [100, 200, 300]
+        );
+        // The last event of the loop is the final one: `done == total`.
+        let last = seen.last().unwrap();
+        assert_eq!(last.done, last.total);
+        assert_eq!(last.label, "c");
+    }
+
+    /// A rule that does not apply to this machine is measured by nobody, but
+    /// the user still asked for it: it counts in `total` and reports zero
+    /// bytes, so the bar never stalls short of its end.
+    #[test]
+    fn an_unavailable_rule_still_counts_in_the_progress_total() {
+        let mut unavailable = rule("b");
+        unavailable.unavailable_reason = Some("%TEMP% is outside the profile".into());
+        let rules = vec![rule("a"), unavailable];
+        let mut seen: Vec<ScanProgress> = Vec::new();
+        scan_rules_with(
+            &rules,
+            |r| {
+                Ok(ScanResult {
+                    rule_id: r.id.clone(),
+                    file_count: 1,
+                    total_bytes: 512,
+                    paths: Vec::new(),
+                    skipped: 0,
+                })
+            },
+            &mut |p| seen.push(p),
+        )
+        .unwrap();
+
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].rule_id, "b");
+        assert_eq!(seen[1].done, 2);
+        assert_eq!(seen[1].total, 2);
+        assert_eq!(seen[1].total_bytes, 512);
+    }
+
     /// An unavailable rule must never reach the disk, even if the front end
     /// sends its id. The refusal is exercised where it lives, in
     /// `scan_rules_with` and `clean_rules_with`.
@@ -516,9 +644,11 @@ mod tests {
         unavailable.paths = vec![r"%TEMP%\**\*".into()];
         unavailable.unavailable_reason = Some("%TEMP% is outside the profile".into());
 
-        let scans = scan_rules_with(std::slice::from_ref(&unavailable), |_| {
-            panic!("an unavailable rule must not be scanned")
-        })
+        let scans = scan_rules_with(
+            std::slice::from_ref(&unavailable),
+            |_| panic!("an unavailable rule must not be scanned"),
+            &mut |_| {},
+        )
         .unwrap();
         assert_eq!(scans.len(), 1);
         assert_eq!(scans[0].file_count, 0);
