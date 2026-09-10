@@ -1,19 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import tauriConf from "../../src-tauri/tauri.conf.json";
+import defaultCapability from "../../src-tauri/capabilities/default.json";
 
 /// La politique de sécurité du contenu n'est pas du code : personne ne la lit
 /// en relisant un diff de composant. Ce test échoue si quelqu'un la relâche.
-function lire<T>(chemin: string): T {
-  return JSON.parse(readFileSync(resolve(__dirname, "..", "..", chemin), "utf8")) as T;
-}
-
-const conf = lire<{ app: { security: { csp: string; devCsp?: string } } }>(
-  "src-tauri/tauri.conf.json"
-);
-const capacites = lire<{ permissions: string[] }>(
-  "src-tauri/capabilities/default.json"
-);
+const conf = tauriConf as { app: { security: { csp: string; devCsp?: string } } };
+const capacites = defaultCapability as { permissions: string[] };
 
 describe("CSP", () => {
   const csp = conf.app.security.csp;
