@@ -1,5 +1,7 @@
 # WinCleaner MVP — Design
 
+> **Note:** this is the original French design/plan document, kept as a historical record. The project itself is now entirely in English.
+
 Date : 2026-09-10. Nom de travail : `wincleaner` (renommable). Licence : MIT.
 
 ## Objectif
