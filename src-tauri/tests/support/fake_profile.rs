@@ -6,8 +6,17 @@
 //! <base>\profile\        the fake %USERPROFILE% (and %LOCALAPPDATA%, %APPDATA%, %TEMP%)
 //! <base>\outside\        target of the junction planted in %TEMP%
 //! <base>\outside2\       target of the junction planted in the Chrome cache
+//! <base>\outside3\       target of the junction planted ON a walk root (CrashDumps)
+//! <base>\outside4\       target of the junction swapped in AFTER the scan (TOCTOU)
 //! <base>\control\        never named by any rule; the snapshot proves it is untouched
 //! ```
+//!
+//! Junction cleanup: every junction is created inside the `TempDir`, so it is
+//! removed by `TempDir::drop`. That drop runs even when an assertion fails,
+//! because the test profile unwinds — `panic = "abort"` is set on the
+//! `[profile.release]` of `src-tauri/Cargo.toml` only, and `cargo test` builds
+//! the dev profile. A harness moved to a panic-abort profile would leak the
+//! junctions of a failing run into `%TEMP%`.
 //!
 //! Two families of files, both written with a content marker derived from the
 //! path itself so a silent rewrite is caught as well as a deletion:
@@ -19,6 +28,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use walkdir::WalkDir;
+
+/// Directory under `%TEMP%` swapped for a junction between the scan and the
+/// deletion. `zz_` so it sorts last among the temp junk.
+pub const TOCTOU_DIR: &str = "zz_toctou";
 
 #[derive(Debug, Clone)]
 pub struct Sentinel {
@@ -32,6 +45,8 @@ pub struct Fixture {
     pub profile: PathBuf,
     pub outside: PathBuf,
     pub outside2: PathBuf,
+    pub outside3: PathBuf,
+    pub outside4: PathBuf,
     pub junk: Vec<PathBuf>,
     pub sentinels: Vec<Sentinel>,
     /// The junction links themselves (not their targets).
@@ -134,6 +149,8 @@ impl Fixture {
         let mut fx = Fixture {
             outside: base.join("outside"),
             outside2: base.join("outside2"),
+            outside3: base.join("outside3"),
+            outside4: base.join("outside4"),
             base,
             profile,
             junk: Vec::new(),
@@ -158,6 +175,10 @@ impl Fixture {
         self.junk_file(r"AppData\Local\Temp\stray.tmp");
         self.junk_file(r"AppData\Local\Temp\nested\installer.log");
         self.junk_file(r"AppData\Local\Temp\nested\deeper\chunk.bin");
+        // The TOCTOU subject. `zz_` so it sorts last inside %TEMP%: the swap
+        // is performed on the FIRST deletion of the rule, and this path must
+        // still be ahead of the cursor when it happens.
+        self.junk_file(&format!(r"AppData\Local\Temp\{TOCTOU_DIR}\victim.txt"));
 
         // windows.thumbnails — non-recursive, two prefixes.
         self.junk_file(r"AppData\Local\Microsoft\Windows\Explorer\thumbcache_1024.db");
@@ -319,6 +340,36 @@ impl Fixture {
             "items the user pinned by hand",
         );
 
+        // (f) One level deeper than a NON-RECURSIVE rule, and carrying the
+        // very extension that rule matches. Each of these is deleted the day
+        // its rule becomes recursive — or the day `build_set` loses
+        // `literal_separator(true)`, which is what makes a lone `*` stop at a
+        // separator.
+        //
+        // `Recent\CustomDestinations\pinned.lnk` is the sharpest of the three:
+        // the sibling pattern `Recent\AutomaticDestinations\*` raises the walk
+        // ceiling of the shared `Recent` root to two levels, so the walk DOES
+        // reach this file. Only the glob refuses it. The other two sit under a
+        // root whose ceiling is one level, so they need the `max_depth` ceiling
+        // to fall as well — defence in depth, and the fixture that catches a
+        // rule rewritten as `**\*`.
+        for (rel, why) in [
+            (
+                r"AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\pinned.lnk",
+                "a .lnk one level below Recent\\*.lnk, which is not recursive",
+            ),
+            (
+                r"AppData\Local\Microsoft\Windows\Explorer\keep\thumbcache_9.db",
+                "a thumbcache_*.db one level below a non-recursive rule",
+            ),
+            (
+                r"AppData\Local\CrashDumps\keep\notes.dmp",
+                "a file one level below CrashDumps\\*, which is not recursive",
+            ),
+        ] {
+            self.profile_sentinel(rel, why);
+        }
+
         // (d) Reachable only through a junction, and (e) the control directory
         // no rule ever names.
         let outside = self.outside.join("secret.txt");
@@ -342,6 +393,26 @@ impl Fixture {
             bait2,
             "would match the Chrome cache glob if the junction were traversed",
         );
+        // Bait behind the junction that `junction_over_crash_dumps` plants ON
+        // a walk root. Its name matches `%LOCALAPPDATA%\CrashDumps\*`, so it
+        // survives only because `confined_root` refuses to walk a root that
+        // carries FILE_ATTRIBUTE_REPARSE_POINT.
+        let bait3 = self.outside3.join("bait.dmp");
+        self.sentinel(
+            bait3,
+            "would match %LOCALAPPDATA%\\CrashDumps\\* if a junction AT the walk root were walked",
+        );
+        // Victim of the TOCTOU swap: after the scan, `%TEMP%\<TOCTOU_DIR>`
+        // becomes a junction to this directory, so the already-scanned path
+        // `%TEMP%\<TOCTOU_DIR>\victim.txt` now resolves here. Only
+        // `deletable_path`, re-checked immediately before each deletion,
+        // stands between this file and `remove_file`.
+        let victim = self.outside4.join("victim.txt");
+        self.sentinel(
+            victim,
+            "would be deleted if deletable_path stopped re-resolving the path before deleting",
+        );
+
         let control = self.base.join("control").join("untouched.dat");
         self.sentinel(control, "control directory, named by no rule");
     }
@@ -383,12 +454,61 @@ impl Fixture {
         self.junctions.push(cache_link);
     }
 
+    /// Replaces the `windows.crash-dumps` walk root ITSELF with a junction to
+    /// `outside3`. The two junctions planted by `populate_junctions` sit
+    /// *inside* a walk; this one IS the walk root, which is the only case
+    /// `scan::confined_root` can catch — `walkdir` descends into its own root
+    /// even when that root is a reparse point.
+    ///
+    /// The crash-dump fixtures are dropped from the junk and sentinel lists in
+    /// the same move: the directory holding them no longer exists.
+    pub fn junction_over_crash_dumps(&mut self) -> PathBuf {
+        let root = self.profile.join(r"AppData\Local\CrashDumps");
+        std::fs::remove_dir_all(&root).unwrap();
+        let prefix = root.to_string_lossy().to_lowercase();
+        let under = |p: &Path| p.to_string_lossy().to_lowercase().starts_with(&prefix);
+        self.junk.retain(|p| !under(p));
+        self.sentinels.retain(|s| !under(&s.path));
+        junction(&root, &self.outside3);
+        self.junctions.push(root.clone());
+        root
+    }
+
+    /// The TOCTOU swap: `%TEMP%\zz_toctou`, whose `victim.txt` the scan has
+    /// just recorded, becomes a junction to `outside4`, which holds a
+    /// `victim.txt` of its own. The scanned path is unchanged and still names
+    /// a regular file — it simply no longer names the same file, and the file
+    /// it names now lives outside the profile.
+    ///
+    /// Called from inside the injected deletion closure, i.e. after the
+    /// internal re-scan `clean_rule_with_trash` performs: this is the exact
+    /// window `deletable_path` exists to close.
+    pub fn swap_toctou_dir_for_junction(&self) -> PathBuf {
+        let dir = self.profile.join(r"AppData\Local\Temp").join(TOCTOU_DIR);
+        std::fs::remove_dir_all(&dir).unwrap();
+        junction(&dir, &self.outside4);
+        dir
+    }
+
+    /// The scanned path of the TOCTOU victim, before the swap.
+    pub fn toctou_victim_path(&self) -> PathBuf {
+        self.profile
+            .join(r"AppData\Local\Temp")
+            .join(TOCTOU_DIR)
+            .join("victim.txt")
+    }
+
     /// One concrete file per converted Winapp2 glob, so those rules delete
     /// something instead of walking empty trees. A pattern whose literal form
     /// cannot be derived (a `{a,b}` alternation) is skipped rather than
     /// guessed at, and a path that would collide with an existing file is
     /// never overwritten.
-    pub fn add_winapp2_junk(&mut self, patterns: &[String]) {
+    ///
+    /// Returns how many files it actually created. The caller asserts a floor
+    /// on that number: every `continue` below is silent, so a change that made
+    /// them all fire would otherwise leave the Winapp2 rules walking empty
+    /// trees while the suite stayed green.
+    pub fn add_winapp2_junk(&mut self, patterns: &[String]) -> usize {
         // Windows file names are case-insensitive and Winapp2 spells the same
         // directory several ways (`DropBox` and `Dropbox`): the bookkeeping has
         // to be case-insensitive too, or the same file would be created twice
@@ -402,6 +522,7 @@ impl Fixture {
             .map(|p| key(p))
             .collect();
 
+        let mut created = 0usize;
         for pattern in patterns {
             let Some(path) = concrete_path(pattern) else {
                 continue;
@@ -424,7 +545,9 @@ impl Fixture {
                 continue;
             }
             self.junk.push(path);
+            created += 1;
         }
+        created
     }
 
     /// Every file under the `TempDir`, with its bytes. Junctions are never
