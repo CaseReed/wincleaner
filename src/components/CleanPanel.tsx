@@ -124,22 +124,46 @@ export function CleanPanel() {
     const base = groupByCategory(filterRules(rules, query));
     return sortBySize ? sortGrouped(base, results) : base;
   }, [rules, query, sortBySize, results]);
-  const total = useMemo(
-    () => (results ?? []).reduce((sum, r) => sum + r.total_bytes, 0),
-    [results]
+  /// Analyze measures every rule that applies to this machine — walking a
+  /// directory reads it, it never touches it — so an unchecked rule can still
+  /// tell the user what checking it would free.
+  const availableRules = useMemo(
+    () => rules.filter((r) => !r.unavailable_reason),
+    [rules]
   );
-  const scannedIds = useMemo(() => (results ?? []).map((r) => r.rule_id), [results]);
+  /// The checkbox decides what Clean deletes, and nothing else. The hero total,
+  /// the gauge and the Clean label answer "what will Clean free": the checked
+  /// rules that were measured.
+  const checkedResults = useMemo(
+    () => (results ?? []).filter((r) => selected.has(r.rule_id)),
+    [results, selected]
+  );
+  const total = useMemo(
+    () => checkedResults.reduce((sum, r) => sum + r.total_bytes, 0),
+    [checkedResults]
+  );
+  const uncheckedTotal = useMemo(
+    () =>
+      (results ?? [])
+        .filter((r) => !selected.has(r.rule_id))
+        .reduce((sum, r) => sum + r.total_bytes, 0),
+    [results, selected]
+  );
+  const cleanIds = useMemo(() => checkedResults.map((r) => r.rule_id), [checkedResults]);
   const recycleBinChecked = useMemo(
     () => rules.some((r) => r.kind === "recycle-bin" && selected.has(r.id)),
     [rules, selected]
   );
-  /// The scanned rules that the current mode will destroy with no way back.
+  /// The rules Clean is about to delete that the current mode will destroy
+  /// with no way back.
   const irreversibleRules = useMemo(
-    () =>
-      rules.filter((r) => scannedIds.includes(r.id) && isIrreversible(r, mode)),
-    [rules, scannedIds, mode]
+    () => rules.filter((r) => cleanIds.includes(r.id) && isIrreversible(r, mode)),
+    [rules, cleanIds, mode]
   );
 
+  /// Toggling changes what Clean will delete, not what has been measured: the
+  /// results stand until the next Analyze. A confirmation raised on the old
+  /// total no longer describes the new one, so it steps back.
   function toggleRule(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -147,8 +171,6 @@ export function CleanPanel() {
       else next.add(id);
       return next;
     });
-    setResults(null);
-    setReport(null);
     setConfirming(false);
   }
 
@@ -197,7 +219,7 @@ export function CleanPanel() {
     // hand folds no longer describe these results.
     setFolds(new Map());
     try {
-      setResults(await scan(rules.filter((r) => selected.has(r.id)).map((r) => r.id)));
+      setResults(await scan(availableRules.map((r) => r.id)));
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -209,7 +231,7 @@ export function CleanPanel() {
     setConfirming(false);
     setBusyAction("clean");
     try {
-      const done = await clean(scannedIds, mode);
+      const done = await clean(cleanIds, mode);
       setReport(done);
       setResults(null);
       toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
@@ -288,12 +310,25 @@ export function CleanPanel() {
             <div className="min-w-0">
               <p className="eyebrow text-muted-foreground">Reclaimable</p>
               {results ? (
-                <p
-                  data-testid="total-bytes"
-                  className="mt-1.5 font-mono tnum text-[2rem] leading-none font-semibold"
-                >
-                  {formatBytes(total)}
-                </p>
+                <>
+                  <p
+                    data-testid="total-bytes"
+                    className="mt-1.5 font-mono tnum text-[2rem] leading-none font-semibold"
+                  >
+                    {formatBytes(total)}
+                  </p>
+                  {uncheckedTotal > 0 && (
+                    <p
+                      data-testid="unchecked-bytes"
+                      className="mt-1.5 text-sm text-muted-foreground"
+                    >
+                      <span className="font-mono tnum">
+                        {formatBytes(uncheckedTotal)}
+                      </span>{" "}
+                      more in unchecked rules
+                    </p>
+                  )}
+                </>
               ) : (
                 <p className="mt-1.5 text-[2rem] leading-none font-normal text-muted-foreground">
                   —
@@ -311,7 +346,11 @@ export function CleanPanel() {
                 />
                 <span aria-hidden="true">Sort by size</span>
               </span>
-              <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
+              <Button
+                size="lg"
+                onClick={onScan}
+                disabled={busy || availableRules.length === 0}
+              >
                 {busyAction === "scan" ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
@@ -326,11 +365,11 @@ export function CleanPanel() {
           {busyAction ? (
             <p data-testid="hero-status" className="text-sm text-muted-foreground">
               {busyAction === "scan"
-                ? `Analyzing ${RULE_COUNT.format(selected.size)} rules…`
+                ? `Analyzing ${RULE_COUNT.format(availableRules.length)} rules…`
                 : "Cleaning…"}
             </p>
           ) : results ? (
-            <ReclaimGauge rules={rules} results={results} />
+            <ReclaimGauge rules={rules} results={checkedResults} />
           ) : (
             <p className="text-sm text-muted-foreground">
               Analyze to measure what can be freed.
@@ -497,7 +536,7 @@ export function CleanPanel() {
               size="lg"
               variant="destructive"
               onClick={() => setConfirming(true)}
-              disabled={busy || !results || scannedIds.length === 0}
+              disabled={busy || !results || cleanIds.length === 0}
             >
               {busyAction === "clean" ? (
                 <>

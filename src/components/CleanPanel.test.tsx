@@ -60,13 +60,113 @@ describe("CleanPanel", () => {
     expect(screen.getByLabelText("Microsoft Edge cache")).toBeInTheDocument();
   });
 
-  it("only scans the checked rules", async () => {
+  /// Scanning is read-only: unchecking a rule must not cost the user the
+  /// knowledge of what it holds. The checkbox decides what Clean deletes, not
+  /// what Analyze measures.
+  it("measures every available rule, checked or not", async () => {
     const user = userEvent.setup();
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
     await user.click(screen.getByLabelText("Microsoft Edge cache"));
     await user.click(screen.getByRole("button", { name: /Analyze/ }));
-    await waitFor(() => expect(api.scan).toHaveBeenCalledWith(["windows.temp"]));
+    await waitFor(() =>
+      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+    );
+  });
+
+  it("shows the size of an unchecked rule after a scan", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByLabelText("Microsoft Edge cache"));
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    expect(await screen.findByTestId("result-edge.cache")).toHaveTextContent("1 KB");
+    expect(screen.getByLabelText("Microsoft Edge cache")).not.toBeChecked();
+  });
+
+  /// The hero answers "what will Clean free", not "what is lying around":
+  /// the unchecked bytes are stated separately instead of being folded in.
+  it("counts only the checked rules in the total, the gauge and the Clean label", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByLabelText("Microsoft Edge cache"));
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    expect(await screen.findByTestId("total-bytes")).toHaveTextContent("2 KB");
+    expect(screen.getByTestId("unchecked-bytes")).toHaveTextContent("1 KB more in unchecked rules");
+    expect(screen.getByRole("button", { name: /^Clean/ })).toHaveTextContent("2 KB");
+    // The gauge draws the checked rules only.
+    expect(screen.getAllByTestId("gauge-segment")).toHaveLength(1);
+  });
+
+  it("hides the unchecked line when every measured rule is checked", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    expect(await screen.findByTestId("total-bytes")).toHaveTextContent("3 KB");
+    expect(screen.queryByTestId("unchecked-bytes")).toBeNull();
+  });
+
+  /// Re-deciding what to delete is not a reason to re-walk the disk: the
+  /// measurements stand until the next Analyze.
+  it("keeps the results and updates the total when a rule is toggled after a scan", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    expect(await screen.findByTestId("total-bytes")).toHaveTextContent("3 KB");
+
+    await user.click(screen.getByLabelText("Microsoft Edge cache"));
+
+    expect(api.scan).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("total-bytes")).toHaveTextContent("2 KB");
+    expect(screen.getByTestId("unchecked-bytes")).toHaveTextContent("1 KB");
+    // The row keeps the size it was measured at.
+    expect(screen.getByTestId("result-edge.cache")).toHaveTextContent("1 KB");
+  });
+
+  it("cleans the checked rules only, never the ones merely measured", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+
+    await user.click(screen.getByLabelText("Microsoft Edge cache"));
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+
+    const confirmation = await screen.findByTestId("confirm-clean");
+    expect(confirmation).toHaveTextContent("2 KB");
+    expect(confirmation).not.toHaveTextContent("Microsoft Edge cache");
+
+    await user.click(screen.getByRole("button", { name: /Confirm cleanup/ }));
+    await waitFor(() =>
+      expect(api.clean).toHaveBeenCalledWith(["windows.temp"], "auto")
+    );
   });
 
   it("shows the size per rule, the total and the expandable paths", async () => {
@@ -211,14 +311,20 @@ describe("CleanPanel", () => {
     expect(screen.getByLabelText("Temporary files")).toBeChecked();
   });
 
-  it("does not scan the rules unchecked by default", async () => {
+  /// Its "scan" is the read-only `SHQueryRecycleBinW`: measuring it costs
+  /// nothing and it stays unchecked, so Clean will not empty it.
+  it("measures the rules unchecked by default, including the Recycle Bin", async () => {
     const user = userEvent.setup();
     api.listRules.mockResolvedValue([...RULES, RECYCLE_BIN]);
     render(<CleanPanel />);
-    await screen.findByLabelText("Recycle Bin");
+    expect(await screen.findByLabelText("Recycle Bin")).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: /Analyze/ }));
     await waitFor(() =>
-      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+      expect(api.scan).toHaveBeenCalledWith([
+        "windows.temp",
+        "edge.cache",
+        "windows.recycle-bin",
+      ])
     );
   });
 
@@ -430,9 +536,14 @@ describe("CleanPanel", () => {
     await user.click(screen.getByTestId("toggle-category-Applications"));
     expect(await screen.findByLabelText("7-Zip")).not.toBeChecked();
 
+    // Measured all the same, so the user can see what checking it would free.
     await user.click(screen.getByRole("button", { name: /Analyze/ }));
     await waitFor(() =>
-      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+      expect(api.scan).toHaveBeenCalledWith([
+        "windows.temp",
+        "edge.cache",
+        "winapp2.7-zip",
+      ])
     );
   });
 
