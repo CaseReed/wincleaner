@@ -1,3 +1,7 @@
+// La feuille de style de sonner passe par le bundle Vite, donc par `'self'`.
+// Sans cet import, sonner l'injecte à l'exécution dans une balise <style> que
+// `style-src 'self'` bloque en release : les toasts s'affichent sans style.
+import "sonner/dist/styles.css"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"

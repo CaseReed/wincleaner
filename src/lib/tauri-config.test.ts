@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import tauriConf from "../../src-tauri/tauri.conf.json";
 import defaultCapability from "../../src-tauri/capabilities/default.json";
+import sonnerSource from "../components/ui/sonner.tsx?raw";
 
 /// La politique de sécurité du contenu n'est pas du code : personne ne la lit
 /// en relisant un diff de composant. Ce test échoue si quelqu'un la relâche.
@@ -37,10 +38,22 @@ describe("CSP", () => {
   it("ne tolère 'unsafe-inline' que sur les attributs de style", () => {
     // sonner et les primitives @base-ui posent des attributs `style=` en
     // ligne : `style-src-attr` couvre exactement ce cas, sans autoriser une
-    // balise <style> injectée.
+    // balise <style> injectée. Les feuilles de style, elles, passent toutes
+    // par le bundle Vite : cf. l'import `sonner/dist/styles.css` dans
+    // `src/components/ui/sonner.tsx`, sans lequel sonner injecterait la
+    // sienne dans une balise <style> que `style-src 'self'` bloque.
     expect(csp).toContain("style-src 'self'");
     expect(csp).not.toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src-attr 'unsafe-inline'");
+  });
+
+  it("laisse la feuille de style de sonner entrer par le bundle", () => {
+    // Le composant doit importer la feuille : sinon la CSP la bloque et les
+    // toasts s'affichent nus en release, sans que rien n'échoue au build.
+    // Vitest neutralise les feuilles de style : le contenu réellement
+    // embarqué se vérifie sur le bundle
+    // (`npm run build` puis `grep data-sonner-toaster dist/assets/*.css`).
+    expect(sonnerSource).toContain('import "sonner/dist/styles.css"');
   });
 
   it("garde une CSP de développement distincte pour le HMR de Vite", () => {
