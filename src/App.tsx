@@ -1,51 +1,48 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/sonner";
+import { CleanPanel } from "@/components/CleanPanel";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+type Screen = "clean" | "startup";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+export default function App() {
+  const [screen, setScreen] = useState<Screen>("clean");
+  const [dark, setDark] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+  }, [dark]);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <div className="flex h-screen bg-background text-foreground">
+      <nav className="flex w-52 flex-col gap-1 border-r p-3">
+        <h1 className="mb-4 px-2 text-lg font-semibold">WinCleaner</h1>
+        <Button
+          variant={screen === "clean" ? "secondary" : "ghost"}
+          className="justify-start"
+          onClick={() => setScreen("clean")}
+        >
+          Nettoyage
+        </Button>
+        <Button
+          variant={screen === "startup" ? "secondary" : "ghost"}
+          className="justify-start"
+          onClick={() => setScreen("startup")}
+        >
+          Démarrage
+        </Button>
+        <Button
+          variant="ghost"
+          className="mt-auto justify-start"
+          onClick={() => setDark((v) => !v)}
+        >
+          {dark ? "Thème clair" : "Thème sombre"}
+        </Button>
+      </nav>
+      <main className="flex-1 overflow-auto p-6">
+        {screen === "clean" ? <CleanPanel /> : <p>Écran Démarrage</p>}
+      </main>
+      <Toaster />
+    </div>
   );
 }
-
-export default App;
