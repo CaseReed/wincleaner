@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell, type Screen } from "@/components/AppShell";
 import { CleanPanel } from "@/components/CleanPanel";
+import { SettingsPanel } from "@/components/SettingsPanel";
 import { StartupPanel } from "@/components/StartupPanel";
+import whatsNew from "@/generated/whats-new.json";
+import { markSeen, readLastSeen, shouldAnnounce } from "@/lib/whats-new";
 
 const THEME_KEY = "wincleaner.theme";
 
@@ -48,6 +52,17 @@ export default function App() {
     }
   }, [dark]);
 
+  /// Once per version change, never on a first install: the notice exists to
+  /// explain what moved under the user's feet, not to greet them.
+  useEffect(() => {
+    if (shouldAnnounce(readLastSeen(), whatsNew.version)) {
+      toast.info(`What's new in ${whatsNew.version}`, {
+        action: { label: "View", onClick: () => setScreen("settings") },
+      });
+    }
+    markSeen(whatsNew.version);
+  }, []);
+
   return (
     <AppShell
       screen={screen}
@@ -55,7 +70,9 @@ export default function App() {
       dark={dark}
       onToggleTheme={() => setDark((v) => !v)}
     >
-      {screen === "clean" ? <CleanPanel /> : <StartupPanel />}
+      {screen === "clean" && <CleanPanel />}
+      {screen === "startup" && <StartupPanel />}
+      {screen === "settings" && <SettingsPanel />}
       <Toaster theme={dark ? "dark" : "light"} />
     </AppShell>
   );

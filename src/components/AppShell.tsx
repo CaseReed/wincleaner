@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
-import { Moon, Power, Sparkles, Sun } from "lucide-react";
+import { Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type Screen = "clean" | "startup";
+export type Screen = "clean" | "startup" | "settings";
 
 const SCREENS: { id: Screen; label: string; icon: typeof Sparkles }[] = [
   { id: "clean", label: "Cleanup", icon: Sparkles },
   { id: "startup", label: "Startup", icon: Power },
+  { id: "settings", label: "Settings", icon: Settings },
 ];
 
 function NavItem({
