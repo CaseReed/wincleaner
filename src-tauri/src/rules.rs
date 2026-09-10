@@ -100,9 +100,36 @@ impl fmt::Display for RuleError {
 
 impl std::error::Error for RuleError {}
 
+/// Convertit un chemin Windows (potentiellement en forme courte 8.3, comme
+/// le `%TEMP%` que Windows peut fournir quand le nom de compte contient un
+/// espace) vers sa forme longue. Si le chemin n'existe pas ou que l'appel
+/// échoue, l'entrée est renvoyée inchangée.
+fn long_path(value: &str) -> String {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let src = PCWSTR(wide.as_ptr());
+    let len = unsafe { GetLongPathNameW(src, None) };
+    if len == 0 {
+        return value.to_string();
+    }
+    let mut buf = vec![0u16; len as usize];
+    let written = unsafe { GetLongPathNameW(src, Some(&mut buf)) };
+    if written == 0 {
+        return value.to_string();
+    }
+    String::from_utf16_lossy(&buf[..written as usize])
+}
+
 /// Résolution réelle, adossée à l'environnement du processus.
 pub fn system_env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+    let value = std::env::var(name).ok()?;
+    if ALLOWED_VARS.contains(&name) {
+        Some(long_path(&value))
+    } else {
+        Some(value)
+    }
 }
 
 /// Remplace la variable `%VAR%` de tête. Une seule variable est acceptée,
@@ -402,6 +429,62 @@ risk = "low""#,
                 "firefox.cache",
             ]
         );
+    }
+
+    #[test]
+    fn long_path_convertit_un_chemin_court_en_long() {
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let dir = tempfile::tempdir().unwrap();
+        let long_dir = dir.path().join("Nom Long Avec Espaces");
+        std::fs::create_dir(&long_dir).unwrap();
+        // `tempfile` construit son chemin à partir de %TEMP% tel quel, qui peut
+        // déjà être une forme courte 8.3 sur cette machine : on passe par
+        // `canonicalize` pour obtenir une référence longue indépendante de
+        // `long_path`, la fonction sous test.
+        let canonical = std::fs::canonicalize(&long_dir).unwrap();
+        let long_dir = canonical
+            .to_str()
+            .unwrap()
+            .trim_start_matches(r"\\?\")
+            .to_string();
+
+        let mut wide: Vec<u16> = long_dir.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut buf = vec![0u16; 260];
+        let len = unsafe {
+            GetShortPathNameW(
+                windows::core::PCWSTR(wide.as_mut_ptr()),
+                Some(&mut buf),
+            )
+        };
+        assert!(len > 0, "GetShortPathNameW a échoué");
+        let short: String = String::from_utf16_lossy(&buf[..len as usize]);
+
+        if short.eq_ignore_ascii_case(&long_dir) {
+            // Génération de noms 8.3 désactivée sur ce volume : rien à convertir.
+            assert_eq!(long_path(&long_dir), long_dir);
+            return;
+        }
+
+        let got = long_path(&short);
+        let got_trim = got.trim_end_matches('\\');
+        let want_trim = long_dir.trim_end_matches('\\');
+        assert!(
+            got_trim.eq_ignore_ascii_case(want_trim),
+            "got={got_trim} want={want_trim}"
+        );
+    }
+
+    #[test]
+    fn long_path_rend_l_entree_inchangee_si_le_chemin_n_existe_pas() {
+        let input = r"C:\chemin\qui\n\existe\pas\ABCDEF~1";
+        assert_eq!(long_path(input), input);
+    }
+
+    #[test]
+    fn les_regles_embarquees_se_chargent_avec_l_environnement_reel() {
+        let rules = load_rules_with(RULES_TOML, &system_env).unwrap();
+        assert_eq!(rules.len(), 8);
     }
 
     #[test]
