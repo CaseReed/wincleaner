@@ -2,8 +2,7 @@
 
 Open source Windows cleaner (MIT). Tauri 2 + Rust (`src-tauri/`), React 19 + TS
 + Tailwind v4 + shadcn/ui (`src/`).
-Spec: `docs/superpowers/specs/2026-09-10-mvp-design.md` (original French design
-document). Manual checklist: `docs/manual-verification.md`.
+Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
 
 ## Verifications (to run before saying "done")
 - Rust: `cd src-tauri && cargo test -- --test-threads=1` (single-threaded: the

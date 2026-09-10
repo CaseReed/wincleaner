@@ -111,7 +111,7 @@ replayed before every release.
 ## Contributing
 
 Continuous integration (`.github/workflows/ci.yml`) runs on every pull request
-targeting `master`: front-end tests (Vitest), front-end build, Rust tests
+targeting `main`: front-end tests (Vitest), front-end build, Rust tests
 (`cargo test -- --test-threads=1`) and lint (`cargo clippy -D warnings`). A pull
 request must pass those checks before review.
 
