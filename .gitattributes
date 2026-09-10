@@ -1,0 +1,5 @@
+# The embedded Winapp2 rule base is a vendored upstream snapshot: a refresh
+# rewrites thousands of lines, which is noise in a diff and in the language
+# statistics of the repository.
+src-tauri/third_party/winapp2/Winapp2.ini -diff linguist-vendored
+src-tauri/third_party/winapp2/LICENSE linguist-vendored

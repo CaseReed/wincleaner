@@ -3,6 +3,7 @@ use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::scan::{scan_rule, ScanResult};
 use crate::startup::StartupEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use sysinfo::System;
 
@@ -74,14 +75,21 @@ pub fn catalogue() -> Result<&'static Catalogue, String> {
         .map_err(|e| e.clone())
 }
 
+/// The catalogue holds thousands of Winapp2 rules: a linear scan per requested
+/// id turns "clean everything selected" into thousands of scans of thousands of
+/// rules. The index is built once per call and dropped with it.
 fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
-    let all = &catalogue()?.rules;
+    let by_id: HashMap<&str, &Rule> = catalogue()?
+        .rules
+        .iter()
+        .map(|r| (r.id.as_str(), r))
+        .collect();
     rule_ids
         .iter()
         .map(|id| {
-            all.iter()
-                .find(|r| &r.id == id)
-                .cloned()
+            by_id
+                .get(id.as_str())
+                .map(|r| (*r).clone())
                 .ok_or_else(|| format!("unknown rule: \"{id}\""))
         })
         .collect()

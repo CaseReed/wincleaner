@@ -33,10 +33,20 @@ const MODE_LABEL: Record<CleanMode, string> = {
   permanent: "Permanent",
 };
 
-/// Categories that start folded: the converted Winapp2 rules are hundreds of
-/// rows, none of them checked by default, and unfolding them is a deliberate
-/// act.
+/// Categories that start folded: `Applications` is hundreds of rows, almost all
+/// of them converted Winapp2 rules that are unchecked by default, and unfolding
+/// them is a deliberate act. It is NOT a "nothing selected in here" category:
+/// native rules live there too (`npm.cache`, checked by default). Folding is
+/// presentation only — Analyze sends every selected rule, folded or filtered
+/// out of view.
 const COLLAPSED_BY_DEFAULT = ["Applications"];
+
+/// Community rules carry a `winapp2.` id. The attribution is rendered only when
+/// the category actually holds one, so it never reads as covering the native
+/// rules sitting next to them.
+function hasWinapp2Rule(rules: RuleSummary[]): boolean {
+  return rules.some((r) => r.id.startsWith("winapp2."));
+}
 
 const WINAPP2_URL = "https://github.com/MoscaDotTo/Winapp2";
 
@@ -481,12 +491,13 @@ export function CleanPanel() {
                       );
                     })}
                   </ul>
-                  {collapsible && (
+                  {hasWinapp2Rule(catRules) && (
                     <p
                       data-testid="winapp2-attribution"
                       className="px-1 text-xs text-muted-foreground"
                     >
-                      Community rules from Winapp2 (CC-BY-SA 4.0) —{" "}
+                      Some of the rules in this category are community rules
+                      from Winapp2 (CC-BY-SA 4.0) —{" "}
                       <span className="font-mono">{WINAPP2_URL}</span>
                     </p>
                   )}

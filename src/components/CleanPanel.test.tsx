@@ -373,6 +373,44 @@ describe("CleanPanel", () => {
     );
   });
 
+  /// The credit must not stretch over the native rules of the category: a
+  /// category holding only built-in rules carries no Winapp2 line.
+  it("does not credit Winapp2 in a category holding no community rule", async () => {
+    const user = userEvent.setup();
+    const NATIVE_APP_RULE = {
+      ...APP_RULE,
+      id: "npm.cache",
+      label: "npm cache",
+      risk: "low",
+      default_checked: true,
+      note: null,
+    };
+    api.listRules.mockResolvedValue([...RULES, NATIVE_APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    expect(await screen.findByLabelText("npm cache")).toBeInTheDocument();
+    expect(screen.queryByTestId("winapp2-attribution")).toBeNull();
+  });
+
+  /// Folding and filtering are presentation: a rule the user ticked and then
+  /// hid behind a search must still be analysed, otherwise the search field
+  /// silently unselects rules.
+  it("analyses a selected rule that the search filter hides", async () => {
+    const user = userEvent.setup();
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    await user.type(screen.getByTestId("rule-search"), "Edge");
+    expect(screen.queryByLabelText("Temporary files")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await waitFor(() =>
+      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+    );
+  });
+
   it("shows the note carried by a rule", async () => {
     const user = userEvent.setup();
     api.listRules.mockResolvedValue([...RULES, APP_RULE]);
