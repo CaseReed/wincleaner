@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type Risk = "low" | "medium";
 export type RuleKind = "files" | "recycle-bin";
@@ -35,6 +36,17 @@ export interface ScanResult {
   total_bytes: number;
   paths: string[];
   skipped: number;
+}
+
+/// Mirrors `src-tauri/src/commands.rs::ScanProgress`, emitted once per rule
+/// while `scan` runs. `total_bytes` is the running total measured since the
+/// start of that scan, not the size of the rule that has just been measured.
+export interface ScanProgress {
+  done: number;
+  total: number;
+  rule_id: string;
+  label: string;
+  total_bytes: number;
 }
 
 export interface SkippedItem {
@@ -74,6 +86,17 @@ export function listRules(): Promise<RuleSummary[]> {
 
 export function scan(ruleIds: string[]): Promise<ScanResult[]> {
   return invoke<ScanResult[]>("scan", { ruleIds });
+}
+
+/// Subscribes to the progress of the running `scan`. Resolves with the
+/// function that stops listening — call it when the subscriber goes away, or
+/// the listener outlives it inside the webview. Needs `core:event:allow-listen`,
+/// which `core:event:default` already grants
+/// (https://v2.tauri.app/reference/acl/core-permissions/).
+export function onScanProgress(
+  cb: (progress: ScanProgress) => void,
+): Promise<() => void> {
+  return listen<ScanProgress>("scan-progress", (event) => cb(event.payload));
 }
 
 export function clean(ruleIds: string[], mode: CleanMode): Promise<CleanReport> {

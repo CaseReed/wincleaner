@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const api = {
@@ -8,6 +8,7 @@ const api = {
   scan: vi.fn(),
   clean: vi.fn(),
   runningBrowsers: vi.fn(),
+  onScanProgress: vi.fn(),
 };
 
 vi.mock("@/lib/api", async () => {
@@ -19,6 +20,7 @@ vi.mock("@/lib/api", async () => {
     scan: (ids: string[]) => api.scan(ids),
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
+    onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
   };
 });
 
@@ -38,8 +40,27 @@ const RECYCLE_BIN = {
   default_checked: false,
 };
 
+type Progress = {
+  done: number;
+  total: number;
+  rule_id: string;
+  label: string;
+  total_bytes: number;
+};
+
+/// Set by the `onScanProgress` mock: lets a test play the events the Rust side
+/// would emit, in the middle of a scan that has not resolved yet.
+let emitProgress: (p: Progress) => void = () => {};
+let unlisten = vi.fn();
+
 describe("CleanPanel", () => {
   beforeEach(() => {
+    emitProgress = () => {};
+    unlisten = vi.fn();
+    api.onScanProgress.mockReset().mockImplementation((cb: (p: Progress) => void) => {
+      emitProgress = cb;
+      return Promise.resolve(unlisten);
+    });
     api.listRules.mockReset().mockResolvedValue(RULES);
     api.scan.mockReset().mockResolvedValue([]);
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
@@ -644,6 +665,72 @@ describe("CleanPanel", () => {
 
     release([]);
     await waitFor(() => expect(screen.queryByTestId("hero-status")).toBeNull());
+  });
+
+  /// The spinner said nothing about a walk that lasts ten to thirty seconds.
+  /// The bar and the counter come from the events, not from a guess.
+  it("draws the progress of the scan rule by rule", async () => {
+    const user = userEvent.setup();
+    let release: (results: unknown[]) => void = () => {};
+    api.scan.mockImplementation(
+      () => new Promise((resolve) => { release = resolve as typeof release; })
+    );
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+    act(() =>
+      emitProgress({ done: 1, total: 4, rule_id: "windows.temp", label: "Temporary files", total_bytes: 1024 })
+    );
+    expect(screen.getByTestId("scan-progress")).toHaveTextContent(
+      "Analyzing 1 / 4 · Temporary files"
+    );
+    expect(screen.getByTestId("scan-progress-bar")).toHaveStyle({ width: "25%" });
+    expect(screen.getByTestId("scan-progress-bytes")).toHaveTextContent("1 KB");
+
+    act(() =>
+      emitProgress({ done: 2, total: 4, rule_id: "edge.cache", label: "Microsoft Edge cache", total_bytes: 3072 })
+    );
+    expect(screen.getByTestId("scan-progress")).toHaveTextContent(
+      "Analyzing 2 / 4 · Microsoft Edge cache"
+    );
+    expect(screen.getByTestId("scan-progress-bar")).toHaveStyle({ width: "50%" });
+    expect(screen.getByTestId("scan-progress-bytes")).toHaveTextContent("3 KB");
+
+    act(() =>
+      emitProgress({ done: 4, total: 4, rule_id: "winapp2.7-zip", label: "7-Zip", total_bytes: 4096 })
+    );
+    expect(screen.getByTestId("scan-progress-bar")).toHaveStyle({ width: "100%" });
+
+    // Once the scan returns, the normal post-scan hero takes the slot back.
+    release([
+      { rule_id: "windows.temp", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
+    ]);
+    await waitFor(() => expect(screen.queryByTestId("scan-progress")).toBeNull());
+    expect(screen.getByTestId("total-bytes")).toHaveTextContent("4 KB");
+  });
+
+  /// An event arriving outside a scan (a previous run finishing late) must not
+  /// repaint a hero that is showing results.
+  it("ignores progress events when no scan is pending", async () => {
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+    act(() =>
+      emitProgress({ done: 1, total: 4, rule_id: "windows.temp", label: "Temporary files", total_bytes: 1024 })
+    );
+    expect(screen.queryByTestId("scan-progress")).toBeNull();
+  });
+
+  it("stops listening for progress when it unmounts", async () => {
+    const { unmount } = render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+    unmount();
+    await waitFor(() => expect(unlisten).toHaveBeenCalled());
   });
 
   /// Biggest wins first: the scan decides what is worth looking at.

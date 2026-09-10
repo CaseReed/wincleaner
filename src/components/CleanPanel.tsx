@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Info, Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ReclaimGauge } from "@/components/ReclaimGauge";
+import { ReclaimGauge, prefersReducedMotion } from "@/components/ReclaimGauge";
 import { RuleCategory } from "@/components/RuleCategory";
 import { formatBytes, formatCount } from "@/lib/format";
 import {
@@ -12,6 +12,7 @@ import {
   filterRules,
   groupByCategory,
   listRules,
+  onScanProgress,
   rulesSummary,
   runningBrowsers,
   scan,
@@ -20,6 +21,7 @@ import {
   type CleanReport,
   type RuleSummary,
   type RulesSummary,
+  type ScanProgress,
   type ScanResult,
 } from "@/lib/api";
 
@@ -89,6 +91,13 @@ export function CleanPanel() {
   const [mode, setMode] = useState<CleanMode>("auto");
   const [browsers, setBrowsers] = useState<string[]>([]);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
+  /// The last `scan-progress` event of the running scan, or null before the
+  /// first one arrives. Read only while a scan is pending.
+  const [progress, setProgress] = useState<ScanProgress | null>(null);
+  /// A ref, not the state: the subscription is made once, and a stale closure
+  /// over `busyAction` would let a late event from a finished scan repaint a
+  /// hero that is showing results.
+  const scanPending = useRef(false);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [query, setQuery] = useState("");
@@ -100,6 +109,10 @@ export function CleanPanel() {
   const [hintDismissed, setHintDismissed] = useState<boolean>(() => readFlag(HINT_KEY));
 
   const busy = busyAction !== null;
+  /// Zero until the first event: a bar that starts full would be a lie.
+  const scanPercent =
+    progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
+  const stillProgress = prefersReducedMotion();
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -118,6 +131,30 @@ export function CleanPanel() {
       .then(setSummary)
       .catch(() => setSummary(null));
   }, [reloadKey]);
+
+  /// Subscribed once, for the life of the panel: `scan` emits while it walks,
+  /// so the listener has to be in place before the command is invoked.
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let gone = false;
+    onScanProgress((step) => {
+      if (scanPending.current) setProgress(step);
+    })
+      .then((unlisten) => {
+        // Unmounted while the subscription was still resolving: drop it at
+        // once instead of leaving a listener behind.
+        if (gone) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {
+        // No progress feedback, but Analyze itself still works: the hero falls
+        // back to the rule count.
+      });
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
 
   const searching = query.trim().length > 0;
   const grouped = useMemo(() => {
@@ -215,6 +252,8 @@ export function CleanPanel() {
     setBusyAction("scan");
     setReport(null);
     setConfirming(false);
+    setProgress(null);
+    scanPending.current = true;
     // A new scan re-decides which categories are worth showing: the previous
     // hand folds no longer describe these results.
     setFolds(new Map());
@@ -223,6 +262,7 @@ export function CleanPanel() {
     } catch (err) {
       setRulesError(String(err));
     } finally {
+      scanPending.current = false;
       setBusyAction(null);
     }
   }
@@ -309,7 +349,16 @@ export function CleanPanel() {
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
               <p className="eyebrow text-muted-foreground">Reclaimable</p>
-              {results ? (
+              {busyAction === "scan" ? (
+                // What has been measured so far, ticking up as the walk
+                // progresses instead of an em dash held for thirty seconds.
+                <p
+                  data-testid="scan-progress-bytes"
+                  className="mt-1.5 font-mono tnum text-[2rem] leading-none font-semibold"
+                >
+                  {formatBytes(progress?.total_bytes ?? 0)}
+                </p>
+              ) : results ? (
                 <>
                   <p
                     data-testid="total-bytes"
@@ -363,11 +412,39 @@ export function CleanPanel() {
             </div>
           </div>
           {busyAction ? (
-            <p data-testid="hero-status" className="text-sm text-muted-foreground">
-              {busyAction === "scan"
-                ? `Analyzing ${RULE_COUNT.format(availableRules.length)} rules…`
-                : "Cleaning…"}
-            </p>
+            <div data-testid="hero-status" className="flex flex-col gap-2.5">
+              {busyAction === "scan" && (
+                <div className="h-2.5 w-full overflow-hidden rounded-[5px] bg-muted">
+                  <div
+                    data-testid="scan-progress-bar"
+                    className="h-full rounded-[5px]"
+                    style={{
+                      width: `${scanPercent}%`,
+                      background: "var(--primary)",
+                      transition: stillProgress ? "none" : "width 200ms linear",
+                    }}
+                  />
+                </div>
+              )}
+              <p className="text-sm text-muted-foreground">
+                {busyAction === "clean" ? (
+                  "Cleaning…"
+                ) : progress ? (
+                  <span data-testid="scan-progress">
+                    Analyzing{" "}
+                    <span className="font-mono tnum">
+                      {RULE_COUNT.format(progress.done)} /{" "}
+                      {RULE_COUNT.format(progress.total)}
+                    </span>{" "}
+                    · {progress.label}
+                  </span>
+                ) : (
+                  // Between the click and the first event: the total is only
+                  // known once Rust has counted the rules it was sent.
+                  `Analyzing ${RULE_COUNT.format(availableRules.length)} rules…`
+                )}
+              </p>
+            </div>
           ) : results ? (
             <ReclaimGauge rules={rules} results={checkedResults} />
           ) : (

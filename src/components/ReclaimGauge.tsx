@@ -39,7 +39,9 @@ export function buildSegments(
   return segments;
 }
 
-function prefersReducedMotion(): boolean {
+/// Also read by the scan progress bar in `CleanPanel`: both grow a width, and
+/// both must stop doing so when the user asked for no motion.
+export function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
