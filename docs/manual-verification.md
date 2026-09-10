@@ -136,8 +136,28 @@ version of the same invariant lives in `scan.rs`
 ## VM-8 — No network
 
 1. Launch the application, open Windows Resource Monitor, Network tab.
-2. Walk through both screens, analyze, clean.
+2. Walk through the Cleanup and Startup screens, analyze, clean. Open Settings
+   but do **not** click Check for updates, and leave "Check automatically at
+   startup" off.
 3. Check that no outbound connection is attributed to the WinCleaner process.
+
+## VM-8b — The update check, and nothing else
+
+1. Launch the application, open Windows Resource Monitor, Network tab.
+2. Settings screen. Confirm "Check automatically at startup" is **off** on a
+   fresh profile and that nothing has been sent yet.
+3. Click **Check for updates**. Exactly **one** connection must appear, to
+   `api.github.com`, and nothing else — no second request, no other host.
+4. Expected result **while the repository is private**: "No public release is
+   available yet". Once the repository is public and a release exists, the
+   panel shows either "You're up to date (<version>)" or "WinCleaner <version>
+   is available" with its date, its notes as plain text, and its release URL
+   with a **Copy link** button.
+5. Disconnect the network and click again: "Could not reach GitHub — check your
+   connection". No toast, no crash, the button returns to its idle state.
+6. Turn the switch on, close the application, reopen it: one check runs at
+   start. Turn it off, reopen: no connection at all is attributed to the
+   process.
 
 ## VM-9 — Theme
 

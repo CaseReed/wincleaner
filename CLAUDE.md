@@ -46,6 +46,15 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   (bit 0 = disabled), never a deletion, RunOnce is read-only.
 - Tests: never against the real profile, the real recycle bin or the real Run
   keys. `TempDir` and `HKCU\Software\wincleaner-test` only.
+- One network call and one only: `check_for_updates` (`src-tauri/src/update.rs`)
+  does a single unauthenticated `GET` on
+  `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, from
+  **Rust**, never from the webview. Ten-second timeout, `User-Agent:
+  wincleaner/<version>`, `Accept: application/vnd.github+json`, nothing else —
+  no credential, no query string, no second request. It fires on a click, or
+  once at startup when the user has armed the Settings switch (off by default,
+  `wincleaner.autoCheckUpdates`). Everything but `http_get` is pure and the
+  transport is injected: tests never open a socket.
 - Network-free CSP: `default-src 'self'; connect-src 'self' ipc:
   http://ipc.localhost; style-src 'self'; style-src-attr 'unsafe-inline';
   object-src/base-uri/frame-ancestors/form-action 'none'`. A distinct `devCsp`

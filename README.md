@@ -4,7 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An open source Windows cleaner that does only what it says: no telemetry, no
-network access, no registry cleaner.
+registry cleaner, and no network access except one request to GitHub when you
+click Check for updates or enable automatic checks (off by default).
 
 ![Cleanup screen](docs/images/cleanup-light.png)
 
@@ -62,8 +63,15 @@ apps.
   rather than followed, including at the root.
 - **No registry cleaner.** The Startup screen writes only the enable bit of a
   startup program; it never deletes a registry value.
-- **No network access.** The application CSP forbids it
-  (`connect-src 'self' ipc: http://ipc.localhost`).
+- **No network access, except one request to GitHub when you click Check for
+  updates or enable automatic checks (off by default).** The webview itself can
+  never reach the network — the CSP forbids it (`connect-src 'self' ipc:
+  http://ipc.localhost`) — and that single `GET` is issued from Rust, on
+  `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, with no
+  credential, no query string and no identifier: the only thing about this
+  machine that GitHub sees is the application version, in the `User-Agent`
+  header it requires from every REST client. Automatic checking is off until
+  you turn it on in Settings. See `docs/design-updater.md`.
 - **Confirmation before cleaning.** The Clean button always goes through a
   confirmation that announces the mode and names what the operation will
   destroy with no way back.

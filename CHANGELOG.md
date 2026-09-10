@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install (`wincleaner.lastSeenVersion` in `localStorage`).
 - `npm run version:check` now also fails when `CHANGELOG.md` carries no section
   for the version being released.
+- A **Check for updates** button in Settings. It performs exactly one
+  unauthenticated `GET` on the GitHub REST API
+  (`/repos/CaseReed/wincleaner/releases/latest`), from Rust rather than from
+  the webview, with a ten-second timeout and no identifier of any kind: the
+  only thing about the machine that leaves it is the application version, in
+  the `User-Agent` GitHub requires. It reports being up to date, a newer
+  version with its date, notes and link, or one of "no public release yet",
+  "could not reach GitHub" and "rate limit reached". Release notes are rendered
+  as plain text — no markdown renderer, no HTML.
+- A **Check automatically at startup** switch next to it, **off by default**
+  and persisted in `localStorage` (`wincleaner.autoCheckUpdates`). When on, one
+  check runs at start and a `sonner` toast announces a newer version once per
+  version (`wincleaner.lastNotifiedVersion`); a failed background check stays
+  silent.
 
 ### Changed
 
@@ -112,8 +126,10 @@ Initial MVP release.
   irreversible parts of the selected mode.
 - No registry cleaner: the startup manager only flips the `StartupApproved`
   enable bit, never deletes a value; `RunOnce` is read-only.
-- No network access: the application CSP forbids it
-  (`connect-src 'self' ipc: http://ipc.localhost`).
+- No network access from the webview: the application CSP forbids it
+  (`connect-src 'self' ipc: http://ipc.localhost`). The only outbound request
+  the application can make is the update check described above, issued from
+  Rust on an explicit click or with automatic checking turned on.
 - Fixes from an internal security audit of the cleanup and startup paths
   (path containment, reparse-point handling, and CSP tightening).
 

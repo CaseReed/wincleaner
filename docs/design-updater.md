@@ -1,6 +1,8 @@
 # In-app updates — design
 
-Status: **phase 1 implemented** (§5), phases 2 and 3 remain a **proposal**.
+Status: **phases 1 and 2 implemented** (§5), phase 3 remains a **proposal**.
+Phase 2 as shipped deviates from §2 on one point — it does **not** use
+`tauri-plugin-updater` — see "Phase 2 as shipped" in §5.
 Everything below was verified on
 2026-09-10 against the sources listed in "Sources verified" at the end.
 
@@ -307,19 +309,71 @@ Phases:
   `src/components/AppShell.tsx` (+ test); `src/lib/whats-new.ts` (+ test) for
   the once-per-version toast wired in `src/App.tsx`. `npm run version:check`
   now also refuses a version with no `CHANGELOG.md` section.
-- **Phase 2 — manual check only.** Add the plugin and `updater:default`, wire
-  the **Check for updates** button and the panel, but **no
-  `downloadAndInstall`** — an available update links to the release page.
-  Needs prerequisites 1 and 3. First-launch consent lands here, automatic
-  checking still off by default. Most of the value at a fraction of the risk.
-- **Phase 3 — download & install.** Add `tauri-plugin-process`, progress,
-  relaunch, post-install verification. Needs all four prerequisites.
+- **Phase 2 — manual check only. Done**, and not the way §2 describes it: see
+  "Phase 2 as shipped" below. A **Check for updates** button and an
+  off-by-default automatic-check switch, no download and no install — an
+  available update shows its release URL as copyable text.
+
+### Phase 2 as shipped
+
+`tauri-plugin-updater` was **not** used. It requires a minisign public key
+compiled into the binary, and prerequisite 3 (the user generates the keypair)
+is not met; the plugin also cannot express "check but never install", which is
+exactly the scope of this phase. Adding it would have meant shipping
+`updater:default` — `allow-download`, `allow-install` and
+`allow-download-and-install` included — for a feature that downloads nothing.
+The plugin remains the plan for **phase 3**, where signature verification is
+the whole point.
+
+What shipped instead:
+
+- `src-tauri/src/update.rs`: one unauthenticated `GET` on
+  `https://api.github.com/repos/CaseReed/wincleaner/releases/latest` (the REST
+  API, not the `latest.json` release asset of §2 — there is no `latest.json`
+  without the plugin), ten-second timeout, `User-Agent: wincleaner/<version>`,
+  `Accept: application/vnd.github+json`. No authorization header, no cookie, no
+  query string, no second request. 404 → "No public release is available yet",
+  a transport failure → "Could not reach GitHub", a 403/429 mentioning the
+  quota → "GitHub rate limit reached". Drafts and prereleases are refused even
+  if the endpoint ever returned one.
+- Dependency: `ureq` 3.4.1 with rustls, **not** `reqwest`. The project pulled
+  no HTTP stack at all before this, and ureq brings rustls, ring and
+  webpki-roots without hyper, h2 or tower; its blocking API also matches the
+  `blocking()` + `spawn_blocking` pattern every other command already uses.
+  `win-system-proxy` is off, so no machine proxy setting can redirect the
+  request. `cargo audit` reports no advisory against it.
+- `commands.rs::check_for_updates`, async over `spawn_blocking` like every
+  other command, rejecting with a stable code (`offline`, `not-available`,
+  `rate-limited`, `malformed`) that the front end turns into a sentence.
+- **No new capability and no CSP change.** The HTTP happens in Rust; a
+  compromised front end still cannot reach the network, and
+  `src/lib/tauri-config.test.ts` is untouched and still green.
+- Front end: `src/lib/updates.ts` (plain-text flattening of the notes, the
+  once-per-version rule, the `localStorage` accessors) and the Updates section
+  of `src/components/SettingsPanel.tsx`. The release URL is displayed as text
+  with a **Copy link** button rather than opened, so no opener capability is
+  needed either.
+- The switch is off by default (`wincleaner.autoCheckUpdates`). The
+  first-launch consent row of §1 was **not** built: a switch the user has to
+  find and turn on is already the off-by-default stance, and a launch-time
+  question about the network is exactly the interruption §3 refuses.
+- **While the repository is private the endpoint answers 404**, so the button
+  says "No public release is available yet". That is the intended graceful
+  degradation; nothing changes in the code when the repository goes public.
+
+### Phase 3
+
+- **Phase 3 — download & install.** Add `tauri-plugin-updater` and
+  `tauri-plugin-process`, progress, relaunch, post-install verification. Needs
+  all four prerequisites, none of which is met yet.
 
 ## 6. Risks and open questions — for the user to decide
 
-1. **Consent default.** Off-by-default with a first-launch choice (recommended)
-   costs adoption; opt-out costs credibility. Decide before phase 2.
-2. **When does the repo go public?** Phases 2 and 3 are blocked until then, and
+1. **Consent default.** *Settled in phase 2:* off by default, with a switch in
+   Settings and no first-launch question.
+2. **When does the repo go public?** Phase 2 ships and degrades gracefully
+   while it is private (the check reports "No public release is available
+   yet"); phase 3 is blocked until then, and
    no proxy workaround preserves the privacy stance.
 3. **Key custody.** Where does `wincleaner.key` live outside GitHub, and who
    else can restore it? A lost key permanently ends updates for every installed
