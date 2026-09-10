@@ -7,14 +7,14 @@ import { StartupPanel } from "@/components/StartupPanel";
 
 const THEME_KEY = "wincleaner.theme";
 
-/// Le choix mémorisé gagne ; sinon on suit le thème du système.
+/// The remembered choice wins; otherwise we follow the system theme.
 function initialDark(): boolean {
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "dark") return true;
     if (stored === "light") return false;
   } catch {
-    // localStorage indisponible : on retombe sur le système.
+    // localStorage unavailable: fall back to the system theme.
   }
   return (
     typeof window.matchMedia === "function" &&
@@ -22,15 +22,15 @@ function initialDark(): boolean {
   );
 }
 
-/// La barre de titre est dessinée par Windows, pas par la WebView : la classe
-/// `dark` ne l'atteint pas, seul le thème de la fenêtre Tauri la fait basculer.
+/// The title bar is drawn by Windows, not by the WebView: the `dark` class
+/// does not reach it, only the Tauri window theme switches it.
 function syncWindowTheme(dark: boolean) {
   try {
     void getCurrentWindow()
       .setTheme(dark ? "dark" : "light")
       .catch(() => {});
   } catch {
-    // Hors Tauri (tests, navigateur) : la classe CSS suffit.
+    // Outside Tauri (tests, browser): the CSS class is enough.
   }
 }
 
@@ -44,7 +44,7 @@ export default function App() {
     try {
       localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
     } catch {
-      // Rien à faire : le thème reste valable pour cette session.
+      // Nothing to do: the theme still holds for this session.
     }
   }, [dark]);
 

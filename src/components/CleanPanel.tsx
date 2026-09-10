@@ -23,15 +23,15 @@ import {
   type ScanResult,
 } from "@/lib/api";
 
-const LIBELLE_MODE: Record<CleanMode, string> = {
+const MODE_LABEL: Record<CleanMode, string> = {
   auto: "Auto",
-  trash: "Corbeille",
-  permanent: "Définitif",
+  trash: "Recycle Bin",
+  permanent: "Permanent",
 };
 
-/// Ce que ce mode détruira sans retour possible pour cette règle. La règle
-/// Corbeille l'est toujours : le mode de suppression ne s'y applique pas.
-export function estIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
+/// Whether this mode will destroy this rule's content with no way back. The
+/// Recycle Bin rule always is: the deletion mode does not apply to it.
+export function isIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
   if (rule.kind === "recycle-bin") return true;
   if (mode === "permanent") return true;
   return mode === "auto" && rule.risk === "low";
@@ -41,7 +41,7 @@ function Screen({ children }: { children: React.ReactNode }) {
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
-        <h1 className="screen-title">Nettoyage</h1>
+        <h1 className="screen-title">Cleanup</h1>
       </header>
       {children}
     </>
@@ -81,14 +81,14 @@ export function CleanPanel() {
     [results]
   );
   const scannedIds = useMemo(() => (results ?? []).map((r) => r.rule_id), [results]);
-  const corbeilleCochee = useMemo(
+  const recycleBinChecked = useMemo(
     () => rules.some((r) => r.kind === "recycle-bin" && selected.has(r.id)),
     [rules, selected]
   );
-  /// Les règles analysées que le mode courant détruira sans retour possible.
-  const irreversibles = useMemo(
+  /// The scanned rules that the current mode will destroy with no way back.
+  const irreversibleRules = useMemo(
     () =>
-      rules.filter((r) => scannedIds.includes(r.id) && estIrreversible(r, mode)),
+      rules.filter((r) => scannedIds.includes(r.id) && isIrreversible(r, mode)),
     [rules, scannedIds, mode]
   );
 
@@ -133,7 +133,7 @@ export function CleanPanel() {
       const done = await clean(scannedIds, mode);
       setReport(done);
       setResults(null);
-      toast.success(`Nettoyé : ${formatBytes(done.freed_bytes)} libérés`);
+      toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -149,7 +149,7 @@ export function CleanPanel() {
             data-testid="rules-error"
             className="flex max-w-xl flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
           >
-            <p className="font-medium">Impossible de charger les règles.</p>
+            <p className="font-medium">Could not load the rules.</p>
             <p className="font-mono text-xs text-muted-foreground">{rulesError}</p>
             <Button
               variant="outline"
@@ -159,7 +159,7 @@ export function CleanPanel() {
                 setReloadKey((k) => k + 1);
               }}
             >
-              Réessayer
+              Retry
             </Button>
           </div>
         </div>
@@ -177,8 +177,8 @@ export function CleanPanel() {
           >
             <TriangleAlert className="mt-px size-4 shrink-0 text-warning" />
             <p>
-              <span className="font-mono">{browsers.join(", ")}</span> est ouvert :
-              ses fichiers en cours d'utilisation seront ignorés.
+              <span className="font-mono">{browsers.join(", ")}</span> is open:
+              its files that are currently in use will be skipped.
             </p>
           </div>
         )}
@@ -186,7 +186,7 @@ export function CleanPanel() {
         <section className="flex flex-col gap-5 rounded-lg border bg-card p-5">
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
-              <p className="eyebrow text-muted-foreground">Récupérable</p>
+              <p className="eyebrow text-muted-foreground">Reclaimable</p>
               {results ? (
                 <p
                   data-testid="total-bytes"
@@ -201,14 +201,14 @@ export function CleanPanel() {
               )}
             </div>
             <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
-              Analyser
+              Analyze
             </Button>
           </div>
           {results ? (
             <ReclaimGauge rules={rules} results={results} />
           ) : (
             <p className="text-sm text-muted-foreground">
-              Analysez pour mesurer ce qui peut être libéré.
+              Analyze to measure what can be freed.
             </p>
           )}
         </section>
@@ -222,7 +222,7 @@ export function CleanPanel() {
               <div className="flex items-baseline justify-between px-1">
                 <h2 className="eyebrow text-muted-foreground">{category}</h2>
                 <p className="text-xs text-muted-foreground">
-                  {catRules.length} règles
+                  {catRules.length} rules
                   {results && (
                     <>
                       {" · "}
@@ -234,7 +234,7 @@ export function CleanPanel() {
               <ul className="overflow-hidden rounded-lg border bg-card">
                 {catRules.map((rule, index) => {
                   const result = (results ?? []).find((r) => r.rule_id === rule.id);
-                  const indisponible = rule.unavailable_reason;
+                  const unavailable = rule.unavailable_reason;
                   return (
                     <li
                       key={rule.id}
@@ -245,16 +245,16 @@ export function CleanPanel() {
                           id={rule.id}
                           aria-label={rule.label}
                           checked={selected.has(rule.id)}
-                          disabled={!!indisponible}
+                          disabled={!!unavailable}
                           onCheckedChange={() => toggleRule(rule.id)}
                         />
                         <span
                           className={
-                            indisponible
+                            unavailable
                               ? "min-w-0 flex-1 truncate text-sm text-muted-foreground"
                               : "min-w-0 flex-1 cursor-pointer truncate text-sm"
                           }
-                          onClick={() => !indisponible && toggleRule(rule.id)}
+                          onClick={() => !unavailable && toggleRule(rule.id)}
                         >
                           {rule.label}
                         </span>
@@ -263,7 +263,7 @@ export function CleanPanel() {
                             variant="outline"
                             className="border-warning/40 bg-warning/12 text-warning-foreground"
                           >
-                            risque moyen
+                            medium risk
                           </Badge>
                         )}
                         {rule.kind === "recycle-bin" && (
@@ -272,7 +272,7 @@ export function CleanPanel() {
                             variant="outline"
                             className="border-destructive/40 text-destructive"
                           >
-                            tous les volumes
+                            all volumes
                           </Badge>
                         )}
                         {result && (
@@ -282,8 +282,7 @@ export function CleanPanel() {
                           >
                             {result.skipped > 0 && (
                               <span className="font-mono tnum text-xs text-muted-foreground">
-                                {formatCount(result.skipped)} ignoré
-                                {result.skipped > 1 ? "s" : ""}
+                                {formatCount(result.skipped)} skipped
                               </span>
                             )}
                             <span className="w-24 text-right font-mono tnum text-sm">
@@ -291,29 +290,29 @@ export function CleanPanel() {
                             </span>
                             <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
                               {formatCount(result.file_count)}
-                              <span className="sr-only"> fichiers</span>
+                              <span className="sr-only"> files</span>
                             </span>
                           </div>
                         )}
                       </div>
-                      {indisponible && (
+                      {unavailable && (
                         <p
                           data-testid={`unavailable-${rule.id}`}
                           className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
                         >
-                          Indisponible sur ce poste : {indisponible}
+                          Unavailable on this machine: {unavailable}
                         </p>
                       )}
                       {rule.kind === "recycle-bin" && (
                         <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                          Vide la corbeille de tous les volumes du poste, y compris
-                          hors du profil utilisateur. Suppression définitive et
-                          irréversible : le mode de suppression ne s'y applique pas.
+                          Empties the recycle bin of every volume on this machine,
+                          including outside the user profile. Permanent and
+                          irreversible: the deletion mode does not apply to it.
                         </p>
                       )}
                       {rule.id === "windows.temp" && (
                         <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                          Fermez les installateurs en cours avant de nettoyer.
+                          Close any running installers before cleaning.
                         </p>
                       )}
                       {result && result.paths.length > 0 && (
@@ -325,7 +324,7 @@ export function CleanPanel() {
                             data-testid={`toggle-paths-${rule.id}`}
                             className="mb-3 ml-11 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
                           >
-                            {openPaths.has(rule.id) ? "Masquer" : "Afficher"} les chemins
+                            {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
                           </CollapsibleTrigger>
                           <CollapsibleContent>
                             <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
@@ -351,18 +350,17 @@ export function CleanPanel() {
             data-testid="clean-report"
             className="rounded-lg border bg-card p-5"
           >
-            <h2 className="eyebrow text-muted-foreground">Dernier nettoyage</h2>
+            <h2 className="eyebrow text-muted-foreground">Last cleanup</h2>
             <p className="mt-2 text-sm">
               <span className="font-mono tnum">{formatBytes(report.freed_bytes)}</span>{" "}
-              libérés ·{" "}
+              freed ·{" "}
               <span className="font-mono tnum">{formatCount(report.deleted)}</span>{" "}
-              fichiers
-              supprimés
+              files deleted
             </p>
             {report.skipped.length > 0 && (
               <>
                 <h3 className="mt-4 text-xs font-medium text-muted-foreground">
-                  Ignorés (<span className="font-mono tnum">{formatCount(report.skipped.length)}</span>)
+                  Skipped (<span className="font-mono tnum">{formatCount(report.skipped.length)}</span>)
                 </h3>
                 <ul className="mt-1.5 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                   {report.skipped.map((s) => (
@@ -382,26 +380,26 @@ export function CleanPanel() {
           <>
             <div data-testid="confirm-clean" className="min-w-0 flex-1">
               <p className="text-sm font-medium">
-                Nettoyer{" "}
-                <span className="font-mono tnum">{formatBytes(total)}</span> en
-                mode {LIBELLE_MODE[mode]} ?
+                Clean{" "}
+                <span className="font-mono tnum">{formatBytes(total)}</span> in{" "}
+                {MODE_LABEL[mode]} mode?
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {irreversibles.length > 0 ? (
+                {irreversibleRules.length > 0 ? (
                   <>
-                    Sans retour possible :{" "}
-                    {irreversibles.map((r) => r.label).join(", ")}.
+                    No way back:{" "}
+                    {irreversibleRules.map((r) => r.label).join(", ")}.
                   </>
                 ) : (
-                  <>Tout part à la corbeille et reste récupérable.</>
+                  <>Everything goes to the recycle bin and stays recoverable.</>
                 )}
               </p>
             </div>
             <Button variant="outline" onClick={() => setConfirming(false)}>
-              Annuler
+              Cancel
             </Button>
             <Button size="lg" variant="destructive" onClick={onClean} disabled={busy}>
-              Confirmer le nettoyage
+              Confirm cleanup
             </Button>
           </>
         ) : (
@@ -409,30 +407,30 @@ export function CleanPanel() {
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <select
                 id="clean-mode"
-                aria-label="Mode de suppression"
+                aria-label="Deletion mode"
                 className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as CleanMode)}
               >
                 <option value="auto">Auto</option>
-                <option value="trash">Corbeille</option>
-                <option value="permanent">Définitif</option>
+                <option value="trash">Recycle Bin</option>
+                <option value="permanent">Permanent</option>
               </select>
               <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
-                {corbeilleCochee ? (
+                {recycleBinChecked ? (
                   <span data-testid="recycle-order-note">
-                    La Corbeille est vidée en premier : ce que les autres règles
-                    y déposeront dans la même passe n'est pas emporté.
+                    The Recycle Bin is emptied first: whatever the other rules
+                    drop into it during the same pass is not swept away.
                   </span>
                 ) : (
                   <>
-                    Auto : suppression définitive pour les éléments à faible
-                    risque, corbeille pour les autres.
+                    Auto: permanent deletion for low-risk items, recycle bin for
+                    the rest.
                   </>
                 )}{" "}
                 <span data-testid="empty-dirs-note">
-                  Les répertoires qu'une règle vide sont supprimés quel que soit
-                  le mode : un répertoire vide ne porte aucune donnée.
+                  Directories a rule empties are removed whatever the mode: an
+                  empty directory holds no data.
                 </span>
               </p>
             </div>
@@ -442,7 +440,7 @@ export function CleanPanel() {
               onClick={() => setConfirming(true)}
               disabled={busy || !results || scannedIds.length === 0}
             >
-              Nettoyer
+              Clean
               {results && total > 0 && (
                 <span className="font-mono tnum">{formatBytes(total)}</span>
               )}

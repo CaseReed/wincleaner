@@ -20,7 +20,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 import { StartupPanel } from "./StartupPanel";
 
-const ENTREES = [
+const ENTRIES = [
   {
     id: "run:OneDrive",
     name: "OneDrive",
@@ -46,79 +46,79 @@ const ENTREES = [
 
 describe("StartupPanel", () => {
   beforeEach(() => {
-    api.listStartup.mockReset().mockResolvedValue(ENTREES);
+    api.listStartup.mockReset().mockResolvedValue(ENTRIES);
     api.setStartupEnabled.mockReset().mockResolvedValue(undefined);
   });
 
-  it("affiche une ligne par entrée avec nom, commande et source", async () => {
+  it("shows one row per entry with name, command and source", async () => {
     render(<StartupPanel />);
     expect(await screen.findByText("OneDrive")).toBeInTheDocument();
-    const ligne = screen.getByTestId("startup-row-run:OneDrive");
-    expect(ligne).toHaveTextContent("OneDrive.exe /background");
-    expect(ligne).toHaveTextContent("Registre (Run)");
+    const row = screen.getByTestId("startup-row-run:OneDrive");
+    expect(row).toHaveTextContent("OneDrive.exe /background");
+    expect(row).toHaveTextContent("Registry (Run)");
     expect(screen.getByTestId("startup-row-folder:Notes.lnk")).toHaveTextContent(
-      "Dossier Démarrage"
+      "Startup folder"
     );
     expect(screen.getByTestId("startup-row-run-once:Patch")).toHaveTextContent(
-      "Registre (RunOnce)"
+      "Registry (RunOnce)"
     );
   });
 
-  it("reflète l'état activé de chaque entrée", async () => {
+  it("reflects the enabled state of each entry", async () => {
     render(<StartupPanel />);
-    expect(await screen.findByLabelText("Activer OneDrive")).toBeChecked();
-    expect(screen.getByLabelText("Activer Notes.lnk")).not.toBeChecked();
+    expect(await screen.findByLabelText("Enable OneDrive")).toBeChecked();
+    expect(screen.getByLabelText("Enable Notes.lnk")).not.toBeChecked();
   });
 
-  it("désactive une entrée et rafraîchit la liste", async () => {
+  it("disables an entry and refreshes the list", async () => {
     const user = userEvent.setup();
     render(<StartupPanel />);
-    const bascule = await screen.findByLabelText("Activer OneDrive");
+    const toggle = await screen.findByLabelText("Enable OneDrive");
     api.listStartup.mockResolvedValue([
-      { ...ENTREES[0], enabled: false },
-      ENTREES[1],
-      ENTREES[2],
+      { ...ENTRIES[0], enabled: false },
+      ENTRIES[1],
+      ENTRIES[2],
     ]);
-    await user.click(bascule);
+    await user.click(toggle);
     await waitFor(() =>
       expect(api.setStartupEnabled).toHaveBeenCalledWith("run:OneDrive", false)
     );
-    await waitFor(() => expect(screen.getByLabelText("Activer OneDrive")).not.toBeChecked());
+    await waitFor(() => expect(screen.getByLabelText("Enable OneDrive")).not.toBeChecked());
   });
 
-  it("l'interrupteur d'une entrée RunOnce est désactivé", async () => {
+  it("the switch of a RunOnce entry is disabled", async () => {
     render(<StartupPanel />);
-    expect(await screen.findByLabelText("Activer Patch")).toHaveAttribute(
+    expect(await screen.findByLabelText("Enable Patch")).toHaveAttribute(
       "aria-disabled",
       "true"
     );
   });
 
-  it("affiche un message quand la liste est vide", async () => {
+  it("shows a message when the list is empty", async () => {
     api.listStartup.mockResolvedValue([]);
     render(<StartupPanel />);
     expect(await screen.findByTestId("startup-empty")).toBeInTheDocument();
   });
 
-  it("affiche l'erreur si la lecture échoue", async () => {
-    api.listStartup.mockRejectedValue("accès au démarrage impossible : refusé");
+  it("shows the error when reading fails", async () => {
+    api.listStartup.mockRejectedValue("cannot access startup entries: denied");
     render(<StartupPanel />);
-    expect(await screen.findByTestId("startup-error")).toHaveTextContent("refusé");
+    expect(await screen.findByTestId("startup-error")).toHaveTextContent("denied");
   });
 
-  it("remet la bascule dans son état si l'écriture échoue", async () => {
+  it("puts the switch back when the write fails", async () => {
     const user = userEvent.setup();
-    api.setStartupEnabled.mockRejectedValue("accès refusé");
+    api.setStartupEnabled.mockRejectedValue("access denied");
     render(<StartupPanel />);
-    const bascule = await screen.findByLabelText("Activer OneDrive");
-    await user.click(bascule);
-    await waitFor(() => expect(screen.getByLabelText("Activer OneDrive")).toBeChecked());
+    const toggle = await screen.findByLabelText("Enable OneDrive");
+    await user.click(toggle);
+    await waitFor(() => expect(screen.getByLabelText("Enable OneDrive")).toBeChecked());
   });
 
-  it("annonce que seule la session courante est listée", async () => {
+  it("announces that only the current session is listed", async () => {
     render(<StartupPanel />);
     expect(await screen.findByTestId("startup-scope")).toHaveTextContent(
-      /HKCU.*dossier Démarrage.*élévation/s
+      /HKCU.*Startup folder.*elevation/s
     );
   });
 });

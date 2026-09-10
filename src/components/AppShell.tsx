@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 export type Screen = "clean" | "startup";
 
 const SCREENS: { id: Screen; label: string; icon: typeof Sparkles }[] = [
-  { id: "clean", label: "Nettoyage", icon: Sparkles },
-  { id: "startup", label: "Démarrage", icon: Power },
+  { id: "clean", label: "Cleanup", icon: Sparkles },
+  { id: "startup", label: "Startup", icon: Power },
 ];
 
 function NavItem({
@@ -72,17 +72,17 @@ export function AppShell({
         <button
           type="button"
           data-testid="theme-toggle"
-          aria-label={dark ? "Passer au thème clair" : "Passer au thème sombre"}
+          aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
           onClick={onToggleTheme}
           className="mt-auto flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          {dark ? "Thème clair" : "Thème sombre"}
+          {dark ? "Light theme" : "Dark theme"}
         </button>
       </nav>
-      {/* `relative` : le volet devient le bloc conteneur des descendants
-          `position: absolute` (les `.sr-only`), sinon ils s'échappent de tous
-          les `overflow` et allongent le débordement du document. */}
+      {/* `relative`: the pane becomes the containing block for
+          `position: absolute` descendants (the `.sr-only` nodes), otherwise
+          they escape every `overflow` and stretch the document. */}
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {children}
       </main>

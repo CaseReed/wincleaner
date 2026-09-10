@@ -18,9 +18,9 @@ import {
 } from "@/lib/api";
 
 const SOURCE_LABEL: Record<StartupSource, string> = {
-  run: "Registre (Run)",
-  "run-once": "Registre (RunOnce)",
-  folder: "Dossier Démarrage",
+  run: "Registry (Run)",
+  "run-once": "Registry (RunOnce)",
+  folder: "Startup folder",
 };
 
 function Screen({
@@ -33,16 +33,15 @@ function Screen({
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
-        <h1 className="screen-title">Démarrage</h1>
+        <h1 className="screen-title">Startup</h1>
         <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
-        {/* Le périmètre MVP est un sous-ensemble de l'onglet Démarrage du
-            Gestionnaire des tâches : le dire évite de faire chercher une
-            entrée qui ne peut pas y être. */}
+        {/* The MVP scope is a subset of the Task Manager Startup tab: saying
+            so avoids sending the user hunting for an entry that cannot be
+            there. */}
         <p data-testid="startup-scope" className="mt-2 text-xs text-muted-foreground">
-          Seules les entrées de votre session sont listées : registre HKCU (Run,
-          RunOnce) et votre dossier Démarrage. Les entrées communes à tous les
-          utilisateurs et les tâches planifiées demandent une élévation et
-          restent hors périmètre.
+          Only the entries of your own session are listed: the HKCU registry
+          (Run, RunOnce) and your Startup folder. Entries shared by all users
+          and scheduled tasks require elevation and stay out of scope.
         </p>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">{children}</div>
@@ -70,7 +69,7 @@ export function StartupPanel() {
 
   async function onToggle(entry: StartupEntry, next: boolean) {
     setPending(entry.id);
-    // Optimiste : remis en place par le refresh, ou par le catch si échec.
+    // Optimistic: put back by the refresh, or by the catch on failure.
     setEntries((prev) =>
       prev.map((e) => (e.id === entry.id ? { ...e, enabled: next } : e))
     );
@@ -78,7 +77,7 @@ export function StartupPanel() {
       await setStartupEnabled(entry.id, next);
       await refresh();
       toast.success(
-        next ? `${entry.name} activé au démarrage` : `${entry.name} désactivé au démarrage`
+        next ? `${entry.name} enabled at startup` : `${entry.name} disabled at startup`
       );
     } catch (err) {
       setEntries((prev) =>
@@ -92,12 +91,12 @@ export function StartupPanel() {
 
   if (error) {
     return (
-      <Screen subtitle="Décidez ce qui se lance avec votre session.">
+      <Screen subtitle="Decide what starts with your session.">
         <div
           data-testid="startup-error"
           className="flex max-w-xl flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
         >
-          <p className="font-medium">Impossible de lire les programmes au démarrage.</p>
+          <p className="font-medium">Could not read the startup programs.</p>
           <p className="font-mono text-xs text-muted-foreground">{error}</p>
         </div>
       </Screen>
@@ -106,9 +105,9 @@ export function StartupPanel() {
 
   if (entries.length === 0) {
     return (
-      <Screen subtitle="Décidez ce qui se lance avec votre session.">
+      <Screen subtitle="Decide what starts with your session.">
         <p data-testid="startup-empty" className="text-sm text-muted-foreground">
-          Aucun programme ne démarre avec votre session.
+          No program starts with your session.
         </p>
       </Screen>
     );
@@ -120,25 +119,25 @@ export function StartupPanel() {
     <Screen
       subtitle={
         entries.length > 1
-          ? `${entries.length} programmes, ${enabled} activés`
-          : `1 programme, ${enabled} activé`
+          ? `${entries.length} programs, ${enabled} enabled`
+          : `1 program, ${enabled} enabled`
       }
     >
       <div className="overflow-hidden rounded-lg border bg-card">
-        {/* table-fixed : les commandes Windows sont longues, sans quoi elles
-            poussent la source et l'interrupteur hors de la fenêtre. */}
+        {/* table-fixed: Windows commands are long, and without this they push
+            the source and the switch out of the window. */}
         <Table className="table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="eyebrow w-[30%] px-4 text-muted-foreground">
-                Nom
+                Name
               </TableHead>
-              <TableHead className="eyebrow px-4 text-muted-foreground">Commande</TableHead>
+              <TableHead className="eyebrow px-4 text-muted-foreground">Command</TableHead>
               <TableHead className="eyebrow w-[9.5rem] px-4 text-muted-foreground">
                 Source
               </TableHead>
               <TableHead className="eyebrow w-20 px-4 text-right text-muted-foreground">
-                Activé
+                Enabled
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -149,7 +148,7 @@ export function StartupPanel() {
                 <TableRow
                   key={entry.id}
                   data-testid={`startup-row-${entry.id}`}
-                  title={readOnly ? "Lecture seule" : undefined}
+                  title={readOnly ? "Read-only" : undefined}
                   className={readOnly ? "text-muted-foreground" : undefined}
                 >
                   <TableCell className="h-11 px-4 text-sm font-medium">
@@ -169,7 +168,7 @@ export function StartupPanel() {
                   </TableCell>
                   <TableCell className="h-11 px-4 text-right">
                     <Switch
-                      aria-label={`Activer ${entry.name}`}
+                      aria-label={`Enable ${entry.name}`}
                       checked={entry.enabled}
                       disabled={readOnly || pending === entry.id}
                       onCheckedChange={(next) => void onToggle(entry, next)}

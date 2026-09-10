@@ -8,14 +8,14 @@
 
 :root {
   color-scheme: light;
-  /* Givre : un blanc froid, pas un crème. */
+  /* Frost: a cold white, not a cream. */
   --background: oklch(0.975 0.005 250);
   --foreground: oklch(0.22 0.02 260);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.22 0.02 260);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.22 0.02 260);
-  /* Vert profondeur : la couleur de l'espace libéré. */
+  /* Deep green: the colour of reclaimed space. */
   --primary: oklch(0.52 0.13 195);
   --primary-foreground: oklch(0.99 0.003 250);
   --secondary: oklch(0.95 0.008 255);
@@ -139,32 +139,31 @@
   html {
     @apply font-sans;
   }
-  /* La coque tient la fenêtre : c'est le volet principal qui défile, jamais la
-     page. Sans ça, une boîte `position: absolute` sans ancêtre positionné (les
-     `.sr-only` des résultats) échappe au `overflow` du volet, allonge le
-     débordement du document, et fait glisser toute la coque — barre latérale et
-     barre d'action comprises. */
+  /* The shell holds the window: the main pane scrolls, never the page.
+     Without this, a `position: absolute` box with no positioned ancestor (the
+     `.sr-only` nodes of the results) escapes the pane `overflow`, stretches the
+     document, and slides the whole shell — sidebar and action bar included. */
   html,
   body,
   #root {
     height: 100%;
     overflow: hidden;
   }
-  /* Les barres de défilement par défaut de WebView2 écrasent la densité. */
+  /* The default WebView2 scrollbars crush the density. */
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
 }
 
-/* Toute quantité : chiffres tabulaires, et Geist Mono resserré — sa chasse
-   par défaut fait flotter les nombres. */
+/* Every quantity: tabular figures, and Geist Mono tightened — its default
+   tracking makes numbers float. */
 @utility tnum {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
 
-/* Titre d'écran : 22 px, 600, resserré. */
+/* Screen title: 22 px, 600, tightened. */
 @utility screen-title {
   font-size: 1.375rem;
   line-height: 1.75rem;
@@ -172,7 +171,7 @@
   letter-spacing: -0.01em;
 }
 
-/* Eyebrow de catégorie. */
+/* Category eyebrow. */
 @utility eyebrow {
   font-size: 0.6875rem;
   line-height: 1rem;

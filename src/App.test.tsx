@@ -49,21 +49,21 @@ afterEach(() => {
   Reflect.deleteProperty(window, "matchMedia");
 });
 
-describe("thème", () => {
-  it("suit prefers-color-scheme au premier lancement", () => {
+describe("theme", () => {
+  it("follows prefers-color-scheme on first launch", () => {
     stubPrefersDark(true);
     render(<App />);
     expect(document.documentElement).toHaveClass("dark");
   });
 
-  it("le choix mémorisé l'emporte sur le système", () => {
+  it("the remembered choice wins over the system", () => {
     stubPrefersDark(true);
     localStorage.setItem("wincleaner.theme", "light");
     render(<App />);
     expect(document.documentElement).not.toHaveClass("dark");
   });
 
-  it("la bascule persiste le choix", async () => {
+  it("the toggle persists the choice", async () => {
     const user = userEvent.setup();
     stubPrefersDark(false);
     render(<App />);
@@ -72,7 +72,7 @@ describe("thème", () => {
     expect(localStorage.getItem("wincleaner.theme")).toBe("dark");
   });
 
-  it("bascule aussi le thème de la fenêtre (barre de titre Windows)", async () => {
+  it("also switches the window theme (Windows title bar)", async () => {
     const user = userEvent.setup();
     stubPrefersDark(false);
     render(<App />);

@@ -1,8 +1,8 @@
-const UNITS = ["o", "Ko", "Mo", "Go", "To"] as const;
+const UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 o";
+    return "0 B";
   }
   let value = bytes;
   let unit = 0;
@@ -11,15 +11,12 @@ export function formatBytes(bytes: number): string {
     unit += 1;
   }
   const rounded = unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
-  const text = Number.isInteger(rounded)
-    ? String(rounded)
-    : String(rounded).replace(".", ",");
-  return `${text} ${UNITS[unit]}`;
+  return `${rounded} ${UNITS[unit]}`;
 }
 
-const COUNT = new Intl.NumberFormat("fr-FR");
+const COUNT = new Intl.NumberFormat("en-US");
 
-/// Compteurs de fichiers : groupés par milliers, lisibles d'un coup d'œil.
+/// File counters: grouped by thousands with a comma, readable at a glance.
 export function formatCount(count: number): string {
   return Number.isFinite(count) ? COUNT.format(Math.max(0, Math.trunc(count))) : "0";
 }

@@ -1,6 +1,6 @@
-// La feuille de style de sonner passe par le bundle Vite, donc par `'self'`.
-// Sans cet import, sonner l'injecte à l'exécution dans une balise <style> que
-// `style-src 'self'` bloque en release : les toasts s'affichent sans style.
+// The sonner stylesheet goes through the Vite bundle, and therefore through
+// `'self'`. Without this import, sonner injects it at runtime into a <style>
+// tag that `style-src 'self'` blocks in release: toasts render unstyled.
 import "sonner/dist/styles.css"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"

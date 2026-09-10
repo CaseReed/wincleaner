@@ -3,28 +3,28 @@ import tauriConf from "../../src-tauri/tauri.conf.json";
 import defaultCapability from "../../src-tauri/capabilities/default.json";
 import sonnerSource from "../components/ui/sonner.tsx?raw";
 
-/// La politique de sécurité du contenu n'est pas du code : personne ne la lit
-/// en relisant un diff de composant. Ce test échoue si quelqu'un la relâche.
+/// The content security policy is not code: nobody reads it while reviewing a
+/// component diff. This test fails if anyone loosens it.
 const conf = tauriConf as { app: { security: { csp: string; devCsp?: string } } };
-const capacites = defaultCapability as { permissions: string[] };
+const capabilities = defaultCapability as { permissions: string[] };
 
 describe("CSP", () => {
   const csp = conf.app.security.csp;
 
-  it("interdit le réseau et les ressources distantes", () => {
+  it("forbids the network and remote resources", () => {
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("connect-src 'self' ipc: http://ipc.localhost");
     expect(csp).not.toMatch(/https?:\/\/(?!ipc\.localhost)/);
   });
 
-  it("n'autorise jamais un script en ligne", () => {
-    // `script-src` retombe sur `default-src 'self'` : ce qu'il faut vérifier,
-    // c'est que personne n'a ajouté un `script-src` permissif.
+  it("never allows an inline script", () => {
+    // `script-src` falls back to `default-src 'self'`: what has to be checked
+    // is that nobody added a permissive `script-src`.
     expect(csp).not.toMatch(/script-src[^;]*unsafe-(inline|eval)/);
     expect(csp).not.toContain("'unsafe-eval'");
   });
 
-  it("porte les directives de durcissement", () => {
+  it("carries the hardening directives", () => {
     for (const directive of [
       "object-src 'none'",
       "base-uri 'none'",
@@ -35,46 +35,46 @@ describe("CSP", () => {
     }
   });
 
-  it("ne tolère 'unsafe-inline' que sur les attributs de style", () => {
-    // sonner et les primitives @base-ui posent des attributs `style=` en
-    // ligne : `style-src-attr` couvre exactement ce cas, sans autoriser une
-    // balise <style> injectée. Les feuilles de style, elles, passent toutes
-    // par le bundle Vite : cf. l'import `sonner/dist/styles.css` dans
-    // `src/components/ui/sonner.tsx`, sans lequel sonner injecterait la
-    // sienne dans une balise <style> que `style-src 'self'` bloque.
+  it("tolerates 'unsafe-inline' only on style attributes", () => {
+    // sonner and the @base-ui primitives set inline `style=` attributes:
+    // `style-src-attr` covers exactly that case without allowing an injected
+    // <style> tag. Stylesheets all go through the Vite bundle instead: see the
+    // `sonner/dist/styles.css` import in `src/components/ui/sonner.tsx`,
+    // without which sonner would inject its own into a <style> tag that
+    // `style-src 'self'` blocks.
     expect(csp).toContain("style-src 'self'");
     expect(csp).not.toContain("style-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src-attr 'unsafe-inline'");
   });
 
-  it("laisse la feuille de style de sonner entrer par le bundle", () => {
-    // Le composant doit importer la feuille : sinon la CSP la bloque et les
-    // toasts s'affichent nus en release, sans que rien n'échoue au build.
-    // Vitest neutralise les feuilles de style : le contenu réellement
-    // embarqué se vérifie sur le bundle
-    // (`npm run build` puis `grep data-sonner-toaster dist/assets/*.css`).
+  it("lets the sonner stylesheet in through the bundle", () => {
+    // The component must import the stylesheet: otherwise the CSP blocks it
+    // and toasts render unstyled in release, without anything failing at build
+    // time. Vitest neutralises stylesheets: what is actually bundled is checked
+    // on the bundle itself
+    // (`npm run build` then `grep data-sonner-toaster dist/assets/*.css`).
     expect(sonnerSource).toContain('import "sonner/dist/styles.css"');
   });
 
-  it("garde une CSP de développement distincte pour le HMR de Vite", () => {
-    // Vite injecte des balises <style> en développement : sans cela, l'écran
-    // est nu en `npm run tauri dev`.
+  it("keeps a separate development CSP for Vite HMR", () => {
+    // Vite injects <style> tags in development: without this, the screen is
+    // unstyled under `npm run tauri dev`.
     expect(conf.app.security.devCsp).toContain("style-src 'self' 'unsafe-inline'");
   });
 });
 
-describe("capacités", () => {
-  it("n'accorde que ce dont le front se sert", () => {
-    // `core:default` se développe en path, event, window, webview, app, image,
-    // resources, menu et tray — dont la résolution de chemins arbitraires et
-    // `allow-internal-toggle-devtools`. Le front n'appelle qu'une chose :
+describe("capabilities", () => {
+  it("grants only what the front end uses", () => {
+    // `core:default` expands into path, event, window, webview, app, image,
+    // resources, menu and tray — including arbitrary path resolution and
+    // `allow-internal-toggle-devtools`. The front end calls one thing only:
     // `getCurrentWindow().setTheme()` (src/App.tsx).
-    expect(capacites.permissions).not.toContain("core:default");
-    expect(capacites.permissions).toContain("core:window:allow-set-theme");
+    expect(capabilities.permissions).not.toContain("core:default");
+    expect(capabilities.permissions).toContain("core:window:allow-set-theme");
   });
 
-  it("ne déclare aucun plugin donnant accès au disque ou au réseau", () => {
-    for (const permission of capacites.permissions) {
+  it("declares no plugin granting disk or network access", () => {
+    for (const permission of capabilities.permissions) {
       expect(permission.startsWith("core:")).toBe(true);
     }
   });

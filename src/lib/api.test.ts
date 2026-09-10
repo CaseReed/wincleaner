@@ -17,13 +17,13 @@ import {
 describe("api", () => {
   beforeEach(() => invoke.mockReset());
 
-  it("scan envoie ruleIds en camelCase", async () => {
+  it("scan sends ruleIds in camelCase", async () => {
     invoke.mockResolvedValue([]);
     await scan(["windows.temp"]);
     expect(invoke).toHaveBeenCalledWith("scan", { ruleIds: ["windows.temp"] });
   });
 
-  it("clean envoie ruleIds et mode", async () => {
+  it("clean sends ruleIds and mode", async () => {
     invoke.mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     await clean(["edge.cache"], "auto");
     expect(invoke).toHaveBeenCalledWith("clean", {
@@ -32,7 +32,7 @@ describe("api", () => {
     });
   });
 
-  it("listRules, listStartup et runningBrowsers n'ont pas d'argument", async () => {
+  it("listRules, listStartup and runningBrowsers take no argument", async () => {
     invoke.mockResolvedValue([]);
     await listRules();
     expect(invoke).toHaveBeenCalledWith("list_rules");
@@ -42,7 +42,7 @@ describe("api", () => {
     expect(invoke).toHaveBeenCalledWith("running_browsers");
   });
 
-  it("setStartupEnabled envoie id et enabled", async () => {
+  it("setStartupEnabled sends id and enabled", async () => {
     invoke.mockResolvedValue(undefined);
     await setStartupEnabled("run:OneDrive", false);
     expect(invoke).toHaveBeenCalledWith("set_startup_enabled", {
@@ -51,14 +51,14 @@ describe("api", () => {
     });
   });
 
-  it("groupByCategory conserve l'ordre d'apparition des catégories", () => {
+  it("groupByCategory preserves the order the categories appear in", () => {
     const rules: RuleSummary[] = [
-      { id: "a", category: "Système", label: "A", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
-      { id: "b", category: "Navigateurs", label: "B", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
-      { id: "c", category: "Système", label: "C", risk: "medium", kind: "files", default_checked: false, unavailable_reason: null },
+      { id: "a", category: "System", label: "A", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
+      { id: "b", category: "Browsers", label: "B", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
+      { id: "c", category: "System", label: "C", risk: "medium", kind: "files", default_checked: false, unavailable_reason: null },
     ];
     const grouped = groupByCategory(rules);
-    expect(grouped.map(([cat]) => cat)).toEqual(["Système", "Navigateurs"]);
+    expect(grouped.map(([cat]) => cat)).toEqual(["System", "Browsers"]);
     expect(grouped[0][1].map((r) => r.id)).toEqual(["a", "c"]);
   });
 });

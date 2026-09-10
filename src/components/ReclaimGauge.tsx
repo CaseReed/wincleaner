@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { formatBytes } from "@/lib/format";
 import type { RuleSummary, ScanResult } from "@/lib/api";
 
-/// Trois luminosités de `--primary` pour les catégories (la première est la plus
-/// sombre), plus une couleur propre à la corbeille : elle ne libère pas de
-/// l'espace comme les autres, elle détruit.
+/// Three lightness levels of `--primary` for the categories (the first is the
+/// darkest), plus a colour of its own for the recycle bin: it does not free
+/// space like the others, it destroys.
 const CATEGORY_TONES = ["var(--chart-1)", "var(--chart-3)", "var(--chart-2)"];
 const RECYCLE_TONE = "color-mix(in oklch, var(--destructive) 70%, transparent)";
 
@@ -15,7 +15,7 @@ export interface GaugeSegment {
   color: string;
 }
 
-/// Joint les résultats de scan aux règles, dans l'ordre de rules.toml.
+/// Joins the scan results to the rules, in the order of rules.toml.
 export function buildSegments(
   rules: RuleSummary[],
   results: ScanResult[],
@@ -57,8 +57,8 @@ export function ReclaimGauge({
   const segments = buildSegments(rules, results);
   const total = segments.reduce((sum, s) => sum + s.bytes, 0);
   const still = prefersReducedMotion();
-  // Le premier rendu pose les segments à zéro ; l'effet passif s'exécute après
-  // la peinture, la transition CSS fait le reste.
+  // The first render lays the segments out at zero width; the passive effect
+  // runs after paint, and the CSS transition does the rest.
   const [grown, setGrown] = useState(still);
 
   useEffect(() => {
