@@ -58,13 +58,31 @@ pub fn list_rules() -> Result<Vec<RuleSummary>, String> {
         .collect())
 }
 
-#[tauri::command]
-pub fn scan(rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
-    let rules = find_rules(&rule_ids)?;
+/// Exécute un travail bloquant hors du fil principal. Une commande Tauri
+/// synchrone s'exécute sur le fil principal et gèle la boucle d'évènements de
+/// la webview le temps de son exécution : sur un profil chargé, un parcours de
+/// disque de plusieurs secondes rendrait la fenêtre « ne répond pas ».
+async fn blocking<T, F>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("tâche interrompue : {e}"))?
+}
+
+fn scan_rules(rule_ids: &[String]) -> Result<Vec<ScanResult>, String> {
+    let rules = find_rules(rule_ids)?;
     rules
         .iter()
         .map(|r| scan_rule(r).map_err(|e| e.to_string()))
         .collect()
+}
+
+#[tauri::command]
+pub async fn scan(rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
+    blocking(move || scan_rules(&rule_ids)).await
 }
 
 /// Applique `run` à chaque règle et fusionne les rapports. L'échec d'une
@@ -87,12 +105,16 @@ fn clean_all(
     report
 }
 
-#[tauri::command]
-pub fn clean(rule_ids: Vec<String>, mode: CleanMode) -> Result<CleanReport, String> {
-    let rules = find_rules(&rule_ids)?;
+fn clean_rules(rule_ids: &[String], mode: CleanMode) -> Result<CleanReport, String> {
+    let rules = find_rules(rule_ids)?;
     Ok(clean_all(&rules, |rule| {
         clean_rule(rule, mode).map_err(|e| e.to_string())
     }))
+}
+
+#[tauri::command]
+pub async fn clean(rule_ids: Vec<String>, mode: CleanMode) -> Result<CleanReport, String> {
+    blocking(move || clean_rules(&rule_ids, mode)).await
 }
 
 #[tauri::command]
@@ -108,13 +130,14 @@ pub fn running_browsers() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn list_startup() -> Result<Vec<StartupEntry>, String> {
-    crate::startup::list_startup().map_err(|e| e.to_string())
+pub async fn list_startup() -> Result<Vec<StartupEntry>, String> {
+    blocking(|| crate::startup::list_startup().map_err(|e| e.to_string())).await
 }
 
 #[tauri::command]
-pub fn set_startup_enabled(id: String, enabled: bool) -> Result<(), String> {
-    crate::startup::set_startup_enabled(&id, enabled).map_err(|e| e.to_string())
+pub async fn set_startup_enabled(id: String, enabled: bool) -> Result<(), String> {
+    blocking(move || crate::startup::set_startup_enabled(&id, enabled).map_err(|e| e.to_string()))
+        .await
 }
 
 #[cfg(test)]
@@ -161,9 +184,22 @@ mod tests {
         assert_eq!(resumes[1].kind, crate::rules::RuleKind::RecycleBin);
     }
 
+    /// Le point de l'item : une commande synchrone s'exécuterait sur le fil
+    /// appelant — le fil principal en production, celui qui pompe les
+    /// évènements de la fenêtre. `blocking` doit déporter le travail ailleurs.
+    #[test]
+    fn le_travail_bloquant_quitte_le_fil_appelant() {
+        let appelant = std::thread::current().id();
+        let dedans =
+            tauri::async_runtime::block_on(blocking(|| Ok(std::thread::current().id()))).unwrap();
+        assert_ne!(appelant, dedans);
+    }
+
+    /// Passe par la commande asynchrone, donc par `spawn_blocking` : vérifie
+    /// que le travail déporté hors du fil principal rend bien son résultat.
     #[test]
     fn scanner_un_identifiant_inconnu_est_une_erreur() {
-        let err = scan(vec!["inexistant".to_string()]).unwrap_err();
+        let err = tauri::async_runtime::block_on(scan(vec!["inexistant".to_string()])).unwrap_err();
         assert!(err.contains("inexistant"));
     }
 
@@ -202,8 +238,11 @@ mod tests {
 
     #[test]
     fn nettoyer_un_identifiant_inconnu_est_une_erreur() {
-        let err = clean(vec!["inexistant".to_string()], crate::clean::CleanMode::Auto)
-            .unwrap_err();
+        let err = tauri::async_runtime::block_on(clean(
+            vec!["inexistant".to_string()],
+            crate::clean::CleanMode::Auto,
+        ))
+        .unwrap_err();
         assert!(err.contains("inexistant"));
     }
 }
