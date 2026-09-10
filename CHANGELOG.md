@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-rule progress during Analyze.** Measuring every rule of a loaded
+  profile takes ten to thirty seconds; the hero no longer shows a bare spinner
+  but a progress bar filled to the rules measured so far, the name of the rule
+  being measured ("Analyzing 42 / 84 · Google Chrome cache") and the bytes
+  found so far, ticking up as the walk goes. The bar does not animate for a
+  user who asked for reduced motion.
+
 ### Changed
 
 - Analyze now measures **every rule available on this machine**, checked or

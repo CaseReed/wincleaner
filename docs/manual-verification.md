@@ -240,3 +240,21 @@ The only honest check is a real upgrade.
 7. Click Clean with a mix of checked and unchecked measured rules: the
    confirmation must name only checked rules under "No way back", and the
    cleanup must free at most the checked total.
+
+## VM-16 — Progress during Analyze — to be run by the user
+
+1. Cleanup screen, click **Analyze** and watch the hero without touching
+   anything else.
+2. Before the first rule comes back, the hero reads "Analyzing N rules…" and
+   the bar is empty. Within a second it must switch to
+   "Analyzing 1 / N · <rule name>" and the bar must start filling.
+3. The counter must only ever go up, reach exactly N / N, and name a different
+   rule as it goes. The big number above it must climb with it — that is the
+   bytes measured so far, not the final total.
+4. When the scan ends, the bar and the counter must give the slot back to the
+   normal hero: "Reclaimable", the total of the checked rules and the gauge.
+5. Turn on **Settings > Ease of Access > Show animations in Windows = Off**
+   (`prefers-reduced-motion`), relaunch and Analyze again: the bar must jump
+   from step to step with no sliding animation, and still reach N / N.
+6. Analyze a second time straight after the first: the counter must restart at
+   1 / N, never resume where the previous run stopped.
