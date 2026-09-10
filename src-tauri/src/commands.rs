@@ -258,29 +258,37 @@ pub fn running_browsers() -> Vec<String> {
 const CHECK_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// The last time `check_for_updates` actually reached the network, and what
-/// it got back. `None` until the first call.
-static LAST_CHECK: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+/// it got back. `None` until the first call, or after every call so far has
+/// failed: only a successful check is cached.
+static LAST_CHECK: Mutex<Option<(Instant, UpdateCheck)>> = Mutex::new(None);
 
 /// Refuses to run `check` again within `cooldown` of the last time it ran:
 /// the previous result is handed back instead, rather than opening a second
 /// connection. `now` and `check` are injected so the cooldown itself is
 /// tested without a real clock or a real socket.
+///
+/// Only an `Ok` result starts or extends the cooldown: an `Err` (offline,
+/// rate-limited, malformed...) is a transient failure, not a cached answer —
+/// caching it would make a click that failed once refuse to retry for ten
+/// seconds. A second click after a failure must reach the network again.
 fn check_for_updates_with(
-    state: &Mutex<Option<(Instant, Result<UpdateCheck, String>)>>,
+    state: &Mutex<Option<(Instant, UpdateCheck)>>,
     cooldown: Duration,
     now: Instant,
     check: impl FnOnce() -> Result<UpdateCheck, String>,
 ) -> Result<UpdateCheck, String> {
     {
-        let guard = state.lock().unwrap();
+        let guard = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((at, result)) = guard.as_ref() {
             if now.saturating_duration_since(*at) < cooldown {
-                return result.clone();
+                return Ok(result.clone());
             }
         }
     }
     let result = check();
-    *state.lock().unwrap() = Some((now, result.clone()));
+    if let Ok(ok) = &result {
+        *state.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, ok.clone()));
+    }
     result
 }
 
@@ -590,7 +598,7 @@ mod tests {
     /// gets the first result back, verbatim.
     #[test]
     fn a_second_check_within_the_cooldown_reuses_the_first_result() {
-        let state: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+        let state: Mutex<Option<(Instant, UpdateCheck)>> = Mutex::new(None);
         let calls = std::cell::Cell::new(0u32);
         let t0 = Instant::now();
 
@@ -615,7 +623,7 @@ mod tests {
     /// Once the cooldown has elapsed, the next call runs `check` again.
     #[test]
     fn a_check_after_the_cooldown_runs_again() {
-        let state: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+        let state: Mutex<Option<(Instant, UpdateCheck)>> = Mutex::new(None);
         let calls = std::cell::Cell::new(0u32);
         let t0 = Instant::now();
 
@@ -634,6 +642,34 @@ mod tests {
         );
 
         assert_ne!(first, second);
+        assert_eq!(calls.get(), 2);
+    }
+
+    /// A failure must not be cached: a second call within the cooldown after
+    /// an `Err` (offline, rate-limited, malformed...) has to reach the
+    /// network again, not get the same failure handed back for ten seconds.
+    #[test]
+    fn a_check_after_a_failure_retries_immediately_within_the_cooldown() {
+        let state: Mutex<Option<(Instant, UpdateCheck)>> = Mutex::new(None);
+        let calls = std::cell::Cell::new(0u32);
+        let t0 = Instant::now();
+
+        let first = check_for_updates_with(&state, Duration::from_secs(10), t0, || {
+            calls.set(calls.get() + 1);
+            Err("offline".to_string())
+        });
+        let second = check_for_updates_with(
+            &state,
+            Duration::from_secs(10),
+            t0 + Duration::from_secs(1),
+            || {
+                calls.set(calls.get() + 1);
+                fake_check(2)
+            },
+        );
+
+        assert_eq!(first, Err("offline".to_string()));
+        assert_eq!(second, fake_check(2));
         assert_eq!(calls.get(), 2);
     }
 

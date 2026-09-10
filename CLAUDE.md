@@ -57,9 +57,11 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   followed to a second host), `.https_only(true)`, `.proxy(None)` (ureq
   otherwise honours `HTTPS_PROXY`/`https_proxy` from the environment, which
   would silently add a hop). A second `check_for_updates` call within ten
-  seconds returns the previous result instead of opening another connection
-  (`commands.rs::check_for_updates_with`) — see VM-8b for why this matters in
-  `tauri dev`. It fires on a click, or once at startup when the user has armed
+  seconds of a **successful** previous call returns that previous result
+  instead of opening another connection; a previous call that failed
+  (offline, rate-limited, malformed...) is never cached, so the next call
+  always retries immediately (`commands.rs::check_for_updates_with`) — see
+  VM-8b for why the cooldown itself matters in `tauri dev`. It fires on a click, or once at startup when the user has armed
   the Settings switch (off by default, `wincleaner.autoCheckUpdates`).
   Everything but `http_get` is pure and the transport is injected: tests never
   open a socket.
