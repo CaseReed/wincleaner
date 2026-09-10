@@ -1,3 +1,15 @@
+import { useState } from "react";
+import { Check, Copy, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { checkForUpdates, type UpdateCheck } from "@/lib/api";
+import {
+  readAutoCheck,
+  toPlainText,
+  updateErrorMessage,
+  writeAutoCheck,
+} from "@/lib/updates";
 import whatsNew from "@/generated/whats-new.json";
 
 const GITHUB_URL = "https://github.com/CaseReed/wincleaner";
@@ -23,6 +35,143 @@ function Section({
   );
 }
 
+/// What the Check for updates button is doing right now. The `result` and
+/// `error` states are what the last check returned, kept until the next one.
+type UpdateState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "result"; check: UpdateCheck }
+  | { kind: "error"; code: string };
+
+/// The one screen in WinCleaner that can reach the network, and only on a
+/// click: the switch below arms a check for the *next* start, it never fires
+/// one here.
+function UpdatesSection() {
+  const [state, setState] = useState<UpdateState>({ kind: "idle" });
+  const [autoCheck, setAutoCheck] = useState(readAutoCheck);
+  const [copied, setCopied] = useState(false);
+
+  async function onCheck() {
+    setState({ kind: "checking" });
+    setCopied(false);
+    try {
+      setState({ kind: "result", check: await checkForUpdates() });
+    } catch (err) {
+      // The backend rejects with a stable code; anything else is a broken IPC
+      // call, which reads as "could not reach GitHub" just as truthfully.
+      setState({ kind: "error", code: typeof err === "string" ? err : "offline" });
+    }
+  }
+
+  async function onCopy(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("Release link copied");
+    } catch {
+      // No clipboard permission, or no clipboard at all: the URL is on screen
+      // as text and can be selected by hand.
+      toast.error("Could not copy the link");
+    }
+  }
+
+  function onToggleAuto(next: boolean) {
+    setAutoCheck(next);
+    writeAutoCheck(next);
+  }
+
+  const checking = state.kind === "checking";
+
+  return (
+    <>
+      <p className="font-medium">
+        WinCleaner <span data-testid="updates-current">{whatsNew.version}</span>
+      </p>
+
+      <div className="mt-1 flex items-center gap-3">
+        <Button data-testid="check-updates" onClick={() => void onCheck()} disabled={checking}>
+          {checking ? (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Checking…
+            </>
+          ) : (
+            "Check for updates"
+          )}
+        </Button>
+      </div>
+
+      {state.kind === "error" && (
+        <p data-testid="update-status" className="text-muted-foreground">
+          {updateErrorMessage(state.code)}
+        </p>
+      )}
+
+      {state.kind === "result" && !state.check.is_newer && (
+        <p data-testid="update-status" className="text-muted-foreground">
+          You&rsquo;re up to date ({state.check.latest ?? state.check.current})
+        </p>
+      )}
+
+      {state.kind === "result" && state.check.is_newer && (
+        <div className="flex flex-col gap-2">
+          <p data-testid="update-status" className="font-medium">
+            WinCleaner {state.check.latest} is available
+          </p>
+          {state.check.published_at && (
+            // Display only, and deliberately not localised: the first ten
+            // characters of the ISO timestamp GitHub returns.
+            <p data-testid="update-published" className="text-muted-foreground">
+              Published {state.check.published_at.slice(0, 10)}
+            </p>
+          )}
+          {state.check.notes && (
+            // Plain text, as everywhere else here: no markdown renderer and no
+            // HTML, so a spoofed release body has nothing to inject into
+            // (docs/design-updater.md §3).
+            <p
+              data-testid="update-notes"
+              className="text-sm whitespace-pre-wrap text-muted-foreground"
+            >
+              {toPlainText(state.check.notes)}
+            </p>
+          )}
+          {state.check.url && (
+            <div className="flex items-center gap-2">
+              <span data-testid="update-url" className="font-mono text-xs text-muted-foreground">
+                {state.check.url}
+              </span>
+              <Button
+                data-testid="copy-update-url"
+                variant="outline"
+                size="sm"
+                onClick={() => void onCopy(state.check.url!)}
+              >
+                {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                Copy link
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <label className="mt-2 flex items-center gap-3">
+        <Switch
+          data-testid="auto-check"
+          aria-label="Check automatically at startup"
+          checked={autoCheck}
+          onCheckedChange={onToggleAuto}
+        />
+        <span>Check automatically at startup</span>
+      </label>
+      <p data-testid="auto-check-privacy" className="text-xs text-muted-foreground">
+        When enabled, WinCleaner sends one request to api.github.com at startup
+        with no identifiers other than the app version in the User-Agent.
+      </p>
+    </>
+  );
+}
+
 export function SettingsPanel() {
   return (
     <>
@@ -39,7 +188,9 @@ export function SettingsPanel() {
               WinCleaner <span data-testid="app-version">{whatsNew.version}</span>
             </p>
             <p className="text-muted-foreground">
-              Open source, MIT. No network access, no telemetry.
+              Open source, MIT. No telemetry, and no network access except one
+              request to GitHub when you click Check for updates or enable
+              automatic checks (off by default).
             </p>
             <p className="font-mono text-xs text-muted-foreground">{GITHUB_URL}</p>
           </Section>
@@ -57,10 +208,7 @@ export function SettingsPanel() {
           </Section>
 
           <Section title="Updates">
-            <p data-testid="updates-placeholder" className="text-muted-foreground">
-              Automatic update checks are not available yet. WinCleaner never
-              contacts the network.
-            </p>
+            <UpdatesSection />
           </Section>
 
           <Section title="Notices" testId="notices">

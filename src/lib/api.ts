@@ -48,6 +48,18 @@ export interface CleanReport {
   skipped: SkippedItem[];
 }
 
+/// Mirrors `src-tauri/src/update.rs::UpdateCheck`. `latest` is null when the
+/// endpoint has no public release to offer, which is the normal answer while
+/// the repository is private.
+export interface UpdateCheck {
+  current: string;
+  latest: string | null;
+  is_newer: boolean;
+  notes: string | null;
+  url: string | null;
+  published_at: string | null;
+}
+
 export interface StartupEntry {
   id: string;
   name: string;
@@ -82,6 +94,14 @@ export function listStartup(): Promise<StartupEntry[]> {
 
 export function setStartupEnabled(id: string, enabled: boolean): Promise<void> {
   return invoke<void>("set_startup_enabled", { id, enabled });
+}
+
+/// The only call in this application that reaches the network, and it does so
+/// from Rust: one GET on the GitHub REST API (src-tauri/src/update.rs). The
+/// rejection value is a stable code, not a sentence — see
+/// `updateErrorMessage` in `src/lib/updates.ts`.
+export function checkForUpdates(): Promise<UpdateCheck> {
+  return invoke<UpdateCheck>("check_for_updates");
 }
 
 /// Groups rules by category, preserving the order of rules.toml.

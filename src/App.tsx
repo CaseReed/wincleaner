@@ -7,7 +7,9 @@ import { CleanPanel } from "@/components/CleanPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { StartupPanel } from "@/components/StartupPanel";
 import whatsNew from "@/generated/whats-new.json";
+import { checkForUpdates } from "@/lib/api";
 import { markSeen, readLastSeen, shouldAnnounce } from "@/lib/whats-new";
+import { markNotified, readAutoCheck, readLastNotified, shouldNotify } from "@/lib/updates";
 
 const THEME_KEY = "wincleaner.theme";
 
@@ -61,6 +63,25 @@ export default function App() {
       });
     }
     markSeen(whatsNew.version);
+  }, []);
+
+  /// Off unless the user armed the switch in Settings. One check, once per
+  /// start, and a background failure is never a toast: a cleaner has no
+  /// business complaining about its own connectivity
+  /// (docs/design-updater.md §4).
+  useEffect(() => {
+    if (!readAutoCheck()) return;
+    void checkForUpdates()
+      .then((check) => {
+        const latest = check.latest;
+        if (!check.is_newer || latest === null) return;
+        if (!shouldNotify(readLastNotified(), latest)) return;
+        markNotified(latest);
+        toast.info(`WinCleaner ${latest} is available`, {
+          action: { label: "View", onClick: () => setScreen("settings") },
+        });
+      })
+      .catch(() => {});
   }, []);
 
   return (
