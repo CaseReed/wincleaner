@@ -44,6 +44,10 @@ pub struct Rule {
     /// profile, or hand-curated data.
     #[serde(default = "checked_by_default")]
     pub default_checked: bool,
+    /// Free-text warning shown inline under the rule row. Comes from the
+    /// Winapp2 `Warning=` key; `rules.toml` rules may set it too.
+    #[serde(default)]
+    pub note: Option<String>,
     /// Set when the rule does not apply on THIS machine: variable missing, or
     /// pointing outside the profile. The rule is loaded, shown greyed out with
     /// this reason, and never scanned nor cleaned. This is not a faulty
@@ -204,7 +208,7 @@ pub fn normalize(raw: &str) -> Result<String, RuleError> {
     Ok(win)
 }
 
-fn under_profile(path: &str, profile: &str) -> bool {
+pub(crate) fn under_profile(path: &str, profile: &str) -> bool {
     let p = path.to_lowercase();
     let root = profile.trim_end_matches('\\').to_lowercase();
     p == root || p.starts_with(&format!("{root}\\"))
@@ -242,6 +246,20 @@ pub fn resolved_excludes_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<Stri
     rule.exclude.iter().map(|p| resolve_one(p, lookup)).collect()
 }
 
+/// Resolution and confinement of a single rule, whether it comes from
+/// `rules.toml` or was built in memory by the Winapp2 converter. The caller
+/// decides what to do with the error: `load_rules_with` turns `MissingVar` and
+/// `OutsideProfile` into an `unavailable_reason`, the converter drops the
+/// entry.
+pub fn check_rule_with(rule: &Rule, lookup: EnvLookup) -> Result<(), RuleError> {
+    if rule.kind == RuleKind::Files && rule.paths.is_empty() {
+        return Err(RuleError::EmptyPaths(rule.id.clone()));
+    }
+    resolved_paths_with(rule, lookup)?;
+    resolved_excludes_with(rule, lookup)?;
+    Ok(())
+}
+
 /// Separates "rules.toml is badly written" — a bug in the binary, fatal —
 /// from "this rule does not apply on this machine". A workstation where %TEMP%
 /// is redirected to D:\Temp, or %APPDATA% to a network share by group policy,
@@ -255,12 +273,8 @@ pub fn load_rules_with(src: &str, lookup: EnvLookup) -> Result<Vec<Rule>, RuleEr
         if !seen.insert(rule.id.clone()) {
             return Err(RuleError::DuplicateId(rule.id.clone()));
         }
-        if rule.kind == RuleKind::Files && rule.paths.is_empty() {
-            return Err(RuleError::EmptyPaths(rule.id.clone()));
-        }
-        match resolved_paths_with(&rule, lookup).and_then(|_| resolved_excludes_with(&rule, lookup))
-        {
-            Ok(_) => {}
+        match check_rule_with(&rule, lookup) {
+            Ok(()) => {}
             Err(e @ (RuleError::MissingVar(_) | RuleError::OutsideProfile(_))) => {
                 rule.unavailable_reason = Some(e.to_string());
             }
@@ -727,6 +741,67 @@ default_checked = false"#,
     }
 
     #[test]
+    fn check_rule_accepts_a_rule_built_in_memory_and_refuses_an_unknown_variable() {
+        // The Winapp2 converter builds `Rule` values by hand: they must go
+        // through exactly the same confinement as a rules.toml rule, not a
+        // second, looser copy of it.
+        let mut rule = Rule {
+            id: "winapp2.test".into(),
+            category: "Applications".into(),
+            label: "Test".into(),
+            paths: vec![r"%LOCALAPPDATA%\TestApp\**\*".into()],
+            exclude: vec![],
+            risk: Risk::Medium,
+            kind: RuleKind::Files,
+            default_checked: false,
+            note: None,
+            unavailable_reason: None,
+        };
+        assert!(check_rule_with(&rule, &fake_env).is_ok());
+
+        rule.paths = vec![r"%WINDIR%\Temp\*".into()];
+        assert!(matches!(
+            check_rule_with(&rule, &fake_env).unwrap_err(),
+            RuleError::UnknownVar(_)
+        ));
+
+        rule.paths = vec![r"%LOCALAPPDATA%\TestApp\*".into()];
+        rule.exclude = vec![r"%PROGRAMFILES%\x\*".into()];
+        assert!(matches!(
+            check_rule_with(&rule, &fake_env).unwrap_err(),
+            RuleError::UnknownVar(_)
+        ));
+
+        rule.exclude = vec![];
+        rule.paths = vec![];
+        assert!(matches!(
+            check_rule_with(&rule, &fake_env).unwrap_err(),
+            RuleError::EmptyPaths(_)
+        ));
+    }
+
+    #[test]
+    fn a_note_survives_the_toml_round_trip_and_defaults_to_none() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "System"
+label = "Test"
+paths = ["%TEMP%\\*"]
+exclude = []
+risk = "low"
+note = "Closes the saved sessions.""#,
+        );
+        assert_eq!(
+            load_rules_with(&src, &fake_env).unwrap()[0].note.as_deref(),
+            Some("Closes the saved sessions.")
+        );
+        assert_eq!(
+            load_rules_with(RULES_TOML, &fake_env).unwrap()[0].note,
+            None
+        );
+    }
+
+    #[test]
     fn resolved_paths_returns_absolute_paths() {
         let rule = Rule {
             id: "x.y".into(),
@@ -737,6 +812,7 @@ default_checked = false"#,
             risk: Risk::Low,
             kind: RuleKind::Files,
             default_checked: true,
+            note: None,
             unavailable_reason: None,
         };
         let got = resolved_paths_with(&rule, &fake_env).unwrap();

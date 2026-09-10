@@ -434,6 +434,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::Files,
             default_checked: true,
+            note: None,
             unavailable_reason: None,
         }
     }
@@ -788,6 +789,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            note: None,
             unavailable_reason: None,
         };
         let query = || Ok((7u64, 700u64));
@@ -811,6 +813,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            note: None,
             unavailable_reason: None,
         };
         let query = || Err("failure".to_string());

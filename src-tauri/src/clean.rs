@@ -254,6 +254,7 @@ mod tests {
             risk,
             kind: RuleKind::Files,
             default_checked: true,
+            note: None,
             unavailable_reason: None,
         }
     }
@@ -268,6 +269,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            note: None,
             unavailable_reason: None,
         }
     }
