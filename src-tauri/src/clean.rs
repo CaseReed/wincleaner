@@ -495,6 +495,41 @@ mod tests {
         );
     }
 
+    /// Le balayage des répertoires vides a exactement le périmètre de la
+    /// règle : sans le garde `include.is_match`, il effacerait des
+    /// répertoires que la règle n'aurait jamais eu le droit de toucher.
+    #[test]
+    fn un_repertoire_vide_hors_des_motifs_de_la_regle_survit() {
+        let dir = faux_profil();
+        let lookup = lookup_for(dir.path());
+        let temp = dir.path().join("AppData").join("Local").join("Temp");
+        // Vide, sous la racine parcourue, mais ne correspond pas à `*.txt`.
+        fs::create_dir_all(temp.join("etranger")).unwrap();
+
+        let rule = Rule {
+            paths: vec![r"%TEMP%\**\*.txt".into()],
+            ..regle_temp(Risk::Low)
+        };
+        let report = clean_rule_with_api(
+            &rule,
+            CleanMode::Permanent,
+            &lookup,
+            &recycle_interdit_query,
+            &recycle_interdit_empty,
+        )
+        .unwrap();
+
+        assert_eq!(report.deleted, 2);
+        assert!(
+            temp.join("etranger").exists(),
+            "un répertoire vide hors des motifs de la règle ne doit pas être supprimé"
+        );
+        assert!(
+            temp.join("sub").exists(),
+            "sub non plus : vidé par la règle, mais hors de ses motifs"
+        );
+    }
+
     #[test]
     fn nettoyer_un_repertoire_vide_ne_fait_rien() {
         let dir = TempDir::new().unwrap();
