@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-10
+
 ### Added
 
 - Embedded the [Winapp2](https://github.com/MoscaDotTo/Winapp2) community rule
@@ -80,5 +82,6 @@ Initial MVP release.
 - Fixes from an internal security audit of the cleanup and startup paths
   (path containment, reparse-point handling, and CSP tightening).
 
-[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/CaseReed/wincleaner/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CaseReed/wincleaner/releases/tag/v0.1.0
