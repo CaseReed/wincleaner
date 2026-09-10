@@ -137,4 +137,45 @@ describe("CleanPanel", () => {
     render(<CleanPanel />);
     expect(await screen.findByTestId("rules-error")).toHaveTextContent("rules.toml est invalide");
   });
+
+  it("le bouton Réessayer relance le chargement des règles", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockRejectedValueOnce("rules.toml est invalide : mauvais risk");
+    render(<CleanPanel />);
+    await screen.findByTestId("rules-error");
+
+    api.listRules.mockResolvedValue(REGLES);
+    await user.click(screen.getByRole("button", { name: /Réessayer/ }));
+
+    expect(await screen.findByLabelText("Fichiers temporaires")).toBeInTheDocument();
+    expect(screen.queryByTestId("rules-error")).toBeNull();
+  });
+
+  it("explique le mode auto sous le sélecteur", async () => {
+    render(<CleanPanel />);
+    await screen.findByLabelText("Fichiers temporaires");
+    expect(screen.getByTestId("mode-help")).toHaveTextContent(
+      /Auto.*définitive.*faible risque.*corbeille/s
+    );
+  });
+
+  it("signale que la règle Corbeille agit sur tous les volumes", async () => {
+    api.listRules.mockResolvedValue([
+      ...REGLES,
+      {
+        id: "windows.recycle-bin",
+        category: "Système",
+        label: "Corbeille",
+        risk: "low",
+        kind: "recycle-bin",
+      },
+    ]);
+    render(<CleanPanel />);
+    expect(await screen.findByTestId("note-windows.recycle-bin")).toHaveTextContent(
+      "tous les volumes"
+    );
+    expect(screen.getByText(/Vide la corbeille de tous les volumes/)).toBeInTheDocument();
+    // Les règles « files » ne portent pas cette note.
+    expect(screen.queryByTestId("note-windows.temp")).toBeNull();
+  });
 });

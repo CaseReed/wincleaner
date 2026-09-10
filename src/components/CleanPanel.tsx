@@ -31,7 +31,10 @@ export function CleanPanel() {
   const [busy, setBusy] = useState(false);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
 
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
+    setRulesError(null);
     listRules()
       .then((loaded) => {
         setRules(loaded);
@@ -41,7 +44,7 @@ export function CleanPanel() {
     runningBrowsers()
       .then(setBrowsers)
       .catch(() => setBrowsers([]));
-  }, []);
+  }, [reloadKey]);
 
   const grouped = useMemo(() => groupByCategory(rules), [rules]);
   const total = useMemo(
@@ -98,9 +101,19 @@ export function CleanPanel() {
     return (
       <div
         data-testid="rules-error"
-        className="rounded-md border border-red-500 bg-red-50 p-4 text-red-900 dark:bg-red-950 dark:text-red-100"
+        className="flex flex-col items-start gap-3 rounded-md border border-red-500 bg-red-50 p-4 text-red-900 dark:bg-red-950 dark:text-red-100"
       >
-        {rulesError}
+        <p>{rulesError}</p>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setResults(null);
+            setReport(null);
+            setReloadKey((k) => k + 1);
+          }}
+        >
+          Réessayer
+        </Button>
       </div>
     );
   }
@@ -150,6 +163,11 @@ export function CleanPanel() {
                       {rule.label}
                     </span>
                     {rule.risk === "medium" && <Badge variant="secondary">risque moyen</Badge>}
+                    {rule.kind === "recycle-bin" && (
+                      <Badge data-testid={`note-${rule.id}`} variant="destructive">
+                        tous les volumes · définitif
+                      </Badge>
+                    )}
                     {result && (
                       <span data-testid={`result-${rule.id}`} className="text-sm">
                         {formatBytes(result.total_bytes)} · {result.file_count} fichiers
@@ -157,6 +175,13 @@ export function CleanPanel() {
                       </span>
                     )}
                   </div>
+                  {rule.kind === "recycle-bin" && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Vide la corbeille de tous les volumes du poste, y compris
+                      hors du profil utilisateur. Suppression définitive et
+                      irréversible : le mode de suppression ne s'y applique pas.
+                    </p>
+                  )}
                   {result && result.paths.length > 0 && (
                     <Collapsible
                       open={openPaths.has(rule.id)}
@@ -184,6 +209,7 @@ export function CleanPanel() {
         </section>
       ))}
 
+      <div className="flex flex-col gap-2">
       <div className="flex items-center gap-3">
         <Button onClick={onScan} disabled={busy || selected.size === 0}>
           Analyser
@@ -209,6 +235,11 @@ export function CleanPanel() {
         >
           Nettoyer
         </Button>
+      </div>
+        <p data-testid="mode-help" className="text-xs text-muted-foreground">
+          Auto : suppression définitive pour les éléments à faible risque,
+          corbeille pour les autres.
+        </p>
       </div>
 
       {report && (

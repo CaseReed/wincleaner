@@ -5,6 +5,12 @@ les fichiers inutiles du profil utilisateur et gère les programmes au démarrag
 de l'utilisateur courant. Aucun droit administrateur n'est requis : l'application
 n'agit que sous `%USERPROFILE%`.
 
+Une seule exception, explicite : la règle « Corbeille » passe par l'API Windows
+`SHEmptyRecycleBinW`, qui vide la corbeille de **tous les volumes** du poste, y
+compris hors du profil utilisateur. Cette suppression est définitive, quel que
+soit le mode de suppression choisi. L'écran Nettoyage le signale sur la ligne
+de la règle.
+
 WinCleaner ne contient pas de « nettoyeur de registre » et n'en contiendra jamais.
 
 ## Prérequis
