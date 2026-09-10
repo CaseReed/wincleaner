@@ -53,7 +53,7 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-screen bg-background text-foreground">
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <nav className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar px-4 py-4">
         <p className="mb-6 px-2.5 text-sm font-semibold tracking-tight">
           WinCleaner
@@ -80,7 +80,12 @@ export function AppShell({
           {dark ? "Thème clair" : "Thème sombre"}
         </button>
       </nav>
-      <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+      {/* `relative` : le volet devient le bloc conteneur des descendants
+          `position: absolute` (les `.sr-only`), sinon ils s'échappent de tous
+          les `overflow` et allongent le débordement du document. */}
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {children}
+      </main>
     </div>
   );
 }

@@ -139,6 +139,17 @@
   html {
     @apply font-sans;
   }
+  /* La coque tient la fenêtre : c'est le volet principal qui défile, jamais la
+     page. Sans ça, une boîte `position: absolute` sans ancêtre positionné (les
+     `.sr-only` des résultats) échappe au `overflow` du volet, allonge le
+     débordement du document, et fait glisser toute la coque — barre latérale et
+     barre d'action comprises. */
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
   /* Les barres de défilement par défaut de WebView2 écrasent la densité. */
   * {
     scrollbar-width: thin;
