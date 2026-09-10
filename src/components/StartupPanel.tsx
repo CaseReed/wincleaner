@@ -35,6 +35,15 @@ function Screen({
       <header className="shrink-0 px-8 pt-7 pb-5">
         <h1 className="screen-title">Démarrage</h1>
         <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+        {/* Le périmètre MVP est un sous-ensemble de l'onglet Démarrage du
+            Gestionnaire des tâches : le dire évite de faire chercher une
+            entrée qui ne peut pas y être. */}
+        <p data-testid="startup-scope" className="mt-2 text-xs text-muted-foreground">
+          Seules les entrées de votre session sont listées : registre HKCU (Run,
+          RunOnce) et votre dossier Démarrage. Les entrées communes à tous les
+          utilisateurs et les tâches planifiées demandent une élévation et
+          restent hors périmètre.
+        </p>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">{children}</div>
     </>

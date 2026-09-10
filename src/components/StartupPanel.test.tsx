@@ -114,4 +114,11 @@ describe("StartupPanel", () => {
     await user.click(bascule);
     await waitFor(() => expect(screen.getByLabelText("Activer OneDrive")).toBeChecked());
   });
+
+  it("annonce que seule la session courante est listée", async () => {
+    render(<StartupPanel />);
+    expect(await screen.findByTestId("startup-scope")).toHaveTextContent(
+      /HKCU.*dossier Démarrage.*élévation/s
+    );
+  });
 });
