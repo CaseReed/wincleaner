@@ -31,51 +31,123 @@ pub fn to_slash(path: &str) -> String {
 /// enfermant dans une classe à un caractère.
 const ESCAPABLE: [char; 6] = ['?', '*', '[', ']', '{', '}'];
 
-/// Plus long préfixe du motif ne contenant aucun métacaractère de glob.
-/// C'est la racine à partir de laquelle `walkdir` descend.
+/// Rend la forme littérale du segment s'il ne contient aucun joker.
 ///
-/// Les séquences `[c]` produites par `globset::escape` sont des
-/// littéraux, pas des jokers : les traiter comme des jokers ferait remonter la
-/// racine (un profil nommé `a[b]c` ramènerait la marche à `C:/Users`, donc à
-/// tous les profils de la machine).
-pub fn glob_root(pattern_slash: &str) -> String {
-    let mut literal = String::new();
-    let mut chars = pattern_slash.chars().peekable();
-    let mut coupe = false;
-
+/// Les séquences `[c]` produites par `globset::escape` sont des littéraux,
+/// pas des jokers : les traiter comme des jokers ferait remonter la racine de
+/// marche (un profil nommé `a[b]c` la ramènerait à `C:/Users`, donc à tous
+/// les profils de la machine).
+fn segment_litteral(seg: &str) -> Option<String> {
+    let mut litteral = String::new();
+    let mut chars = seg.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
             '[' => {
-                // `[c]` avec c métacaractère : littéral échappé. Tout le reste
-                // est une vraie classe de caractères, donc un joker.
                 let mut suite = chars.clone();
                 match (suite.next(), suite.next()) {
                     (Some(lit), Some(']')) if ESCAPABLE.contains(&lit) => {
-                        literal.push(lit);
+                        litteral.push(lit);
                         chars.next();
                         chars.next();
                     }
-                    _ => {
-                        coupe = true;
-                        break;
-                    }
+                    // Une vraie classe de caractères : c'est un joker.
+                    _ => return None,
                 }
             }
-            '*' | '?' | '{' => {
-                coupe = true;
-                break;
+            '*' | '?' | '{' => return None,
+            c => litteral.push(c),
+        }
+    }
+    Some(litteral)
+}
+
+/// Plus long préfixe littéral du motif, en segments entiers.
+pub fn glob_root(pattern_slash: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for seg in pattern_slash.split('/') {
+        match segment_litteral(seg) {
+            Some(l) => parts.push(l),
+            None => break,
+        }
+    }
+    parts.join("/")
+}
+
+/// Une racine de marche et le plafond de profondeur qui va avec.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RacineMarche {
+    pub chemin: String,
+    /// Profondeur maximale sous la racine ; `None` pour un motif contenant
+    /// `**`, qui ne borne rien.
+    pub profondeur: Option<usize>,
+}
+
+/// Racines de marche d'un motif.
+///
+/// `glob_root` seul coupe au premier joker : pour
+/// `User Data/*/Cache/**/*` la marche partait de tout `User Data` et en
+/// énumérait des dizaines de milliers d'entrées — historique, cookies,
+/// identifiants — avant que le `GlobSet` ne les rejette. Chaque niveau de
+/// joker simple est donc développé en énumérant le disque, jusqu'au premier
+/// `**` : la marche part alors du répertoire réellement concerné. Le dernier
+/// segment désigne les fichiers retenus, il n'y a rien à développer là.
+///
+/// Une entrée qui n'est pas un répertoire réel (jonction, lien) n'est jamais
+/// développée : `DirEntry::file_type` ne suit pas les liens.
+fn racines_du_motif(motif: &str) -> Vec<RacineMarche> {
+    let segs: Vec<&str> = motif.split('/').collect();
+    let mut i = 0;
+    let mut base = String::new();
+    while i < segs.len() {
+        match segment_litteral(segs[i]) {
+            Some(l) => {
+                if i > 0 {
+                    base.push('/');
+                }
+                base.push_str(&l);
+                i += 1;
             }
-            c => literal.push(c),
+            None => break,
         }
     }
 
-    if coupe {
-        match literal.rfind('/') {
-            Some(i) => literal.truncate(i),
-            None => literal.clear(),
+    let mut courants = vec![base];
+    while i + 1 < segs.len() && segs[i] != "**" {
+        let Ok(glob) = GlobBuilder::new(segs[i]).literal_separator(true).build() else {
+            break;
+        };
+        let filtre = glob.compile_matcher();
+        let mut suivants = Vec::new();
+        for courant in &courants {
+            let Ok(entrees) = std::fs::read_dir(courant.replace('/', "\\")) else {
+                continue;
+            };
+            for e in entrees.flatten() {
+                if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let nom = e.file_name().to_string_lossy().to_string();
+                if filtre.is_match(&nom) {
+                    suivants.push(format!("{courant}/{nom}"));
+                }
+            }
         }
+        courants = suivants;
+        i += 1;
     }
-    literal
+
+    let profondeur = if segs[i..].iter().any(|s| *s == "**") {
+        None
+    } else {
+        Some(segs.len() - i)
+    };
+    courants
+        .into_iter()
+        .map(|chemin| RacineMarche {
+            chemin,
+            profondeur,
+        })
+        .collect()
 }
 
 pub(crate) fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
@@ -119,7 +191,7 @@ pub(crate) fn est_point_danalyse(md: &std::fs::Metadata) -> bool {
 
 /// Verdict du confinement d'une racine de marche.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Racine {
+pub(crate) enum Confinement {
     /// Répertoire réel, résolu sous le profil : on peut marcher.
     Marchable,
     /// Absente du disque : la règle ne s'applique pas sur cette machine.
@@ -136,40 +208,53 @@ pub(crate) enum Racine {
 /// quand celle-ci est un point d'analyse. Une jonction posée sur `%TEMP%` —
 /// que `mklink /J` crée sans aucun privilège — suffirait sinon à faire
 /// supprimer un arbre entier hors du profil, voire hors du volume système.
-pub(crate) fn racine_confinee(win_root: &str, profile_canon: &Path) -> Racine {
+pub(crate) fn racine_confinee(win_root: &str, profile_canon: &Path) -> Confinement {
     let md = match std::fs::symlink_metadata(win_root) {
         Ok(md) => md,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Racine::Absente,
-        Err(_) => return Racine::Refusee,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Confinement::Absente,
+        Err(_) => return Confinement::Refusee,
     };
     // Refusé même quand la cible reste sous le profil : on ne marche que sur
     // des répertoires réels, jamais sur une indirection.
     if est_point_danalyse(&md) {
-        return Racine::Refusee;
+        return Confinement::Refusee;
     }
     match std::fs::canonicalize(win_root) {
-        Ok(reel) if reel.starts_with(profile_canon) => Racine::Marchable,
-        Ok(_) => Racine::Refusee,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Racine::Absente,
-        Err(_) => Racine::Refusee,
+        Ok(reel) if reel.starts_with(profile_canon) => Confinement::Marchable,
+        Ok(_) => Confinement::Refusee,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Confinement::Absente,
+        Err(_) => Confinement::Refusee,
     }
 }
 
-/// Racines de marche minimales d'un jeu de motifs : une racine incluse dans
-/// une autre serait parcourue deux fois.
-pub(crate) fn walk_roots(patterns: &[String]) -> Vec<String> {
-    let mut roots: Vec<String> = patterns.iter().map(|p| glob_root(&to_slash(p))).collect();
-    roots.sort();
-    roots.dedup();
-    roots
+/// Racines de marche minimales d'un jeu de motifs.
+pub(crate) fn walk_roots(patterns: &[String]) -> Vec<RacineMarche> {
+    let mut toutes: Vec<RacineMarche> = patterns
         .iter()
-        .filter(|r| {
-            !roots
-                .iter()
-                .any(|other| other != *r && r.starts_with(&format!("{other}/")))
-        })
-        .cloned()
-        .collect()
+        .flat_map(|p| racines_du_motif(&to_slash(p)))
+        .collect();
+    toutes.sort_by(|a, b| a.chemin.cmp(&b.chemin));
+
+    let mut minimales: Vec<RacineMarche> = Vec::new();
+    for r in toutes {
+        // Une racine incluse dans une autre serait parcourue deux fois : elle
+        // est absorbée, en relevant d'autant le plafond de profondeur de
+        // celle qui la contient. Le tri met les parents avant leurs enfants.
+        let parent = minimales
+            .iter_mut()
+            .find(|p| r.chemin == p.chemin || r.chemin.starts_with(&format!("{}/", p.chemin)));
+        match parent {
+            Some(p) => {
+                let ecart = r.chemin.matches('/').count() - p.chemin.matches('/').count();
+                p.profondeur = match (p.profondeur, r.profondeur) {
+                    (Some(a), Some(b)) => Some(a.max(b + ecart)),
+                    _ => None,
+                };
+            }
+            None => minimales.push(r),
+        }
+    }
+    minimales
 }
 
 /// Parcourt les motifs de la règle et renvoie, pour chaque fichier retenu,
@@ -186,12 +271,12 @@ fn collect(
     let mut found: BTreeMap<String, u64> = BTreeMap::new();
     let mut skipped: u32 = 0;
 
-    for root in walk_roots(patterns) {
-        let win_root = root.replace('/', "\\");
+    for racine in walk_roots(patterns) {
+        let win_root = racine.chemin.replace('/', "\\");
         match racine_confinee(&win_root, profile_canon) {
-            Racine::Marchable => {}
-            Racine::Absente => continue,
-            Racine::Refusee => {
+            Confinement::Marchable => {}
+            Confinement::Absente => continue,
+            Confinement::Refusee => {
                 skipped += 1;
                 continue;
             }
@@ -202,8 +287,13 @@ fn collect(
         // (espaces réservés cloud, conteneurs), que Rust ne classe pas comme
         // des liens et dans lesquels `walkdir` descendrait.
         let sautees = std::cell::Cell::new(0u32);
-        let marche = WalkDir::new(&win_root)
-            .follow_links(false)
+        let mut marche = WalkDir::new(&win_root).follow_links(false);
+        // Un motif sans `**` ne peut rien retenir plus bas que son nombre de
+        // segments : inutile de descendre.
+        if let Some(profondeur) = racine.profondeur {
+            marche = marche.max_depth(profondeur);
+        }
+        let marche = marche
             .into_iter()
             .filter_entry(|e| {
                 if e.depth() > 0 && e.file_type().is_dir() {
@@ -491,6 +581,65 @@ mod tests {
             "les éléments épinglés doivent rester hors de portée : {:?}",
             res.paths
         );
+    }
+
+    #[test]
+    fn les_racines_de_marche_developpent_les_niveaux_de_joker() {
+        // `glob_root` coupe au premier joker : la racine de marche d'un motif
+        // `User Data/*/Cache/**/*` était tout `User Data`, dont walkdir
+        // parcourait l'intégralité — History, Cookies, Login Data compris —
+        // avant que le GlobSet ne filtre. Un niveau de joker simple se
+        // développe en énumérant le disque.
+        let dir = TempDir::new().unwrap();
+        let ud = dir.path().join("User Data");
+        for profil in ["Default", "Profile 1"] {
+            fs::create_dir_all(ud.join(profil).join("Cache")).unwrap();
+        }
+        fs::create_dir_all(ud.join("Crashpad").join("tres").join("profond")).unwrap();
+
+        let motif = format!(r"{}\User Data\*\Cache\**\*", dir.path().display());
+        // Le préfixe littéral seul — l'ancienne racine de marche — c'est tout
+        // « User Data », dont walkdir énumérait l'intégralité.
+        assert_eq!(glob_root(&to_slash(&motif)), to_slash(&ud.to_string_lossy()));
+        let racines = walk_roots(&[motif]);
+        let mut chemins: Vec<String> = racines.iter().map(|r| r.chemin.clone()).collect();
+        chemins.sort();
+        let attendu: Vec<String> = ["Default", "Profile 1"]
+            .iter()
+            .map(|p| to_slash(&ud.join(p).join("Cache").to_string_lossy()))
+            .collect();
+        assert_eq!(chemins, attendu);
+        // `**` : aucun plafond de profondeur sous la racine développée.
+        assert!(racines.iter().all(|r| r.profondeur.is_none()));
+    }
+
+    #[test]
+    fn un_motif_sans_double_etoile_plafonne_la_profondeur() {
+        let dir = faux_profil();
+        let temp = to_slash(
+            &dir.path()
+                .join("AppData")
+                .join("Local")
+                .join("Temp")
+                .to_string_lossy(),
+        );
+        let racines = walk_roots(&[format!(r"{}\*.txt", temp.replace('/', "\\"))]);
+        assert_eq!(racines.len(), 1);
+        assert_eq!(racines[0].chemin, temp);
+        assert_eq!(racines[0].profondeur, Some(1));
+    }
+
+    #[test]
+    fn une_racine_incluse_dans_une_autre_est_absorbee_en_relevant_le_plafond() {
+        let dir = faux_profil();
+        let temp = dir.path().join("AppData").join("Local").join("Temp");
+        let racines = walk_roots(&[
+            format!(r"{}\*.txt", temp.display()),
+            format!(r"{}\sub\*.txt", temp.display()),
+        ]);
+        assert_eq!(racines.len(), 1);
+        assert_eq!(racines[0].chemin, to_slash(&temp.to_string_lossy()));
+        assert_eq!(racines[0].profondeur, Some(2));
     }
 
     #[test]
