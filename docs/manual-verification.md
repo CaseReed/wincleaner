@@ -173,3 +173,20 @@ Not run automatically: the result depends on what is installed on the machine.
    come first, and the category with the largest total must come first.
 3. Close and relaunch the application: the toggle must still be ticked, and
    untick it before a scan — it must be greyed out until the next Analyze.
+
+## VM-14 — What's new after a version change — to be run on a release binary
+
+Not testable in development: `localStorage` belongs to the release WebView and
+DevTools is unavailable there, so the stored version cannot be edited by hand.
+The only honest check is a real upgrade.
+
+1. Install 0.2.0 (NSIS installer), launch it, close it. **No** "What's new"
+   toast must appear: this is a first install, and
+   `wincleaner.lastSeenVersion` was only just written.
+2. Install 0.3.0 over it and launch.
+3. A toast **"What's new in 0.3.0"** must appear once, with a **View** action
+   that opens the Settings screen.
+4. On Settings: the version must read 0.3.0, and "What's new in 0.3.0" must
+   show the `CHANGELOG.md` section of 0.3.0 as plain text — bullets as literal
+   `- ` lines, no rendered links, no HTML.
+5. Close and relaunch: the toast must **not** come back.

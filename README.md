@@ -18,6 +18,9 @@ network access, no registry cleaner.
   deletion and everything else to the recycle bin.
 - **Startup manager.** Enable or disable what starts with your session, without
   ever deleting a registry value.
+- **Settings screen.** Version, licence and third-party notices, plus "What's
+  new" for the running version, extracted from `CHANGELOG.md` at build time and
+  shown offline — nothing is fetched.
 - **Light and dark themes**, including the Windows title bar.
 - **No installer bloat.** A single Tauri 2 binary, ~10 MB, no runtime to
   install beyond WebView2, which Windows 11 already ships.
