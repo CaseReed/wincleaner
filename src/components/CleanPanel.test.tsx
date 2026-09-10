@@ -489,4 +489,99 @@ describe("CleanPanel", () => {
     const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
     expect(headings).toEqual(["System", "Browsers"]);
   });
+
+  /// Every category header is a toggle, not only the ones folded by default:
+  /// after a scan any of them may be folded, so the affordance must be there
+  /// from the first render.
+  it("makes every category header a real toggle button", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    const system = screen.getByTestId("toggle-category-System");
+    expect(system.tagName).toBe("BUTTON");
+    expect(system).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("toggle-category-Applications")).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+
+    await user.click(system);
+    expect(screen.getByTestId("toggle-category-System")).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+    expect(screen.queryByLabelText("Temporary files")).toBeNull();
+  });
+
+  it("shows a loading state while analysing", async () => {
+    const user = userEvent.setup();
+    let release: (results: unknown[]) => void = () => {};
+    api.scan.mockImplementation(
+      () => new Promise((resolve) => { release = resolve as typeof release; })
+    );
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    expect(await screen.findByRole("button", { name: /Analyzing/ })).toBeDisabled();
+    expect(screen.getByTestId("hero-status")).toHaveTextContent("Analyzing 2 rules");
+    const list = screen.getByTestId("rule-list");
+    expect(list.className).toContain("opacity-60");
+    expect(list.className).toContain("pointer-events-none");
+
+    release([]);
+    await waitFor(() => expect(screen.queryByTestId("hero-status")).toBeNull());
+  });
+
+  /// Biggest wins first: the scan decides what is worth looking at.
+  it("unfolds the categories holding bytes and folds the empty ones after a scan", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 0, total_bytes: 0, paths: [], skipped: 0 },
+      { rule_id: "winapp2.7-zip", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    await user.click(await screen.findByLabelText("7-Zip"));
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+
+    expect(screen.getByTestId("toggle-category-Applications")).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+    expect(screen.getByLabelText("7-Zip")).toBeInTheDocument();
+    expect(screen.getByLabelText("Temporary files")).toBeInTheDocument();
+    expect(screen.getByTestId("toggle-category-Browsers")).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+    expect(screen.queryByLabelText("Microsoft Edge cache")).toBeNull();
+
+    // A fold the user asks for after the scan is respected.
+    await user.click(screen.getByTestId("toggle-category-System"));
+    expect(screen.queryByLabelText("Temporary files")).toBeNull();
+  });
+
+  it("shows the first-launch hint until it is dismissed, and remembers it", async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    const { unmount } = render(<CleanPanel />);
+
+    const hint = await screen.findByTestId("first-launch-hint");
+    expect(hint).toHaveTextContent(/Recycle Bin/);
+    await user.click(screen.getByRole("button", { name: /Got it/ }));
+    expect(screen.queryByTestId("first-launch-hint")).toBeNull();
+    expect(window.localStorage.getItem("wincleaner.hintDismissed")).toBe("1");
+
+    unmount();
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    expect(screen.queryByTestId("first-launch-hint")).toBeNull();
+  });
 });

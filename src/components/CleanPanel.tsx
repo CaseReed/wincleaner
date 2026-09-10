@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { TriangleAlert } from "lucide-react";
+import { Info, Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Badge } from "@/components/ui/badge";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { ReclaimGauge } from "@/components/ReclaimGauge";
+import { RuleCategory } from "@/components/RuleCategory";
 import { formatBytes, formatCount } from "@/lib/format";
 import {
   clean,
@@ -41,24 +37,25 @@ const MODE_LABEL: Record<CleanMode, string> = {
 /// out of view.
 const COLLAPSED_BY_DEFAULT = ["Applications"];
 
-/// Community rules carry a `winapp2.` id. The attribution is rendered only when
-/// the category actually holds one, so it never reads as covering the native
-/// rules sitting next to them.
-function hasWinapp2Rule(rules: RuleSummary[]): boolean {
-  return rules.some((r) => r.id.startsWith("winapp2."));
-}
-
-const WINAPP2_URL = "https://github.com/MoscaDotTo/Winapp2";
-
 const SORT_KEY = "wincleaner.sortBySize";
+const HINT_KEY = "wincleaner.hintDismissed";
 
 /// `localStorage` throws in a webview with site data disabled: an unreadable
 /// preference is simply "off", never a crash on the first render.
-function readSortPreference(): boolean {
+function readFlag(key: string): boolean {
   try {
-    return window.localStorage.getItem(SORT_KEY) === "1";
+    return window.localStorage.getItem(key) === "1";
   } catch {
     return false;
+  }
+}
+
+function writeFlag(key: string, value: boolean) {
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    // A preference we cannot persist is still a preference for this session:
+    // nothing to report to the user.
   }
 }
 
@@ -91,13 +88,18 @@ export function CleanPanel() {
   const [report, setReport] = useState<CleanReport | null>(null);
   const [mode, setMode] = useState<CleanMode>("auto");
   const [browsers, setBrowsers] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /// Categories the user folded or unfolded by hand, overriding the default
+  /// (and, after a scan, the automatic unfold). Cleared by every new scan.
+  const [folds, setFolds] = useState<Map<string, boolean>>(new Map());
   const [summary, setSummary] = useState<RulesSummary | null>(null);
-  const [sortBySize, setSortBySize] = useState<boolean>(readSortPreference);
+  const [sortBySize, setSortBySize] = useState<boolean>(() => readFlag(SORT_KEY));
+  const [hintDismissed, setHintDismissed] = useState<boolean>(() => readFlag(HINT_KEY));
+
+  const busy = busyAction !== null;
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -160,50 +162,52 @@ export function CleanPanel() {
   }
 
   /// A search reaches into a folded category: a match the user cannot see
-  /// would make the search field lie.
-  function isOpen(category: string): boolean {
+  /// would make the search field lie. Once a scan has run, the categories that
+  /// hold reclaimable bytes open themselves and the empty ones step aside —
+  /// biggest wins first, without the user hunting for them.
+  function isOpen(category: string, catBytes: number): boolean {
     if (searching) return true;
-    return expanded.has(category) || !COLLAPSED_BY_DEFAULT.includes(category);
+    const manual = folds.get(category);
+    if (manual !== undefined) return manual;
+    if (results) return catBytes > 0;
+    return !COLLAPSED_BY_DEFAULT.includes(category);
   }
 
-  function toggleCategory(category: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return next;
-    });
+  function toggleCategory(category: string, open: boolean) {
+    setFolds((prev) => new Map(prev).set(category, !open));
   }
 
   function toggleSortBySize() {
     setSortBySize((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(SORT_KEY, next ? "1" : "0");
-      } catch {
-        // A preference we cannot persist is still a preference for this
-        // session: nothing to report to the user.
-      }
-      return next;
+      writeFlag(SORT_KEY, !prev);
+      return !prev;
     });
   }
 
+  function dismissHint() {
+    writeFlag(HINT_KEY, true);
+    setHintDismissed(true);
+  }
+
   async function onScan() {
-    setBusy(true);
+    setBusyAction("scan");
     setReport(null);
     setConfirming(false);
+    // A new scan re-decides which categories are worth showing: the previous
+    // hand folds no longer describe these results.
+    setFolds(new Map());
     try {
       setResults(await scan(rules.filter((r) => selected.has(r.id)).map((r) => r.id)));
     } catch (err) {
       setRulesError(String(err));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   }
 
   async function onClean() {
     setConfirming(false);
-    setBusy(true);
+    setBusyAction("clean");
     try {
       const done = await clean(scannedIds, mode);
       setReport(done);
@@ -212,7 +216,7 @@ export function CleanPanel() {
     } catch (err) {
       setRulesError(String(err));
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   }
 
@@ -245,6 +249,27 @@ export function CleanPanel() {
   return (
     <Screen>
       <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto px-8 pb-8">
+        {!hintDismissed && (
+          <div
+            data-testid="first-launch-hint"
+            className="flex items-center gap-2.5 rounded-lg border bg-card px-4 py-2.5 text-sm text-muted-foreground"
+          >
+            <Info className="size-4 shrink-0 text-muted-foreground" />
+            <p className="min-w-0 flex-1">
+              Auto mode deletes low-risk items permanently and sends the rest to
+              the Recycle Bin. Change the mode in the bottom bar before cleaning.
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 cursor-pointer"
+              onClick={dismissHint}
+            >
+              Got it
+            </Button>
+          </div>
+        )}
+
         {browsers.length > 0 && (
           <div
             data-testid="browser-warning"
@@ -287,11 +312,24 @@ export function CleanPanel() {
                 <span aria-hidden="true">Sort by size</span>
               </span>
               <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
-                Analyze
+                {busyAction === "scan" ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Analyzing…
+                  </>
+                ) : (
+                  "Analyze"
+                )}
               </Button>
             </div>
           </div>
-          {results ? (
+          {busyAction ? (
+            <p data-testid="hero-status" className="text-sm text-muted-foreground">
+              {busyAction === "scan"
+                ? `Analyzing ${RULE_COUNT.format(selected.size)} rules…`
+                : "Cleaning…"}
+            </p>
+          ) : results ? (
             <ReclaimGauge rules={rules} results={results} />
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -336,176 +374,35 @@ export function CleanPanel() {
           </p>
         )}
 
+        <div
+          data-testid="rule-list"
+          className={cn(
+            "flex flex-col gap-6",
+            busy && "pointer-events-none opacity-60"
+          )}
+        >
         {grouped.map(([category, catRules]) => {
           const catBytes = (results ?? [])
             .filter((r) => catRules.some((rule) => rule.id === r.rule_id))
             .reduce((sum, r) => sum + r.total_bytes, 0);
-          const collapsible = COLLAPSED_BY_DEFAULT.includes(category);
-          const open = isOpen(category);
-          const heading = (
-            <>
-              <h2 className="eyebrow text-muted-foreground">{category}</h2>
-              <p className="text-xs text-muted-foreground">
-                {RULE_COUNT.format(catRules.length)} rules
-                {results && (
-                  <>
-                    {" · "}
-                    <span className="font-mono tnum">{formatBytes(catBytes)}</span>
-                  </>
-                )}
-              </p>
-            </>
-          );
+          const open = isOpen(category, catBytes);
           return (
-            <section key={category} className="flex flex-col gap-1.5">
-              {collapsible ? (
-                <button
-                  type="button"
-                  data-testid={`toggle-category-${category}`}
-                  aria-expanded={open}
-                  onClick={() => toggleCategory(category)}
-                  className="flex items-baseline justify-between gap-6 rounded px-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
-                  {heading}
-                </button>
-              ) : (
-                <div className="flex items-baseline justify-between px-1">{heading}</div>
-              )}
-              {open && (
-                <>
-                  <ul className="overflow-hidden rounded-lg border bg-card">
-                    {catRules.map((rule, index) => {
-                      const result = (results ?? []).find((r) => r.rule_id === rule.id);
-                      const unavailable = rule.unavailable_reason;
-                      return (
-                        <li
-                          key={rule.id}
-                          className={index > 0 ? "border-t" : undefined}
-                        >
-                          <div className="flex h-11 items-center gap-3 px-4">
-                            <Checkbox
-                              id={rule.id}
-                              aria-label={rule.label}
-                              checked={selected.has(rule.id)}
-                              disabled={!!unavailable}
-                              onCheckedChange={() => toggleRule(rule.id)}
-                            />
-                            <span
-                              className={
-                                unavailable
-                                  ? "min-w-0 flex-1 truncate text-sm text-muted-foreground"
-                                  : "min-w-0 flex-1 cursor-pointer truncate text-sm"
-                              }
-                              onClick={() => !unavailable && toggleRule(rule.id)}
-                            >
-                              {rule.label}
-                            </span>
-                            {rule.risk === "medium" && (
-                              <Badge
-                                variant="outline"
-                                className="border-warning/40 bg-warning/12 text-warning-foreground"
-                              >
-                                medium risk
-                              </Badge>
-                            )}
-                            {rule.kind === "recycle-bin" && (
-                              <Badge
-                                data-testid={`note-${rule.id}`}
-                                variant="outline"
-                                className="border-destructive/40 text-destructive"
-                              >
-                                all volumes
-                              </Badge>
-                            )}
-                            {result && (
-                              <div
-                                data-testid={`result-${rule.id}`}
-                                className="flex shrink-0 items-baseline gap-3"
-                              >
-                                {result.skipped > 0 && (
-                                  <span className="font-mono tnum text-xs text-muted-foreground">
-                                    {formatCount(result.skipped)} skipped
-                                  </span>
-                                )}
-                                <span className="w-24 text-right font-mono tnum text-sm">
-                                  {formatBytes(result.total_bytes)}
-                                </span>
-                                <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
-                                  {formatCount(result.file_count)}
-                                  <span className="sr-only"> files</span>
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                          {unavailable && (
-                            <p
-                              data-testid={`unavailable-${rule.id}`}
-                              className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
-                            >
-                              Unavailable on this machine: {unavailable}
-                            </p>
-                          )}
-                          {rule.kind === "recycle-bin" && (
-                            <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                              Empties the recycle bin of every volume on this machine,
-                              including outside the user profile. Permanent and
-                              irreversible: the deletion mode does not apply to it.
-                            </p>
-                          )}
-                          {rule.id === "windows.temp" && (
-                            <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                              Close any running installers before cleaning.
-                            </p>
-                          )}
-                          {rule.note && (
-                            <p
-                              data-testid={`warning-${rule.id}`}
-                              className="px-4 pb-3 pl-11 text-xs text-warning-foreground"
-                            >
-                              {rule.note}
-                            </p>
-                          )}
-                          {result && result.paths.length > 0 && (
-                            <Collapsible
-                              open={openPaths.has(rule.id)}
-                              onOpenChange={() => togglePaths(rule.id)}
-                            >
-                              <CollapsibleTrigger
-                                data-testid={`toggle-paths-${rule.id}`}
-                                className="mb-3 ml-11 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-                              >
-                                {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
-                              </CollapsibleTrigger>
-                              <CollapsibleContent>
-                                <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
-                                  {result.paths.map((p) => (
-                                    <li key={p} className="truncate">
-                                      {p}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </CollapsibleContent>
-                            </Collapsible>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {hasWinapp2Rule(catRules) && (
-                    <p
-                      data-testid="winapp2-attribution"
-                      className="px-1 text-xs text-muted-foreground"
-                    >
-                      Some of the rules in this category are community rules
-                      from Winapp2 (CC-BY-SA 4.0) —{" "}
-                      <span className="font-mono">{WINAPP2_URL}</span>
-                    </p>
-                  )}
-                </>
-              )}
-            </section>
+            <RuleCategory
+              key={category}
+              category={category}
+              rules={catRules}
+              results={results}
+              catBytes={catBytes}
+              open={open}
+              selected={selected}
+              openPaths={openPaths}
+              onToggleCategory={() => toggleCategory(category, open)}
+              onToggleRule={toggleRule}
+              onTogglePaths={togglePaths}
+            />
           );
         })}
+        </div>
 
         {report && (
           <section
@@ -602,9 +499,18 @@ export function CleanPanel() {
               onClick={() => setConfirming(true)}
               disabled={busy || !results || scannedIds.length === 0}
             >
-              Clean
-              {results && total > 0 && (
-                <span className="font-mono tnum">{formatBytes(total)}</span>
+              {busyAction === "clean" ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Cleaning…
+                </>
+              ) : (
+                <>
+                  Clean
+                  {results && total > 0 && (
+                    <span className="font-mono tnum">{formatBytes(total)}</span>
+                  )}
+                </>
               )}
             </Button>
           </>

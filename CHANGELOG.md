@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A one-line, dismissible first-launch hint above the Cleanup hero explaining
+  what Auto mode does and where the mode is changed. The dismissal is persisted
+  in `localStorage` (`wincleaner.hintDismissed`).
+- A loading state while a scan or a cleanup runs: the button carries a spinner
+  and reads "Analyzing…" / "Cleaning…", the hero says how many rules are being
+  analysed, and the rule list is dimmed and inert.
+
+### Changed
+
+- Every category header is a real toggle button carrying `aria-expanded`, a
+  rotating chevron (still under `prefers-reduced-motion`), a hover background
+  and a visible focus ring — not only the ones folded by default. The
+  "Show/Hide the paths" trigger and the rule labels got the same pointer
+  treatment.
+- After a scan the categories holding reclaimable bytes unfold themselves and
+  the empty ones fold, so the biggest wins are the ones on screen. A fold or
+  unfold the user asks for afterwards is kept until the next scan.
+- The category section moved to its own `src/components/RuleCategory.tsx`; no
+  behaviour change.
+
 ## [0.2.0] - 2026-09-10
 
 ### Added
