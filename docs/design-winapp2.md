@@ -51,6 +51,21 @@ Per entry `[Name *]`:
 - Invalid or unsupported entries are skipped, never fatal. The converter returns
   counts (retained, dropped by reason) exposed to the UI as a summary line.
 
+The curated `rules.toml` rules take precedence: `convert_with` receives them and
+drops any converted entry whose globs intersect a native one, counted as
+`dropped_overlap`. The intersection test (`winapp2.rs::overlaps`) runs on the
+unexpanded, case-insensitive glob strings, split on `\` and walked segment by
+segment: two segments are compatible when either is `**`, when they are equal,
+or when one carries a `*` matching the other, and a `**` absorbs every following
+segment; the patterns overlap when every segment is compatible up to the end of
+the shorter list. It is deliberately approximate, and approximate in one
+direction only — when both segments carry a `*` they are held compatible without
+deciding whether their languages really intersect, so `User Data\*\Login Data*`
+counts as overlapping `User Data\ShaderCache\**\*`. Every error is therefore a
+false positive that drops a community rule, never a native one; the alternative
+(a literal string comparison) errs the other way and lets the same bytes be
+counted twice by two rules.
+
 ## Detection
 
 An entry is shown only when at least one `DetectN=HKCU\..|HKLM\..` key exists

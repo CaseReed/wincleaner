@@ -312,6 +312,10 @@ pub struct ConversionReport {
     /// not define or one resolving outside the profile — or by the glob
     /// compiler.
     pub dropped_invalid: u32,
+    /// Cleans a path a `rules.toml` rule already cleans. The native curated
+    /// rules take precedence: keeping both would count the same bytes twice
+    /// and turn the second pass into a bogus "skipped" entry.
+    pub dropped_overlap: u32,
 }
 
 impl ConversionReport {
@@ -320,7 +324,81 @@ impl ConversionReport {
             + self.dropped_variable
             + self.dropped_exclude
             + self.dropped_invalid
+            + self.dropped_overlap
     }
+}
+
+/// Does a single path segment carrying `*` match a literal one? `*` stands for
+/// any run of characters inside the segment; `\` never reaches here, the caller
+/// having split on it.
+fn segment_matches(pattern: &[u8], text: &[u8]) -> bool {
+    let (mut p, mut t) = (0, 0);
+    let (mut star, mut retry) = (None, 0);
+    while t < text.len() {
+        if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            p += 1;
+            retry = t;
+        } else if p < pattern.len() && pattern[p] == text[t] {
+            p += 1;
+            t += 1;
+        } else if let Some(s) = star {
+            // The last `*` swallows one more character and we try again.
+            p = s + 1;
+            retry += 1;
+            t = retry;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|c| *c == b'*')
+}
+
+/// Do the subtrees of two glob patterns intersect?
+///
+/// Compared on the *unexpanded*, normalised glob strings (`\`-split,
+/// case-insensitive), segment by segment. Two segments are compatible when
+/// either is `**`, when they are equal, or when one carries a `*` that matches
+/// the other; a `**` absorbs every following segment, so the walk stops there.
+/// The patterns overlap when every segment is compatible up to the end of the
+/// shorter list — the longer tail then starts inside the shorter one's subtree.
+///
+/// Deliberately approximate, and approximate in one direction only: when BOTH
+/// segments carry a `*` they are held to be compatible without deciding whether
+/// their languages actually intersect. Every error is therefore a false
+/// positive, and a false positive only ever drops a converted Winapp2 rule,
+/// never a native one — the worst case is a community rule we do not offer, not
+/// bytes counted twice. A literal string comparison would err the other way: it
+/// misses `...\Profiles\*\cache2\**\*` against `...\Profiles\*\*cache*\*`,
+/// which is the same data under two rules.
+fn overlaps(a: &str, b: &str) -> bool {
+    fn segments(pattern: &str) -> Vec<String> {
+        pattern
+            .trim()
+            .split('\\')
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect()
+    }
+    let (a, b) = (segments(a), segments(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    for (x, y) in a.iter().zip(b.iter()) {
+        if x == "**" || y == "**" {
+            return true;
+        }
+        let compatible = match (x.contains('*'), y.contains('*')) {
+            (false, false) => x == y,
+            (true, false) => segment_matches(x.as_bytes(), y.as_bytes()),
+            (false, true) => segment_matches(y.as_bytes(), x.as_bytes()),
+            (true, true) => true,
+        };
+        if !compatible {
+            return false;
+        }
+    }
+    true
 }
 
 /// Validation of a converted rule: the same confinement as a rules.toml rule,
@@ -337,12 +415,27 @@ fn accept(rule: &Rule, lookup: EnvLookup) -> Result<(), RuleError> {
 
 /// Converts the whole ini. Never fails: a refused entry is counted, never
 /// fatal.
-pub fn convert_with(src: &str, lookup: EnvLookup) -> (Vec<ConvertedRule>, ConversionReport) {
+///
+/// `native` is the `rules.toml` catalogue, which takes precedence: an entry
+/// whose globs intersect a native rule's (see `overlaps`) is dropped here, in
+/// the single conversion path, rather than shown next to the rule that already
+/// cleans the same bytes.
+pub fn convert_with(
+    src: &str,
+    native: &[Rule],
+    lookup: EnvLookup,
+) -> (Vec<ConvertedRule>, ConversionReport) {
     // Every path of every entry is resolved against `%USERPROFILE%` and its own
     // variable: without a cache the real file costs tens of thousands of
     // `GetLongPathNameW` calls. The cache lives exactly as long as this call.
     let memoized = crate::rules::memoized_env(lookup);
     let lookup: EnvLookup = &memoized;
+
+    let native_globs: Vec<&str> = native
+        .iter()
+        .filter(|r| r.kind == RuleKind::Files)
+        .flat_map(|r| r.paths.iter().map(String::as_str))
+        .collect();
 
     let mut report = ConversionReport::default();
     let mut used: HashSet<String> = HashSet::new();
@@ -404,6 +497,16 @@ pub fn convert_with(src: &str, lookup: EnvLookup) -> (Vec<ConvertedRule>, Conver
         // shown as noise among thousands of others.
         if accept(&rule, lookup).is_err() {
             report.dropped_invalid += 1;
+            continue;
+        }
+        // Native rules win: a converted entry cleaning what `rules.toml`
+        // already cleans would double-count the bytes in the scan report.
+        if rule
+            .paths
+            .iter()
+            .any(|p| native_globs.iter().any(|n| overlaps(n, p)))
+        {
+            report.dropped_overlap += 1;
             continue;
         }
         report.retained += 1;
@@ -603,8 +706,8 @@ pub struct Winapp2Catalogue {
 /// Parses, converts and probes the embedded base with the real environment.
 /// Costs on the order of a second: the caller caches it (see
 /// `commands::catalogue`).
-pub fn embedded_winapp2() -> Winapp2Catalogue {
-    let (converted, report) = convert_with(WINAPP2_INI, &crate::rules::system_env);
+pub fn embedded_winapp2(native: &[Rule]) -> Winapp2Catalogue {
+    let (converted, report) = convert_with(WINAPP2_INI, native, &crate::rules::system_env);
     // Same reason as inside `convert_with`: every probe asks for its own
     // variable and for `%USERPROFILE%`, and `system_env` pays a
     // `GetLongPathNameW` per answer.
@@ -751,7 +854,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
 
     #[test]
     fn converts_the_fixture_entry() {
-        let (converted, report) = convert_with(FIXTURE, &fake_env);
+        let (converted, report) = convert_with(FIXTURE, &[], &fake_env);
         assert_eq!(report.retained, 2);
         let rule = &converted[0].rule;
         assert_eq!(rule.id, "winapp2.test-app");
@@ -781,7 +884,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn drops_an_entry_with_no_usable_file_key() {
         let src = "[Elevated]\nFileKey1=%ProgramFiles%\\X|*.*\n[Empty]\nDetect=HKCU\\X\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert!(converted.is_empty());
         assert_eq!(report.dropped_no_file_key, 2);
         assert_eq!(report.dropped(), 2);
@@ -792,7 +895,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn an_exclude_we_cannot_represent_drops_the_whole_entry() {
         let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*\nExcludeKey1=FILE|%ProgramFiles%\\A|keep.dat\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert!(converted.is_empty());
         assert_eq!(report.dropped_variable, 1);
     }
@@ -803,7 +906,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn one_unrepresentable_spec_in_an_exclude_list_drops_the_whole_entry() {
         let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*\nExcludeKey1=FILE|%LocalAppData%\\A|keep[1].dat;notes.txt\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert!(converted.is_empty());
         assert_eq!(report.dropped_exclude, 1);
         assert_eq!(report.dropped(), 1);
@@ -814,7 +917,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn an_unrepresentable_file_key_spec_narrows_the_rule_instead_of_dropping_it() {
         let src = "[A]\nFileKey1=%LocalAppData%\\A|cache[1].dat;*.log\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert_eq!(report.retained, 1);
         assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\A\*.log"]);
     }
@@ -837,7 +940,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
             calls.set(calls.get() + 1);
             fake_env(name)
         };
-        let (converted, _) = convert_with(&src, &counting);
+        let (converted, _) = convert_with(&src, &[], &counting);
         assert_eq!(converted.len(), 50);
         assert!(
             calls.get() <= 4,
@@ -852,7 +955,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn a_generated_id_never_collides_with_a_section_named_after_it() {
         let src = "[App]\nFileKey1=%LocalAppData%\\A|*.*\n[App]\nFileKey1=%LocalAppData%\\B|*.*\n[App 2]\nFileKey1=%LocalAppData%\\C|*.*\n";
-        let (converted, _) = convert_with(src, &fake_env);
+        let (converted, _) = convert_with(src, &[], &fake_env);
         let ids: Vec<&str> = converted.iter().map(|c| c.rule.id.as_str()).collect();
         let unique: std::collections::HashSet<&&str> = ids.iter().collect();
         assert_eq!(unique.len(), 3, "{ids:?}");
@@ -869,7 +972,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
             "APPDATA" => None,
             _ => fake_env(name),
         };
-        let (converted, report) = convert_with(src, &without_appdata);
+        let (converted, report) = convert_with(src, &[], &without_appdata);
         assert!(converted.is_empty());
         assert_eq!(report.dropped_invalid, 1);
         assert_eq!(report.dropped(), 1);
@@ -883,7 +986,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(map_path(r"%USERPROFILE%\AppData%\LocalLow\X"), None);
         assert_eq!(map_path(r"%LocalAppData%\A\%UserName%"), None);
         let src = "[A]\nFileKey1=%UserProfile%\\AppData%\\LocalLow\\A|*.*\n[B]\nFileKey1=%LocalAppData%\\B|*.*\nExcludeKey1=FILE|%LocalAppData%\\B\\%UserName%|keep.dat\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert!(converted.is_empty());
         assert_eq!(report.dropped_no_file_key, 1);
         assert_eq!(report.dropped_variable, 1);
@@ -894,7 +997,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn a_registry_exclude_is_ignored_without_dropping_the_entry() {
         let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*\nExcludeKey1=REG|HKCU\\Software\\A\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert_eq!(report.retained, 1);
         assert!(converted[0].rule.exclude.is_empty());
     }
@@ -902,7 +1005,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn a_path_exclude_without_a_spec_excludes_the_whole_directory() {
         let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*|RECURSE\nExcludeKey1=PATH|%LocalAppData%\\A\\keep\nExcludeKey2=FILE|%LocalAppData%\\A\\keep.dat\n";
-        let (converted, _) = convert_with(src, &fake_env);
+        let (converted, _) = convert_with(src, &[], &fake_env);
         assert_eq!(
             converted[0].rule.exclude,
             vec![
@@ -915,7 +1018,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn colliding_section_names_get_distinct_ids() {
         let src = "[App]\nFileKey1=%LocalAppData%\\A|*.*\n[App *]\nFileKey1=%LocalAppData%\\B|*.*\n[App]\nFileKey1=%LocalAppData%\\C|*.*\n";
-        let (converted, _) = convert_with(src, &fake_env);
+        let (converted, _) = convert_with(src, &[], &fake_env);
         let ids: Vec<&str> = converted.iter().map(|c| c.rule.id.as_str()).collect();
         assert_eq!(ids, vec!["winapp2.app", "winapp2.app-2", "winapp2.app-3"]);
     }
@@ -925,7 +1028,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     /// of them for the feature to be worth its weight.
     #[test]
     fn the_embedded_base_converts_into_valid_rules() {
-        let (converted, report) = convert_with(WINAPP2_INI, &crate::rules::system_env);
+        let (converted, report) = convert_with(WINAPP2_INI, &[], &crate::rules::system_env);
         assert!(
             report.retained >= 500,
             "only {} rules retained (dropped: {})",
@@ -1030,7 +1133,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
         let src = "[Seen]\nDetect=HKCU\\Software\\Yes\nFileKey1=%LocalAppData%\\A|*.*\n\
                    [Unseen]\nDetect=HKCU\\Software\\No\nFileKey1=%LocalAppData%\\B|*.*\n\
                    [NoDetect]\nFileKey1=%LocalAppData%\\C|*.*\n";
-        let (converted, report) = convert_with(src, &fake_env);
+        let (converted, report) = convert_with(src, &[], &fake_env);
         assert_eq!(report.retained, 3);
         let registry = |key: &str| key.ends_with("Yes");
         let never = |_: &str| false;
@@ -1042,7 +1145,7 @@ FileKey1=%AppData%\\Cafe|*.*\r
     #[test]
     fn a_detect_file_match_is_enough_on_its_own() {
         let src = "[A]\nDetectFile=%LocalAppData%\\A\nFileKey1=%LocalAppData%\\A|*.*\n";
-        let (converted, _) = convert_with(src, &fake_env);
+        let (converted, _) = convert_with(src, &[], &fake_env);
         let never = |_: &str| false;
         let always = |_: &str| true;
         assert_eq!(detected_rules_with(converted, &never, &always).len(), 1);
@@ -1094,93 +1197,100 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert!(!registry_key_exists(r"HKCU\"));
         assert!(!registry_key_exists(r"HKCU\ "));
     }
-
-    /// Rule ids that overlap a converted Winapp2 rule on purpose, and why it
-    /// is safe to leave as-is rather than drop the native rule. Each entry
-    /// must be reviewed, never appended just to silence the test below.
-    ///
-    /// Currently empty: `pip.cache` was the one real collision (Winapp2's
-    /// `[Python *]` already covers `%LocalAppData%\Pip\cache`) and was
-    /// removed from `rules.toml` rather than allow-listed here.
-    const KNOWN_OVERLAPS: &[(&str, &str, &str)] = &[];
-
-    /// `a` and `b` collide when they are the same glob string, or when one is
-    /// a path prefix of the other up to a `\` boundary — e.g.
-    /// `%LOCALAPPDATA%\Pip\cache` is a prefix of
-    /// `%LOCALAPPDATA%\Pip\cache\**\*`. A comparison on bytes is safe: every
-    /// rule path is ASCII (the four allowed variables and the literal
-    /// directory names upstream and native rules use).
-    fn overlaps(a: &str, b: &str) -> bool {
-        let a = a.to_ascii_lowercase();
-        let b = b.to_ascii_lowercase();
-        if a == b {
-            return true;
-        }
-        let (shorter, longer) = if a.len() < b.len() { (&a, &b) } else { (&b, &a) };
-        longer.starts_with(shorter.as_str()) && longer.as_bytes()[shorter.len()] == b'\\'
+    #[test]
+    fn overlap_catches_wildcard_shaped_duplicates() {
+        // The three real collisions a literal comparison used to miss.
+        assert!(overlaps(
+            r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles\*\cache2\**\*",
+            r"%LOCALAPPDATA%\Mozilla\Firefox\Profiles\*\*cache*\*",
+        ));
+        assert!(overlaps(
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\*\Cache\**\*",
+            r"%LOCALAPPDATA%\Google\Chrome*\User Data\*\*Cache*\*",
+        ));
+        assert!(overlaps(
+            r"%LOCALAPPDATA%\Microsoft\Edge\User Data\*\Cache\**\*",
+            r"%LOCALAPPDATA%\Microsoft\Edge*\User Data\*\*Cache*\*",
+        ));
     }
 
-    /// Guards against re-adding a native rule (`rules.toml`) that duplicates a
-    /// path the converted Winapp2 catalogue already cleans — the mistake
-    /// `pip.cache` made: it counted the same bytes as Winapp2's `[Python *]`
-    /// entry, doubling the reported reclaimable size and turning the second
-    /// pass into a bogus "skipped" entry.
+    /// The one shape the approximation must NOT swallow: two literal sibling
+    /// directories. `Cache` and `Code Cache` hold different bytes.
+    #[test]
+    fn overlap_keeps_literal_siblings_apart() {
+        assert!(!overlaps(
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\*\Cache\**\*",
+            r"%LOCALAPPDATA%\Google\Chrome\User Data\*\Code Cache\**\*",
+        ));
+        assert!(!overlaps(r"%TEMP%\**\*", r"%LOCALAPPDATA%\CrashDumps\*"));
+    }
+
+    #[test]
+    fn overlap_covers_a_literal_parent_and_its_child() {
+        assert!(overlaps(
+            r"%LOCALAPPDATA%\Pip\cache",
+            r"%LOCALAPPDATA%\pip\Cache\**\*",
+        ));
+    }
+
+    #[test]
+    fn a_double_star_absorbs_every_following_segment() {
+        assert!(overlaps(r"%TEMP%\**\*", r"%TEMP%\Foo\Bar\Baz\quux.log"));
+        assert!(overlaps(r"%TEMP%\Foo\Bar\Baz\quux.log", r"%TEMP%\**\*"));
+    }
+
+    /// The precedence rule, proved on the real file: native `rules.toml` rules
+    /// win, and every converted Winapp2 rule that would clean the same bytes
+    /// is dropped by `convert_with` itself — not merely detectable after the
+    /// fact. The mistake this guards against is `pip.cache`'s: it counted the
+    /// same bytes as Winapp2's `[Python *]` entry, doubling the reported
+    /// reclaimable size and turning the second pass into a bogus "skipped".
     ///
-    /// The Winapp2 side is converted independently of detection (every entry
-    /// that survives `convert_with`, not just the ones `is_detected_with`
-    /// would show on this machine): a native rule must not collide with a
-    /// Winapp2 rule whether or not the corresponding application happens to
-    /// be installed on the machine running the test.
+    /// Both conversions run against a fixed fake environment and independently
+    /// of detection (every entry `convert_with` retains, not just the ones
+    /// `is_detected_with` would show): the result must not depend on what
+    /// happens to be installed on the machine running the test.
     #[test]
     fn no_native_rule_overlaps_a_converted_winapp2_rule() {
-        use crate::rules::{load_rules_with, resolved_paths_with, RuleKind, RULES_TOML};
+        use crate::rules::{load_rules_with, RULES_TOML};
 
         let native = load_rules_with(RULES_TOML, &fake_env).unwrap();
-        let native_globs: Vec<(&str, String)> = native
+        let native_globs: Vec<(&str, &str)> = native
             .iter()
             .filter(|r| r.kind == RuleKind::Files)
-            .flat_map(|r| {
-                resolved_paths_with(r, &fake_env)
-                    .unwrap()
-                    .into_iter()
-                    .map(move |p| (r.id.as_str(), p))
-            })
+            .flat_map(|r| r.paths.iter().map(|p| (r.id.as_str(), p.as_str())))
             .collect();
 
-        let (converted, _) = convert_with(WINAPP2_INI, &fake_env);
-        let converted_globs: Vec<(&str, String)> = converted
+        let (baseline, _) = convert_with(WINAPP2_INI, &[], &fake_env);
+        let (converted, report) = convert_with(WINAPP2_INI, &native, &fake_env);
+
+        let kept: HashSet<&str> = converted.iter().map(|c| c.rule.id.as_str()).collect();
+        let dropped: Vec<&str> = baseline
             .iter()
-            .flat_map(|c| {
-                resolved_paths_with(&c.rule, &fake_env)
-                    .unwrap()
-                    .into_iter()
-                    .map(move |p| (c.rule.id.as_str(), p))
+            .map(|c| c.rule.id.as_str())
+            .filter(|id| !kept.contains(id))
+            .collect();
+        assert_eq!(dropped.len(), report.dropped_overlap as usize);
+        assert!(
+            report.dropped_overlap >= 3,
+            "expected the browser cache duplicates to be dropped, got {}: {dropped:?}",
+            report.dropped_overlap
+        );
+
+        let leftovers: Vec<(&str, &str, &str)> = converted
+            .iter()
+            .flat_map(|c| c.rule.paths.iter().map(move |p| (c.rule.id.as_str(), p)))
+            .flat_map(|(id, path)| {
+                native_globs
+                    .iter()
+                    .filter(move |(_, n)| overlaps(n, path))
+                    .map(move |(native_id, n)| (*native_id, id, *n))
             })
             .collect();
-
-        let mut collisions: Vec<(&str, &str, String, String)> = Vec::new();
-        for (native_id, native_path) in &native_globs {
-            for (winapp2_id, winapp2_path) in &converted_globs {
-                if overlaps(native_path, winapp2_path) {
-                    let known = KNOWN_OVERLAPS
-                        .iter()
-                        .any(|(n, w, _)| n == native_id && w == winapp2_id);
-                    if !known {
-                        collisions.push((
-                            native_id,
-                            winapp2_id,
-                            native_path.clone(),
-                            winapp2_path.clone(),
-                        ));
-                    }
-                }
-            }
-        }
         assert!(
-            collisions.is_empty(),
-            "native rule(s) overlap a converted Winapp2 rule (add to \
-             KNOWN_OVERLAPS with a reason if the overlap is deliberate, \
-             otherwise drop the native rule): {collisions:#?}"
+            leftovers.is_empty(),
+            "convert_with retained Winapp2 rule(s) overlapping a native rule \
+             (native id, winapp2 id, native glob): {leftovers:#?}"
         );
     }
 }

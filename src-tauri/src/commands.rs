@@ -50,7 +50,7 @@ pub struct Catalogue {
 
 fn build_catalogue() -> Result<Catalogue, String> {
     let native = embedded_rules().map_err(|e| e.to_string())?;
-    let winapp2 = crate::winapp2::embedded_winapp2();
+    let winapp2 = crate::winapp2::embedded_winapp2(&native);
     let summary = RulesSummary {
         native: native.len() as u32,
         winapp2_retained: winapp2.report.retained,

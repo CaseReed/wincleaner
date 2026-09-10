@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache (`%LOCALAPPDATA%\npm-cache`), low risk and checked by default. pip's
   cache is not duplicated: Winapp2's `[Python *]` section already covers
   `%LOCALAPPDATA%\Pip\cache`.
+- The curated native rules now take precedence over the community ones: a
+  converted Winapp2 rule whose paths overlap a `rules.toml` rule is dropped at
+  conversion time, so the same bytes are never counted twice.
 
 ## [0.1.0] - 2026-09-10
 

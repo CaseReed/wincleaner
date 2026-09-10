@@ -110,7 +110,7 @@ risk = "low"
 # npm refills it on the next install, hence risk "low". Same category as the
 # converted Winapp2 rules — it is an application cache like the rest.
 # (pip's cache is NOT added here: Winapp2's `[Python *]` section already
-# covers `%LOCALAPPDATA%\Pip\cache` via `winapp2.python` — see rules.rs's
+# covers `%LOCALAPPDATA%\Pip\cache` via `winapp2.python` — see winapp2.rs's
 # `no_native_rule_overlaps_a_converted_winapp2_rule` test.)
 [[rule]]
 id = "npm.cache"
