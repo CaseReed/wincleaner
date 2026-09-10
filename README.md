@@ -10,7 +10,7 @@ network access, no registry cleaner.
 
 ## Features
 
-- **Eight audited rules**, all declared in a single readable file
+- **Ten audited built-in rules**, all declared in a single readable file
   (`src-tauri/rules.toml`) — nothing is hidden in the code.
 - **Measure before you delete.** Analyze reports the reclaimable size per rule,
   with the exact list of files it would touch.
@@ -24,8 +24,9 @@ network access, no registry cleaner.
 
 ## What it cleans
 
-Eight rules across two categories. A rule is unchecked by default when it is
-irreversible or when it touches data the user curated by hand.
+Ten built-in rules across three categories, plus the community rules converted
+from [Winapp2](https://github.com/MoscaDotTo/Winapp2), which are shown only
+when the application they target is detected and are never checked by default.
 
 | Category | Rule | Default | Risk |
 | --- | --- | --- | --- |
@@ -37,6 +38,8 @@ irreversible or when it touches data the user curated by hand.
 | Browsers | Microsoft Edge cache | Checked | Low |
 | Browsers | Google Chrome cache | Checked | Low |
 | Browsers | Mozilla Firefox cache | Checked | Low |
+| Applications | npm cache (`%LOCALAPPDATA%\npm-cache`) | Checked | Low |
+| Applications | pip cache (`%LOCALAPPDATA%\pip\Cache`) | Checked | Low |
 
 The browser rules cover HTTP, code, GPU and service-worker caches only. Local
 Storage, IndexedDB, Session Storage and service-worker registrations are
@@ -122,7 +125,6 @@ time.
 
 ## Roadmap
 
-- Import [winapp2.ini](https://github.com/MoscaDotTo/Winapp2) rule definitions.
 - More application caches (package managers, IDEs, chat clients).
 - On-demand elevation for the machine-wide startup entries and the common
   Startup folder, which are out of scope today.

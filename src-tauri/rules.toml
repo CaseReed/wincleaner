@@ -105,3 +105,22 @@ paths = [
 ]
 exclude = []
 risk = "low"
+
+# Package-manager caches Winapp2 does not cover. Re-downloadable by design:
+# both tools refill them on the next install, hence risk "low". Same category
+# as the converted Winapp2 rules — they are application caches like the rest.
+[[rule]]
+id = "npm.cache"
+category = "Applications"
+label = "npm cache"
+paths = ["%LOCALAPPDATA%\\npm-cache\\**\\*"]
+exclude = []
+risk = "low"
+
+[[rule]]
+id = "pip.cache"
+category = "Applications"
+label = "pip cache"
+paths = ["%LOCALAPPDATA%\\pip\\Cache\\**\\*"]
+exclude = []
+risk = "low"
