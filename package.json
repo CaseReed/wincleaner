@@ -4,12 +4,17 @@
   "version": "0.2.0",
   "type": "module",
   "scripts": {
+    "predev": "npm run whats-new",
     "dev": "vite",
+    "prebuild": "npm run whats-new",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "pretest": "npm run whats-new",
     "test": "vitest run",
+    "pretest:watch": "npm run whats-new",
     "test:watch": "vitest",
+    "whats-new": "node scripts/extract-whats-new.mjs",
     "version:check": "node scripts/check-version.mjs",
     "winapp2:update": "node scripts/update-winapp2.mjs"
   },

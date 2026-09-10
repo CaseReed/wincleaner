@@ -34,6 +34,12 @@ jobs:
       - name: Check version consistency
         run: npm run version:check
 
+      # Derived from CHANGELOG.md and not committed; `tauri-action` reaches it
+      # through `beforeBuildCommand` → `npm run build` → `prebuild`, but a
+      # missing CHANGELOG section must fail before a release is created.
+      - name: Generate the What's new asset
+        run: npm run whats-new
+
       - name: Check tag matches package version
         id: version
         shell: bash

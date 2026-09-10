@@ -33,6 +33,13 @@ jobs:
       - name: Check version consistency
         run: npm run version:check
 
+      # `src/generated/whats-new.json` is not committed: it is derived from
+      # CHANGELOG.md. The `pretest`/`prebuild` hooks regenerate it anyway; this
+      # step makes the dependency visible and fails here rather than inside a
+      # build log if the CHANGELOG section is missing.
+      - name: Generate the What's new asset
+        run: npm run whats-new
+
       - name: Front-end tests
         run: npm test
 

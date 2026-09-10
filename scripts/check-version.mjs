@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // Fails if package.json, src-tauri/Cargo.toml, src-tauri/Cargo.lock (the
 // wincleaner package entry) and src-tauri/tauri.conf.json don't all declare
-// the same version. Node only, no dependencies.
+// the same version, or if CHANGELOG.md has no section for it. Node only, no
+// dependencies.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { extractSection } from "./extract-whats-new.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -62,4 +64,13 @@ if (unique.size > 1) {
   process.exit(1);
 }
 
-console.log(`Version OK: ${packageJsonVersion}`);
+// The Settings screen shows this section: a release with no CHANGELOG entry
+// would ship an empty "What's new" — and `npm run build` would fail late.
+try {
+  extractSection(readText("CHANGELOG.md"), packageJsonVersion);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
+console.log(`Version OK: ${packageJsonVersion} (CHANGELOG section present)`);
