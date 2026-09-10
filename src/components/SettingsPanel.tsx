@@ -180,10 +180,14 @@ const RULE_COUNT = new Intl.NumberFormat("en-US");
 /// it too.
 function SandboxSection({
   sandbox,
+  busy = false,
   onEnterSandbox,
   onLeaveSandbox,
 }: {
   sandbox: SandboxSummary | null;
+  /// Creating or removing the profile is in flight: both write or delete a few
+  /// hundred files, and a second click would race the first.
+  busy?: boolean;
   onEnterSandbox?: () => void;
   onLeaveSandbox?: () => void;
 }) {
@@ -220,15 +224,29 @@ function SandboxSection({
             Winapp2 rules detected
           </p>
           <div className="mt-1 flex items-center gap-3">
-            <Button variant="outline" onClick={onLeaveSandbox}>
-              Leave the sandbox
+            <Button variant="outline" onClick={onLeaveSandbox} disabled={busy}>
+              {busy ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Removing…
+                </>
+              ) : (
+                "Leave the sandbox"
+              )}
             </Button>
           </div>
         </>
       ) : (
         <div className="mt-1 flex items-center gap-3">
-          <Button data-testid="create-sandbox" onClick={onEnterSandbox}>
-            Create a sandbox profile
+          <Button data-testid="create-sandbox" onClick={onEnterSandbox} disabled={busy}>
+            {busy ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Creating…
+              </>
+            ) : (
+              "Create a sandbox profile"
+            )}
           </Button>
         </div>
       )}
@@ -238,10 +256,12 @@ function SandboxSection({
 
 export function SettingsPanel({
   sandbox = null,
+  sandboxBusy = false,
   onEnterSandbox,
   onLeaveSandbox,
 }: {
   sandbox?: SandboxSummary | null;
+  sandboxBusy?: boolean;
   onEnterSandbox?: () => void;
   onLeaveSandbox?: () => void;
 } = {}) {
@@ -286,6 +306,7 @@ export function SettingsPanel({
           <Section title="Sandbox" testId="sandbox">
             <SandboxSection
               sandbox={sandbox}
+              busy={sandboxBusy}
               onEnterSandbox={onEnterSandbox}
               onLeaveSandbox={onLeaveSandbox}
             />

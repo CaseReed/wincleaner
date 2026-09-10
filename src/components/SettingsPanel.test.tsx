@@ -250,5 +250,18 @@ describe("SettingsPanel — updates", () => {
       await user.click(screen.getByRole("button", { name: "Leave the sandbox" }));
       expect(onLeaveSandbox).toHaveBeenCalled();
     });
+
+    /// Building the profile writes a few hundred files: without a busy state
+    /// the button looks inert and a second click races the first.
+    it("shows the work in progress and refuses a second click", () => {
+      const onEnterSandbox = vi.fn();
+      const { rerender } = render(
+        <SettingsPanel sandboxBusy onEnterSandbox={onEnterSandbox} />,
+      );
+      expect(screen.getByRole("button", { name: /Creating/ })).toBeDisabled();
+
+      rerender(<SettingsPanel sandbox={SANDBOX} sandboxBusy onLeaveSandbox={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /Removing/ })).toBeDisabled();
+    });
   });
 });

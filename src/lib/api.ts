@@ -88,9 +88,14 @@ export interface SandboxVerdict {
   sentinels_total: number;
   sentinels_intact: number;
   sentinels_damaged: string[];
+  /// Junk of the rules that were cleaned, and nothing else.
   junk_total: number;
   junk_removed: number;
   junk_remaining: string[];
+  /// How many rules the three counts above are scoped to.
+  rules_cleaned: number;
+  /// The junction baits: files a rule's glob matches, reachable only by
+  /// crossing a junction the sandbox plants. There are two of them.
   outside_total: number;
   outside_intact: number;
   junctions_refused: boolean;
@@ -169,8 +174,10 @@ export function sandboxStatus(): Promise<SandboxSummary | null> {
 }
 
 /// Reads the sandbox back off the disk and compares it with what it promised.
-export function sandboxVerify(): Promise<SandboxVerdict> {
-  return invoke<SandboxVerdict>("sandbox_verify");
+/// `ruleIds` are the rules that were just cleaned: the junk counts are scoped
+/// to them, so a partial selection is not judged against the whole catalogue.
+export function sandboxVerify(ruleIds: string[]): Promise<SandboxVerdict> {
+  return invoke<SandboxVerdict>("sandbox_verify", { ruleIds });
 }
 
 /// Groups rules by category, preserving the order of rules.toml.

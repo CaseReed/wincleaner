@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-const { checkForUpdates } = vi.hoisted(() => ({
+const { checkForUpdates, sandboxLeave, sandboxStatus } = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
+  sandboxLeave: vi.fn(),
+  sandboxStatus: vi.fn(),
 }));
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -13,6 +15,8 @@ vi.mock("@/lib/api", async () => {
     runningBrowsers: () => Promise.resolve([]),
     listStartup: () => Promise.resolve([]),
     checkForUpdates,
+    sandboxLeave,
+    sandboxStatus,
   };
 });
 
@@ -49,7 +53,10 @@ beforeEach(() => {
   localStorage.clear();
   setTheme.mockClear();
   checkForUpdates.mockReset();
+  sandboxLeave.mockReset();
+  sandboxStatus.mockReset().mockResolvedValue(null);
   vi.mocked(toast.info).mockClear();
+  vi.mocked(toast.error).mockClear();
   document.documentElement.classList.remove("dark");
 });
 
@@ -121,5 +128,46 @@ describe("the startup update consent gate", () => {
       expect.anything(),
     );
     expect(localStorage.getItem(LAST_NOTIFIED_KEY)).toBe("0.2.0");
+  });
+});
+
+/// The back end is the only authority on whether a sandbox is still open. A
+/// leave that fails used to clear the banner regardless, which left a user
+/// looking at a "real profile" screen while the engine was still pointed at
+/// the sandbox — or the reverse.
+describe("leaving the sandbox when it fails", () => {
+  const SANDBOX = {
+    root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
+    sentinels: 52,
+    junk: 119,
+    winapp2_rules: 14,
+  };
+
+  async function leaveOnce() {
+    const user = userEvent.setup();
+    stubPrefersDark(false);
+    render(<App />);
+    await screen.findByTestId("sandbox-banner");
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+  }
+
+  it("keeps the banner when the back end still reports the sandbox active", async () => {
+    sandboxStatus.mockResolvedValue(SANDBOX);
+    sandboxLeave.mockRejectedValue("The sandbox is still active: …");
+
+    await leaveOnce();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() => expect(sandboxStatus).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("sandbox-banner")).toBeInTheDocument();
+  });
+
+  it("clears the banner when the back end reports no sandbox any more", async () => {
+    sandboxStatus.mockResolvedValueOnce(SANDBOX).mockResolvedValueOnce(null);
+    sandboxLeave.mockRejectedValue("task interrupted");
+
+    await leaveOnce();
+
+    await waitFor(() => expect(screen.queryByTestId("sandbox-banner")).toBeNull());
   });
 });

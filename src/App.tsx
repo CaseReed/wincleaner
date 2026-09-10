@@ -54,6 +54,9 @@ export default function App() {
   /// and Startup — and the Cleanup screen has to remount when it changes,
   /// because the whole rule catalogue changes with it.
   const [sandbox, setSandbox] = useState<SandboxSummary | null>(null);
+  /// Creating the sandbox writes a few hundred files and leaving it removes
+  /// them: both take long enough for a second click to land.
+  const [sandboxBusy, setSandboxBusy] = useState(false);
 
   /// The backend is the authority: a reload of the webview must not lose a
   /// sandbox that is still open on the Rust side.
@@ -64,22 +67,39 @@ export default function App() {
   }, []);
 
   async function onEnterSandbox() {
+    setSandboxBusy(true);
     try {
       const summary = await sandboxEnter();
       setSandbox(summary);
       toast.success("Sandbox profile created");
     } catch (err) {
       toast.error(String(err));
+    } finally {
+      setSandboxBusy(false);
     }
   }
 
+  /// A failed leave is not "still in the sandbox" by assumption: the back end
+  /// is the only authority on whether one is still active, so the failure path
+  /// asks it rather than guessing. Guessing wrong in either direction is the
+  /// dangerous case — a banner over the real profile, or none over the
+  /// sandbox.
   async function onLeaveSandbox() {
+    setSandboxBusy(true);
     try {
       await sandboxLeave();
       setSandbox(null);
       toast.success("Sandbox removed");
     } catch (err) {
       toast.error(String(err));
+      try {
+        setSandbox(await sandboxStatus());
+      } catch {
+        // The status call failed too: the sandbox we know about stands, which
+        // is the cautious answer.
+      }
+    } finally {
+      setSandboxBusy(false);
     }
   }
 
@@ -142,6 +162,7 @@ export default function App() {
       {screen === "settings" && (
         <SettingsPanel
           sandbox={sandbox}
+          sandboxBusy={sandboxBusy}
           onEnterSandbox={() => void onEnterSandbox()}
           onLeaveSandbox={() => void onLeaveSandbox()}
         />

@@ -22,7 +22,7 @@ vi.mock("@/lib/api", async () => {
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
     onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
-    sandboxVerify: () => api.sandboxVerify(),
+    sandboxVerify: (ids: string[]) => api.sandboxVerify(ids),
   };
 });
 
@@ -801,8 +801,9 @@ describe("CleanPanel", () => {
       junk_total: 119,
       junk_removed: 119,
       junk_remaining: [],
-      outside_total: 4,
-      outside_intact: 4,
+      rules_cleaned: 9,
+      outside_total: 2,
+      outside_intact: 2,
       junctions_refused: true,
     };
 
@@ -842,9 +843,9 @@ describe("CleanPanel", () => {
       const verdict = await screen.findByTestId("sandbox-verdict");
       expect(verdict).toHaveAttribute("data-verdict", "pass");
       expect(verdict).toHaveTextContent("Sentinels intact 52 / 52");
-      expect(verdict).toHaveTextContent("Junk removed 119 / 119");
-      expect(verdict).toHaveTextContent("Files outside the profile untouched 4 / 4");
-      expect(verdict).toHaveTextContent("Junctions refused: yes");
+      expect(verdict).toHaveTextContent("Junk removed 119 / 119 for the 9 rules cleaned");
+      expect(verdict).toHaveTextContent("Junction baits untouched 2 / 2");
+      expect(api.sandboxVerify).toHaveBeenCalledWith(["windows.temp"]);
     });
 
     it("names what was damaged or survived when it fails", async () => {
@@ -854,7 +855,7 @@ describe("CleanPanel", () => {
         sentinels_damaged: [String.raw`C:\sandbox\profile\Documents\thesis.docx`],
         junk_removed: 118,
         junk_remaining: [String.raw`C:\sandbox\profile\AppData\Local\Temp\stray.tmp`],
-        outside_intact: 3,
+        outside_intact: 1,
         junctions_refused: false,
       });
       await cleanOnce();
@@ -864,7 +865,39 @@ describe("CleanPanel", () => {
       expect(verdict).toHaveTextContent("Sentinels intact 51 / 52");
       expect(verdict).toHaveTextContent("thesis.docx");
       expect(verdict).toHaveTextContent("stray.tmp");
-      expect(verdict).toHaveTextContent("Junctions refused: no");
+      expect(verdict).toHaveTextContent("Junction baits untouched 1 / 2");
+      expect(verdict).toHaveTextContent("A junction the sandbox planted no longer stands.");
+    });
+
+    /// A verify that fails says nothing about the clean that succeeded: the
+    /// report used to be thrown away and replaced by the rules-error screen.
+    it("keeps the cleanup report when reading the sandbox back fails", async () => {
+      api.sandboxVerify.mockRejectedValue("No sandbox is active.");
+      await cleanOnce();
+
+      expect(await screen.findByTestId("clean-report")).toBeInTheDocument();
+      expect(screen.queryByTestId("rules-error")).toBeNull();
+      expect(screen.queryByTestId("sandbox-verdict")).toBeNull();
+      expect(await screen.findByTestId("sandbox-verdict-error")).toHaveTextContent(
+        "No sandbox is active.",
+      );
+    });
+
+    /// The sandbox exists to exercise everything: holding back the rules a
+    /// real profile would leave unchecked is the whole point of not being a
+    /// real profile.
+    it("starts with every available rule checked", async () => {
+      api.listRules.mockResolvedValue([...RULES, { ...RECYCLE_BIN, default_checked: false }]);
+      render(<CleanPanel sandbox={SANDBOX} />);
+      await screen.findByLabelText("Temporary files");
+      expect(screen.getByLabelText("Recycle Bin")).toBeChecked();
+    });
+
+    it("leaves the default selection alone outside the sandbox", async () => {
+      api.listRules.mockResolvedValue([...RULES, { ...RECYCLE_BIN, default_checked: false }]);
+      render(<CleanPanel />);
+      await screen.findByLabelText("Temporary files");
+      expect(screen.getByLabelText("Recycle Bin")).not.toBeChecked();
     });
   });
 });

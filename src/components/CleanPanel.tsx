@@ -96,14 +96,26 @@ export function verdictPasses(v: SandboxVerdict): boolean {
   );
 }
 
-/// One line of the verdict: a claim and the count that backs it.
-function VerdictLine({ label, got, of }: { label: string; got: number; of: number }) {
+/// One line of the verdict: a claim, the count that backs it, and optionally
+/// what the count is scoped to.
+function VerdictLine({
+  label,
+  got,
+  of,
+  scope,
+}: {
+  label: string;
+  got: number;
+  of: number;
+  scope?: string;
+}) {
   return (
     <li>
       {label}{" "}
       <span className="font-mono tnum">
         {formatCount(got)} / {formatCount(of)}
       </span>
+      {scope && <span className="text-muted-foreground"> {scope}</span>}
     </li>
   );
 }
@@ -141,13 +153,20 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
           label="Junk removed"
           got={verdict.junk_removed}
           of={verdict.junk_total}
+          scope={`for the ${formatCount(verdict.rules_cleaned)} ${
+            verdict.rules_cleaned === 1 ? "rule" : "rules"
+          } cleaned`}
         />
         <VerdictLine
-          label="Files outside the profile untouched"
+          label="Junction baits untouched"
           got={verdict.outside_intact}
           of={verdict.outside_total}
         />
-        <li>Junctions refused: {verdict.junctions_refused ? "yes" : "no"}</li>
+        {!verdict.junctions_refused && (
+          <li className="text-destructive">
+            A junction the sandbox planted no longer stands.
+          </li>
+        )}
       </ul>
       {verdict.sentinels_damaged.length > 0 && (
         <>
@@ -195,6 +214,9 @@ export function CleanPanel({
   const [results, setResults] = useState<ScanResult[] | null>(null);
   const [report, setReport] = useState<CleanReport | null>(null);
   const [verdict, setVerdict] = useState<SandboxVerdict | null>(null);
+  /// The verify call failed. Shown inside the verdict card as a line of its
+  /// own: it says nothing about the clean, which has already been reported.
+  const [verdictError, setVerdictError] = useState<string | null>(null);
   const [mode, setMode] = useState<CleanMode>("auto");
   const [browsers, setBrowsers] = useState<string[]>([]);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
@@ -228,7 +250,17 @@ export function CleanPanel({
     listRules()
       .then((loaded) => {
         setRules(loaded);
-        setSelected(new Set(loaded.filter((r) => r.default_checked).map((r) => r.id)));
+        // In the sandbox every rule that applies starts checked: the point of
+        // the profile is to exercise the whole catalogue against it, and the
+        // usual caution behind `default_checked` — irreversible deletions in a
+        // profile the user cares about — has no subject here.
+        setSelected(
+          new Set(
+            loaded
+              .filter((r) => (sandbox ? !r.unavailable_reason : r.default_checked))
+              .map((r) => r.id)
+          )
+        );
       })
       .catch((err) => setRulesError(String(err)));
     runningBrowsers()
@@ -359,6 +391,7 @@ export function CleanPanel({
     setBusyAction("scan");
     setReport(null);
     setVerdict(null);
+    setVerdictError(null);
     setConfirming(false);
     setProgress(null);
     scanPending.current = true;
@@ -379,14 +412,26 @@ export function CleanPanel({
     setConfirming(false);
     setBusyAction("clean");
     setVerdict(null);
+    setVerdictError(null);
+    // What was cleaned, captured before `results` is dropped: the verdict is
+    // scoped to these rules, so it must be the list Clean was actually given.
+    const cleaned = cleanIds;
     try {
-      const done = await clean(cleanIds, mode);
+      const done = await clean(cleaned, mode);
       setReport(done);
       setResults(null);
       toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
       // The whole point of the sandbox: read the disk back against what it
-      // promised, instead of trusting the report the cleaner just wrote.
-      if (sandbox) setVerdict(await sandboxVerify());
+      // promised, instead of trusting the report the cleaner just wrote. In
+      // its own try: a verify that fails says nothing about the clean that
+      // succeeded, and must not replace the report with an error screen.
+      if (sandbox) {
+        try {
+          setVerdict(await sandboxVerify(cleaned));
+        } catch (err) {
+          setVerdictError(String(err));
+        }
+      }
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -633,6 +678,22 @@ export function CleanPanel({
         </div>
 
         {verdict && <SandboxVerdictCard verdict={verdict} />}
+
+        {verdictError && (
+          <section
+            data-testid="sandbox-verdict-error"
+            className="rounded-lg border border-warning/40 bg-warning/12 p-5 text-sm"
+          >
+            <h2 className="eyebrow text-muted-foreground">Sandbox verdict</h2>
+            <p className="mt-2">
+              The cleanup ran; reading the sandbox back failed, so there is no
+              verdict this time.
+            </p>
+            <p className="mt-1 font-mono text-xs text-muted-foreground">
+              {verdictError}
+            </p>
+          </section>
+        )}
 
         {report && (
           <section
