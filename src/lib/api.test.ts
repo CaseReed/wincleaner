@@ -11,6 +11,7 @@ import {
   setStartupEnabled,
   runningBrowsers,
   groupByCategory,
+  filterRules,
   type RuleSummary,
 } from "./api";
 
@@ -53,12 +54,29 @@ describe("api", () => {
 
   it("groupByCategory preserves the order the categories appear in", () => {
     const rules: RuleSummary[] = [
-      { id: "a", category: "System", label: "A", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
-      { id: "b", category: "Browsers", label: "B", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
-      { id: "c", category: "System", label: "C", risk: "medium", kind: "files", default_checked: false, unavailable_reason: null },
+      { id: "a", category: "System", label: "A", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
+      { id: "b", category: "Browsers", label: "B", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
+      { id: "c", category: "System", label: "C", risk: "medium", kind: "files", default_checked: false, note: null, unavailable_reason: null },
     ];
     const grouped = groupByCategory(rules);
     expect(grouped.map(([cat]) => cat)).toEqual(["System", "Browsers"]);
     expect(grouped[0][1].map((r) => r.id)).toEqual(["a", "c"]);
+  });
+
+  describe("filterRules", () => {
+    const rules = [
+      { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
+      { id: "winapp2.7-zip", category: "Applications", label: "7-Zip", risk: "medium", kind: "files", default_checked: false, note: null, unavailable_reason: null },
+    ] as RuleSummary[];
+
+    it("returns everything for an empty query", () => {
+      expect(filterRules(rules, "   ")).toHaveLength(2);
+    });
+
+    it("matches the label, case-insensitively, across categories", () => {
+      expect(filterRules(rules, "zip").map((r) => r.id)).toEqual(["winapp2.7-zip"]);
+      expect(filterRules(rules, "TEMPORARY").map((r) => r.id)).toEqual(["windows.temp"]);
+      expect(filterRules(rules, "nothing")).toEqual([]);
+    });
   });
 });

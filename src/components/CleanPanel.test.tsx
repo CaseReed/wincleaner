@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 const api = {
   listRules: vi.fn(),
+  rulesSummary: vi.fn(),
   scan: vi.fn(),
   clean: vi.fn(),
   runningBrowsers: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     listRules: () => api.listRules(),
+    rulesSummary: () => api.rulesSummary(),
     scan: (ids: string[]) => api.scan(ids),
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
@@ -42,6 +44,12 @@ describe("CleanPanel", () => {
     api.scan.mockReset().mockResolvedValue([]);
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     api.runningBrowsers.mockReset().mockResolvedValue([]);
+    api.rulesSummary.mockReset().mockResolvedValue({
+      native: 10,
+      winapp2_retained: 1200,
+      winapp2_detected: 42,
+      winapp2_dropped: 900,
+    });
   });
 
   it("shows the rules grouped by category", async () => {
@@ -305,5 +313,88 @@ describe("CleanPanel", () => {
     expect(confirmation).toHaveTextContent("Recycle Bin");
     // In Recycle Bin mode, temporary files stay recoverable.
     expect(confirmation).not.toHaveTextContent("Temporary files");
+  });
+
+  const APP_RULE = {
+    id: "winapp2.7-zip",
+    category: "Applications",
+    label: "7-Zip",
+    risk: "medium",
+    kind: "files",
+    default_checked: false,
+    note: "This deletes the saved archive history.",
+    unavailable_reason: null,
+  };
+
+  it("collapses the Applications category by default and expands it on demand", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    // The category header is there with its count, the rows are not.
+    expect(screen.getByText("Applications")).toBeInTheDocument();
+    expect(screen.queryByLabelText("7-Zip")).toBeNull();
+
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    expect(await screen.findByLabelText("7-Zip")).toBeInTheDocument();
+    // The categories that were never collapsed stay visible.
+    expect(screen.getByLabelText("Temporary files")).toBeInTheDocument();
+  });
+
+  it("filters the rules by label across every category", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    await user.type(screen.getByTestId("rule-search"), "zip");
+
+    // A search reaches into the collapsed category: hiding a match would make
+    // the search field lie.
+    expect(await screen.findByLabelText("7-Zip")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Temporary files")).toBeNull();
+    expect(screen.queryByText("System")).toBeNull();
+  });
+
+  it("shows the rule counts and credits Winapp2", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+
+    const summary = await screen.findByTestId("rules-summary");
+    expect(summary).toHaveTextContent("10 built-in");
+    expect(summary).toHaveTextContent("42");
+    expect(summary).toHaveTextContent("1,200");
+
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    expect(await screen.findByTestId("winapp2-attribution")).toHaveTextContent(
+      "Winapp2 (CC-BY-SA 4.0)"
+    );
+  });
+
+  it("shows the note carried by a rule", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    expect(await screen.findByTestId("warning-winapp2.7-zip")).toHaveTextContent(
+      "saved archive history"
+    );
+  });
+
+  it("does not check the Winapp2 rules by default", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByTestId("toggle-category-Applications"));
+    expect(await screen.findByLabelText("7-Zip")).not.toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await waitFor(() =>
+      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+    );
   });
 });

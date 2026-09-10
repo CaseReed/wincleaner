@@ -14,9 +14,19 @@ export interface RuleSummary {
   /// Checkbox ticked on first launch. False for anything we do not clean
   /// without having explicitly asked for it (see src-tauri/rules.toml).
   default_checked: boolean;
+  /// Inline warning carried by the rule (Winapp2 `Warning=`). Shown under the
+  /// row.
+  note: string | null;
   /// Set when the rule does not apply on this machine (variable missing, or
   /// pointing outside the profile). The row is greyed out and inert.
   unavailable_reason: string | null;
+}
+
+export interface RulesSummary {
+  native: number;
+  winapp2_retained: number;
+  winapp2_detected: number;
+  winapp2_dropped: number;
 }
 
 export interface ScanResult {
@@ -62,6 +72,10 @@ export function runningBrowsers(): Promise<string[]> {
   return invoke<string[]>("running_browsers");
 }
 
+export function rulesSummary(): Promise<RulesSummary> {
+  return invoke<RulesSummary>("rules_summary");
+}
+
 export function listStartup(): Promise<StartupEntry[]> {
   return invoke<StartupEntry[]>("list_startup");
 }
@@ -82,4 +96,12 @@ export function groupByCategory(rules: RuleSummary[]): [string, RuleSummary[]][]
     buckets.get(rule.category)!.push(rule);
   }
   return order.map((category) => [category, buckets.get(category)!]);
+}
+
+/// Filters on the label, across every category. The rule id is deliberately
+/// not searched: `winapp2.7-zip` is an implementation detail.
+export function filterRules(rules: RuleSummary[], query: string): RuleSummary[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return rules;
+  return rules.filter((rule) => rule.label.toLowerCase().includes(needle));
 }

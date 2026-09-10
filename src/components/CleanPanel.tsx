@@ -13,13 +13,16 @@ import { ReclaimGauge } from "@/components/ReclaimGauge";
 import { formatBytes, formatCount } from "@/lib/format";
 import {
   clean,
+  filterRules,
   groupByCategory,
   listRules,
+  rulesSummary,
   runningBrowsers,
   scan,
   type CleanMode,
   type CleanReport,
   type RuleSummary,
+  type RulesSummary,
   type ScanResult,
 } from "@/lib/api";
 
@@ -28,6 +31,15 @@ const MODE_LABEL: Record<CleanMode, string> = {
   trash: "Recycle Bin",
   permanent: "Permanent",
 };
+
+/// Categories that start folded: the converted Winapp2 rules are hundreds of
+/// rows, none of them checked by default, and unfolding them is a deliberate
+/// act.
+const COLLAPSED_BY_DEFAULT = ["Applications"];
+
+const WINAPP2_URL = "https://github.com/MoscaDotTo/Winapp2";
+
+const RULE_COUNT = new Intl.NumberFormat("en-US");
 
 /// Whether this mode will destroy this rule's content with no way back. The
 /// Recycle Bin rule always is: the deletion mode does not apply to it.
@@ -59,6 +71,9 @@ export function CleanPanel() {
   const [busy, setBusy] = useState(false);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [summary, setSummary] = useState<RulesSummary | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -73,9 +88,16 @@ export function CleanPanel() {
     runningBrowsers()
       .then(setBrowsers)
       .catch(() => setBrowsers([]));
+    rulesSummary()
+      .then(setSummary)
+      .catch(() => setSummary(null));
   }, [reloadKey]);
 
-  const grouped = useMemo(() => groupByCategory(rules), [rules]);
+  const searching = query.trim().length > 0;
+  const grouped = useMemo(
+    () => groupByCategory(filterRules(rules, query)),
+    [rules, query]
+  );
   const total = useMemo(
     () => (results ?? []).reduce((sum, r) => sum + r.total_bytes, 0),
     [results]
@@ -109,6 +131,22 @@ export function CleanPanel() {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  }
+
+  /// A search reaches into a folded category: a match the user cannot see
+  /// would make the search field lie.
+  function isOpen(category: string): boolean {
+    if (searching) return true;
+    return expanded.has(category) || !COLLAPSED_BY_DEFAULT.includes(category);
+  }
+
+  function toggleCategory(category: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
       return next;
     });
   }
@@ -213,24 +251,73 @@ export function CleanPanel() {
           )}
         </section>
 
+        <div className="flex flex-col gap-1.5">
+          <input
+            data-testid="rule-search"
+            type="search"
+            aria-label="Search rules"
+            placeholder="Search rules"
+            className="h-9 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {summary && (
+            <p data-testid="rules-summary" className="px-1 text-xs text-muted-foreground">
+              <span className="font-mono tnum">{RULE_COUNT.format(summary.native)}</span>{" "}
+              built-in rules ·{" "}
+              <span className="font-mono tnum">
+                {RULE_COUNT.format(summary.winapp2_detected)}
+              </span>{" "}
+              Winapp2 rules detected out of{" "}
+              <span className="font-mono tnum">
+                {RULE_COUNT.format(summary.winapp2_retained)}
+              </span>{" "}
+              converted (
+              <span className="font-mono tnum">
+                {RULE_COUNT.format(summary.winapp2_dropped)}
+              </span>{" "}
+              entries not supported)
+            </p>
+          )}
+        </div>
+
         {grouped.map(([category, catRules]) => {
           const catBytes = (results ?? [])
             .filter((r) => catRules.some((rule) => rule.id === r.rule_id))
             .reduce((sum, r) => sum + r.total_bytes, 0);
+          const collapsible = COLLAPSED_BY_DEFAULT.includes(category);
+          const open = isOpen(category);
+          const heading = (
+            <>
+              <h2 className="eyebrow text-muted-foreground">{category}</h2>
+              <p className="text-xs text-muted-foreground">
+                {RULE_COUNT.format(catRules.length)} rules
+                {results && (
+                  <>
+                    {" · "}
+                    <span className="font-mono tnum">{formatBytes(catBytes)}</span>
+                  </>
+                )}
+              </p>
+            </>
+          );
           return (
             <section key={category} className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between px-1">
-                <h2 className="eyebrow text-muted-foreground">{category}</h2>
-                <p className="text-xs text-muted-foreground">
-                  {catRules.length} rules
-                  {results && (
-                    <>
-                      {" · "}
-                      <span className="font-mono tnum">{formatBytes(catBytes)}</span>
-                    </>
-                  )}
-                </p>
-              </div>
+              {collapsible ? (
+                <button
+                  type="button"
+                  data-testid={`toggle-category-${category}`}
+                  aria-expanded={open}
+                  onClick={() => toggleCategory(category)}
+                  className="flex items-baseline justify-between gap-6 rounded px-1 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  {heading}
+                </button>
+              ) : (
+                <div className="flex items-baseline justify-between px-1">{heading}</div>
+              )}
+              {open && (
+                <>
               <ul className="overflow-hidden rounded-lg border bg-card">
                 {catRules.map((rule, index) => {
                   const result = (results ?? []).find((r) => r.rule_id === rule.id);
@@ -315,6 +402,14 @@ export function CleanPanel() {
                           Close any running installers before cleaning.
                         </p>
                       )}
+                      {rule.note && (
+                        <p
+                          data-testid={`warning-${rule.id}`}
+                          className="px-4 pb-3 pl-11 text-xs text-warning-foreground"
+                        >
+                          {rule.note}
+                        </p>
+                      )}
                       {result && result.paths.length > 0 && (
                         <Collapsible
                           open={openPaths.has(rule.id)}
@@ -341,6 +436,17 @@ export function CleanPanel() {
                   );
                 })}
               </ul>
+                  {collapsible && (
+                    <p
+                      data-testid="winapp2-attribution"
+                      className="px-1 text-xs text-muted-foreground"
+                    >
+                      Community rules from Winapp2 (CC-BY-SA 4.0) —{" "}
+                      <span className="font-mono">{WINAPP2_URL}</span>
+                    </p>
+                  )}
+                </>
+              )}
             </section>
           );
         })}
