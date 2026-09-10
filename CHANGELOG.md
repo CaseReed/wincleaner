@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   junction. Nothing real is touched: the environment, both recycle-bin calls
   and the move-to-recycle-bin call are injected. See
   [`docs/safety-harness.md`](docs/safety-harness.md).
+- **The harness is proven by mutation.** Each containment guard now has a
+  fixture that makes it load-bearing, and removing that guard makes the harness
+  fail: a junction planted on a walk root (`scan::confined_root`), a directory
+  swapped for a junction between the internal re-scan and the deletion
+  (`clean::deletable_path`), a rule set carrying `..` segments loaded through
+  the real loader (`rules::normalize`), and a sentinel one level below each
+  non-recursive rule carrying that rule's own extension
+  (`scan::build_set`'s `literal_separator`). The one guard with no
+  privilege-free construct to exercise it — the reparse `filter_entry` in
+  `scan::collect` — is documented as defence in depth rather than claimed as
+  proven.
 
 ## [0.4.0] - 2026-09-10
 

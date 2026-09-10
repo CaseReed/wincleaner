@@ -80,7 +80,12 @@ apps.
   destroy with no way back.
 - **Proven on every push.** An automated harness runs the real scan and clean
   code against a synthetic profile full of decoy user data and junctions, and
-  fails the build if a single file that should have survived does not — see
+  fails the build if a single file that should have survived does not — and it
+  is built so that removing any one of the containment guards (the walk-root
+  refusal, the pre-deletion re-check, the `..` refusal, the non-recursive glob
+  boundary) makes it fail, which is checked by applying each removal and
+  recording the assertion that fires; one guard is documented as defence in
+  depth that no unelevated test can exercise — see
   [`docs/safety-harness.md`](docs/safety-harness.md).
 
 One exception deserves its own paragraph: the **Recycle Bin** rule goes through
