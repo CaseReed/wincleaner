@@ -1,11 +1,15 @@
-use crate::clean::{clean_rule, CleanMode, CleanReport, SkippedItem};
+use crate::clean::{clean_rule, clean_rule_with_trash, CleanMode, CleanReport, SkippedItem};
 use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
-use crate::scan::{scan_rule, ScanResult};
+use crate::sandbox::{
+    full_catalogue, resolved_patterns, sandbox_recycle_empty, sandbox_recycle_query, sandbox_trash,
+    verify, Fixture, SandboxManifest, SandboxSummary, SandboxVerdict,
+};
+use crate::scan::{scan_rule, scan_rule_with_api, ScanResult};
 use crate::startup::StartupEntry;
 use crate::update::{check_with, http_get, UpdateCheck, LATEST_RELEASE_URL};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use sysinfo::System;
 use tauri::Emitter;
@@ -101,8 +105,8 @@ pub fn catalogue() -> Result<&'static Catalogue, String> {
 /// The catalogue holds thousands of Winapp2 rules: a linear scan per requested
 /// id turns "clean everything selected" into thousands of scans of thousands of
 /// rules. The index is built once per call and dropped with it.
-fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
-    let by_id: HashMap<&str, &Rule> = catalogue()?
+fn pick_rules(catalogue: &Catalogue, rule_ids: &[String]) -> Result<Vec<Rule>, String> {
+    let by_id: HashMap<&str, &Rule> = catalogue
         .rules
         .iter()
         .map(|r| (r.id.as_str(), r))
@@ -116,6 +120,10 @@ fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
                 .ok_or_else(|| format!("unknown rule: \"{id}\""))
         })
         .collect()
+}
+
+fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
+    pick_rules(catalogue()?, rule_ids)
 }
 
 fn summarize(rule: Rule) -> RuleSummary {
@@ -150,13 +158,19 @@ pub fn running_browsers_from(process_names: &[String]) -> Vec<String> {
 /// the startup warm-up has not finished yet, and that must not happen on the
 /// thread pumping the window events.
 #[tauri::command]
-pub async fn list_rules() -> Result<Vec<RuleSummary>, String> {
-    blocking(rule_summaries).await
+pub async fn list_rules(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<Vec<RuleSummary>, String> {
+    let state = state.inner().clone();
+    blocking(move || rule_summaries_in(&state)).await
 }
 
 #[tauri::command]
-pub async fn rules_summary() -> Result<RulesSummary, String> {
-    blocking(|| Ok(catalogue()?.summary)).await
+pub async fn rules_summary(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<RulesSummary, String> {
+    let state = state.inner().clone();
+    blocking(move || rules_summary_in(&state)).await
 }
 
 /// Runs blocking work off the main thread. A synchronous Tauri command runs on
@@ -230,9 +244,14 @@ fn scan_rules(
 /// not once it has returned. An emit that fails (window already gone) must
 /// never abort a scan that is still legitimate work.
 #[tauri::command]
-pub async fn scan(app: tauri::AppHandle, rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
+pub async fn scan(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SandboxState>,
+    rule_ids: Vec<String>,
+) -> Result<Vec<ScanResult>, String> {
+    let state = state.inner().clone();
     blocking(move || {
-        scan_rules(&rule_ids, &mut |step| {
+        scan_rules_in(&state, &rule_ids, &mut |step| {
             let _ = app.emit("scan-progress", step);
         })
     })
@@ -288,8 +307,13 @@ fn clean_rules(rule_ids: &[String], mode: CleanMode) -> Result<CleanReport, Stri
 }
 
 #[tauri::command]
-pub async fn clean(rule_ids: Vec<String>, mode: CleanMode) -> Result<CleanReport, String> {
-    blocking(move || clean_rules(&rule_ids, mode)).await
+pub async fn clean(
+    state: tauri::State<'_, SandboxState>,
+    rule_ids: Vec<String>,
+    mode: CleanMode,
+) -> Result<CleanReport, String> {
+    let state = state.inner().clone();
+    blocking(move || clean_rules_in(&state, &rule_ids, mode)).await
 }
 
 #[tauri::command]
@@ -364,14 +388,287 @@ pub async fn check_for_updates() -> Result<UpdateCheck, String> {
 }
 
 #[tauri::command]
-pub async fn list_startup() -> Result<Vec<StartupEntry>, String> {
-    blocking(|| crate::startup::list_startup().map_err(|e| e.to_string())).await
+pub async fn list_startup(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<Vec<StartupEntry>, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        refuse_startup_in_sandbox(&state)?;
+        crate::startup::list_startup().map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub async fn set_startup_enabled(id: String, enabled: bool) -> Result<(), String> {
-    blocking(move || crate::startup::set_startup_enabled(&id, enabled).map_err(|e| e.to_string()))
-        .await
+pub async fn set_startup_enabled(
+    state: tauri::State<'_, SandboxState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        refuse_startup_in_sandbox(&state)?;
+        crate::startup::set_startup_enabled(&id, enabled).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+
+// ---------------------------------------------------------------------------
+// Sandbox mode.
+//
+// A user who wants proof that WinCleaner deletes only junk should not have to
+// take CI's word for it. `sandbox_enter` builds, on their own machine, the very
+// fixture the safety harness runs against, points the whole engine at it, and
+// lets them Analyze and Clean for real; `sandbox_verify` then reads the disk
+// back against the manifest.
+//
+// Nothing real is reachable while a sandbox is active:
+//
+// * the four rule variables all resolve inside the sandbox root, so the
+//   containment the application already enforces confines every walk and every
+//   deletion to it (`sandbox.rs`, module doc);
+// * the recycle-bin query and empty are the sandbox stand-ins, so
+//   `SHQueryRecycleBinW` and `SHEmptyRecycleBinW` are never called;
+// * `Trash` mode moves the file into `<root>\recycle-bin` instead of calling
+//   `trash::delete`, so the real Recycle Bin of the volume is never written to
+//   either;
+// * `list_startup` and `set_startup_enabled` refuse outright, because they read
+//   and write the real `HKCU` keys and no sandbox can stand in for those.
+// ---------------------------------------------------------------------------
+
+/// A sandbox that is open right now: the fixture on disk, the catalogue built
+/// against it, and the promise `sandbox_verify` checks the disk against.
+pub struct ActiveSandbox {
+    fixture: Fixture,
+    catalogue: Catalogue,
+    manifest: SandboxManifest,
+    summary: SandboxSummary,
+}
+
+/// Managed by Tauri. The `Arc` is what lets a command clone the handle and take
+/// it into `spawn_blocking`: a `State` borrow cannot cross that boundary, and
+/// every sandbox operation is disk work that has no business on the thread
+/// pumping the window events.
+#[derive(Clone, Default)]
+pub struct SandboxState(Arc<Mutex<Option<ActiveSandbox>>>);
+
+fn lock(state: &SandboxState) -> std::sync::MutexGuard<'_, Option<ActiveSandbox>> {
+    state.0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Enough entropy to keep two runs apart, with no new dependency: the process
+/// id and the nanoseconds since the epoch.
+fn sandbox_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", std::process::id(), nanos)
+}
+
+fn build_sandbox(root: &std::path::Path) -> Result<ActiveSandbox, String> {
+    let mut fixture = Fixture::build_in(root)?;
+    let (native, winapp2, report) = full_catalogue(&fixture)?;
+
+    // One concrete file per converted glob, exactly as the harness does, so the
+    // Winapp2 rules delete something instead of walking empty trees.
+    let patterns = resolved_patterns(&fixture, &winapp2)?;
+    fixture.add_winapp2_junk(&patterns);
+
+    let rules_summary = RulesSummary {
+        native: native.len() as u32,
+        winapp2_retained: report.retained,
+        winapp2_detected: winapp2.len() as u32,
+        winapp2_dropped: report.dropped(),
+    };
+    let mut rules = native;
+    rules.extend(winapp2);
+
+    let manifest = fixture.manifest();
+    let summary = SandboxSummary {
+        root: manifest.root.display().to_string(),
+        sentinels: manifest.sentinels.len() as u32,
+        junk: manifest.junk.len() as u32,
+        winapp2_rules: rules_summary.winapp2_detected,
+    };
+    Ok(ActiveSandbox {
+        fixture,
+        catalogue: Catalogue {
+            rules,
+            summary: rules_summary,
+        },
+        manifest,
+        summary,
+    })
+}
+
+/// Creates the sandbox and switches the engine onto it. Refuses if one is
+/// already active: two sandboxes would mean two catalogues and one verdict.
+pub fn enter_sandbox(state: &SandboxState) -> Result<SandboxSummary, String> {
+    let mut guard = lock(state);
+    if guard.is_some() {
+        return Err("A sandbox is already active. Leave it before creating another.".to_string());
+    }
+    let root = std::env::temp_dir().join(format!("wincleaner-sandbox-{}", sandbox_token()));
+    std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    match build_sandbox(&root) {
+        Ok(active) => {
+            let summary = active.summary.clone();
+            *guard = Some(active);
+            Ok(summary)
+        }
+        Err(err) => {
+            // A half-built sandbox is not left behind in `%TEMP%`.
+            let _ = std::fs::remove_dir_all(&root);
+            Err(err)
+        }
+    }
+}
+
+/// Removes the sandbox directory and hands the real catalogue back.
+///
+/// The junctions are unlinked with `remove_dir` **before** the tree goes:
+/// `remove_dir_all` on a junction is free to descend into it, which would
+/// delete what lives on the other side.
+pub fn leave_sandbox(state: &SandboxState) -> Result<(), String> {
+    let mut guard = lock(state);
+    let active = guard.take().ok_or("No sandbox is active.")?;
+    for link in &active.manifest.junctions {
+        let _ = std::fs::remove_dir(link);
+    }
+    std::fs::remove_dir_all(&active.manifest.root).map_err(|e| e.to_string())
+}
+
+pub fn sandbox_status_of(state: &SandboxState) -> Option<SandboxSummary> {
+    lock(state).as_ref().map(|a| a.summary.clone())
+}
+
+pub fn verify_sandbox(state: &SandboxState) -> Result<SandboxVerdict, String> {
+    let guard = lock(state);
+    let active = guard.as_ref().ok_or("No sandbox is active.")?;
+    Ok(verify(&active.manifest))
+}
+
+/// Why the Startup screen steps aside while a sandbox is active. It reads and
+/// writes the real `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` keys;
+/// there is nothing to point at a sandbox root, so it refuses instead of
+/// pretending.
+pub const STARTUP_IN_SANDBOX: &str =
+    "Startup programs are unavailable while the sandbox is active: they live in the real \
+     Windows registry, which the sandbox never touches. Leave the sandbox to manage them.";
+
+pub fn refuse_startup_in_sandbox(state: &SandboxState) -> Result<(), String> {
+    if lock(state).is_some() {
+        return Err(STARTUP_IN_SANDBOX.to_string());
+    }
+    Ok(())
+}
+
+/// The rule list the user is looking at: the sandbox catalogue while one is
+/// active, the machine's own otherwise.
+pub fn rule_summaries_in(state: &SandboxState) -> Result<Vec<RuleSummary>, String> {
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            return Ok(active
+                .catalogue
+                .rules
+                .iter()
+                .cloned()
+                .map(summarize)
+                .collect());
+        }
+    }
+    rule_summaries()
+}
+
+pub fn rules_summary_in(state: &SandboxState) -> Result<RulesSummary, String> {
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            return Ok(active.catalogue.summary);
+        }
+    }
+    Ok(catalogue()?.summary)
+}
+
+pub fn scan_rules_in(
+    state: &SandboxState,
+    rule_ids: &[String],
+    progress: &mut dyn FnMut(ScanProgress),
+) -> Result<Vec<ScanResult>, String> {
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            let rules = pick_rules(&active.catalogue, rule_ids)?;
+            let lookup = |n: &str| active.fixture.lookup(n);
+            return scan_rules_with(
+                &rules,
+                |r| {
+                    scan_rule_with_api(r, &lookup, &sandbox_recycle_query).map_err(|e| e.to_string())
+                },
+                progress,
+            );
+        }
+    }
+    scan_rules(rule_ids, progress)
+}
+
+pub fn clean_rules_in(
+    state: &SandboxState,
+    rule_ids: &[String],
+    mode: CleanMode,
+) -> Result<CleanReport, String> {
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            let rules = pick_rules(&active.catalogue, rule_ids)?;
+            let lookup = |n: &str| active.fixture.lookup(n);
+            let root = active.manifest.root.clone();
+            let trash = |p: &std::path::Path| sandbox_trash(&root, p);
+            return Ok(clean_rules_with(rules, mode, |rule, mode| {
+                clean_rule_with_trash(
+                    rule,
+                    mode,
+                    &lookup,
+                    &sandbox_recycle_query,
+                    &sandbox_recycle_empty,
+                    &trash,
+                )
+                .map_err(|e| e.to_string())
+            }));
+        }
+    }
+    clean_rules(rule_ids, mode)
+}
+
+#[tauri::command]
+pub async fn sandbox_enter(state: tauri::State<'_, SandboxState>) -> Result<SandboxSummary, String> {
+    let state = state.inner().clone();
+    blocking(move || enter_sandbox(&state)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_leave(state: tauri::State<'_, SandboxState>) -> Result<(), String> {
+    let state = state.inner().clone();
+    blocking(move || leave_sandbox(&state)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_status(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<Option<SandboxSummary>, String> {
+    let state = state.inner().clone();
+    blocking(move || Ok(sandbox_status_of(&state))).await
+}
+
+#[tauri::command]
+pub async fn sandbox_verify(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<SandboxVerdict, String> {
+    let state = state.inner().clone();
+    blocking(move || verify_sandbox(&state)).await
 }
 
 #[cfg(test)]
@@ -803,12 +1100,195 @@ mod tests {
         assert_eq!(calls.get(), 2);
     }
 
+
+    // -----------------------------------------------------------------------
+    // Sandbox mode.
+    //
+    // Every test here builds its own state and its own directory under
+    // `%TEMP%`, and leaves the sandbox at the end. Nothing reaches the real
+    // profile, the real Recycle Bin or the real registry: the four rule
+    // variables are mapped inside the sandbox root, both recycle-bin calls are
+    // the sandbox stand-ins, and the startup commands are refused outright.
+    // -----------------------------------------------------------------------
+
+    /// Scans every rule of the active sandbox, discarding the progress events.
+    fn sandbox_scan_all(state: &SandboxState) -> Vec<ScanResult> {
+        let ids: Vec<String> = rule_summaries_in(state)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        scan_rules_in(state, &ids, &mut |_| {}).unwrap()
+    }
+
+    #[test]
+    fn entering_a_sandbox_builds_the_native_rules_and_the_detected_winapp2_ones() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let rules = rule_summaries_in(&state).unwrap();
+
+        let native = rules.iter().filter(|r| !r.id.starts_with("winapp2.")).count();
+        assert_eq!(native, 9, "rules.toml declares nine native rules");
+        assert!(
+            summary.winapp2_rules >= 10,
+            "the fixture must make at least ten Winapp2 entries detected, got {}",
+            summary.winapp2_rules
+        );
+        assert_eq!(rules.len(), native + summary.winapp2_rules as usize);
+        assert!(summary.sentinels > 0 && summary.junk > 0);
+        assert!(
+            std::path::Path::new(&summary.root).is_dir(),
+            "the sandbox root must exist: {}",
+            summary.root
+        );
+        assert_eq!(sandbox_status_of(&state).as_ref(), Some(&summary));
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// The containment claim of the whole item, asserted where it can actually
+    /// be broken: a scan driven by the sandbox lookup may name nothing outside
+    /// the sandbox root, junction targets included.
+    #[test]
+    fn a_sandbox_scan_never_lists_a_path_outside_the_sandbox_root() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let root = summary.root.to_lowercase();
+
+        let scans = sandbox_scan_all(&state);
+        let mut seen = 0usize;
+        for scan in &scans {
+            for path in &scan.paths {
+                seen += 1;
+                assert!(
+                    path.to_lowercase().starts_with(&root),
+                    "rule \"{}\" named a path outside the sandbox root: {path}",
+                    scan.rule_id
+                );
+            }
+        }
+        assert!(seen > 0, "the scan must have found something to compare");
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// The end-to-end promise: the real engine, driven through the real
+    /// `scan_rules_with` and `clean_rules_with`, removes every junk file and
+    /// damages no sentinel — and the verdict says so.
+    #[test]
+    fn cleaning_the_whole_sandbox_removes_the_junk_and_spares_every_sentinel() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+
+        let ids: Vec<String> = rule_summaries_in(&state)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        let scans = scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        assert!(scans.iter().map(|s| s.file_count).sum::<u64>() > 0);
+
+        let report = clean_rules_in(&state, &ids, CleanMode::Permanent).unwrap();
+        assert!(report.deleted > 0);
+
+        let verdict = verify_sandbox(&state).unwrap();
+        assert_eq!(
+            verdict.sentinels_damaged,
+            Vec::<String>::new(),
+            "a sentinel was deleted or rewritten"
+        );
+        assert_eq!(verdict.sentinels_intact, verdict.sentinels_total);
+        assert_eq!(verdict.sentinels_total, summary.sentinels);
+        assert_eq!(
+            verdict.junk_remaining,
+            Vec::<String>::new(),
+            "junk survived the clean"
+        );
+        assert_eq!(verdict.junk_removed, verdict.junk_total);
+        assert_eq!(verdict.junk_total, summary.junk);
+        assert_eq!(verdict.outside_intact, verdict.outside_total);
+        assert!(verdict.outside_total > 0, "the fixture plants files outside");
+        assert!(verdict.junctions_refused);
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// `Trash` mode never reaches `trash::delete`, and therefore never the real
+    /// Recycle Bin: the file is moved into `<root>\recycle-bin` instead.
+    #[test]
+    fn trash_mode_moves_sandbox_files_into_the_sandbox_bin() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let bin = std::path::Path::new(&summary.root).join(crate::sandbox::SANDBOX_BIN);
+
+        let ids = vec!["windows.temp".to_string()];
+        scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        let report = clean_rules_in(&state, &ids, CleanMode::Trash).unwrap();
+        assert!(report.deleted > 0);
+
+        let moved = std::fs::read_dir(&bin).unwrap().count();
+        assert_eq!(
+            moved as u64, report.deleted,
+            "every file Trash mode removed must be in {}",
+            bin.display()
+        );
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    #[test]
+    fn a_second_sandbox_is_refused_while_one_is_active() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let err = enter_sandbox(&state).unwrap_err();
+        assert!(err.contains("already active"), "{err}");
+        leave_sandbox(&state).unwrap();
+    }
+
+    #[test]
+    fn leaving_removes_the_sandbox_directory_and_gives_the_real_catalogue_back() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let root = std::path::PathBuf::from(&summary.root);
+        assert!(root.is_dir());
+
+        leave_sandbox(&state).unwrap();
+
+        assert!(!root.exists(), "the sandbox directory must be gone");
+        assert!(sandbox_status_of(&state).is_none());
+        assert!(verify_sandbox(&state).is_err());
+        // Back on the machine's own catalogue, which holds far more rules than
+        // the sandbox's nine natives plus a handful of detected entries.
+        let rules = rule_summaries_in(&state).unwrap();
+        assert_eq!(rules.len(), catalogue().unwrap().rules.len());
+    }
+
+    /// The startup screen writes to the real `HKCU\...\Run` keys, which no
+    /// sandbox can stand in for: while one is active, both commands refuse.
+    #[test]
+    fn the_startup_commands_are_refused_while_a_sandbox_is_active() {
+        let state = SandboxState::default();
+        assert!(refuse_startup_in_sandbox(&state).is_ok());
+
+        enter_sandbox(&state).unwrap();
+        let err = refuse_startup_in_sandbox(&state).unwrap_err();
+        assert!(err.to_lowercase().contains("sandbox"), "{err}");
+        assert!(err.to_lowercase().contains("registry"), "{err}");
+
+        leave_sandbox(&state).unwrap();
+        assert!(refuse_startup_in_sandbox(&state).is_ok());
+    }
+
+    /// Goes through `blocking`, and therefore through `spawn_blocking`, exactly
+    /// like the `clean` command. The command itself is not called here because
+    /// it now takes a `tauri::State`, which only a running Tauri application
+    /// can hand out.
     #[test]
     fn cleaning_an_unknown_id_is_an_error() {
-        let err = tauri::async_runtime::block_on(clean(
-            vec!["nonexistent".to_string()],
-            crate::clean::CleanMode::Auto,
-        ))
+        let state = SandboxState::default();
+        let err = tauri::async_runtime::block_on(blocking(move || {
+            clean_rules_in(&state, &["nonexistent".to_string()], CleanMode::Auto)
+        }))
         .unwrap_err();
         assert!(err.contains("nonexistent"));
     }

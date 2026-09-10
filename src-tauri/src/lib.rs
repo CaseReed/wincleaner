@@ -1,6 +1,7 @@
 pub mod clean;
 pub mod commands;
 pub mod rules;
+pub mod sandbox;
 pub mod scan;
 pub mod startup;
 pub mod update;
@@ -60,6 +61,9 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        // Empty until the user asks for a sandbox in Settings: the engine runs
+        // against the real profile, as it always has.
+        .manage(commands::SandboxState::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_rules,
             commands::rules_summary,
@@ -69,6 +73,10 @@ pub fn run() {
             commands::list_startup,
             commands::set_startup_enabled,
             commands::check_for_updates,
+            commands::sandbox_enter,
+            commands::sandbox_leave,
+            commands::sandbox_status,
+            commands::sandbox_verify,
         ])
         .run(tauri::generate_context!())
         .expect("error while launching WinCleaner");

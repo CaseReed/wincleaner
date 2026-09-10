@@ -1,6 +1,10 @@
-//! Synthetic Windows profile for the safety harness.
+//! Synthetic Windows profile — the fixture the safety harness runs against,
+//! and the profile the Sandbox mode of the application builds so a user can
+//! watch the real engine clean a tree that is not theirs.
 //!
-//! Everything lives under one `TempDir`:
+//! Everything lives under one base directory. The harness passes a `TempDir`;
+//! `commands::enter_sandbox` passes a directory it creates under `%TEMP%` and
+//! removes again on leave.
 //!
 //! ```text
 //! <base>\profile\        the fake %USERPROFILE% (and %LOCALAPPDATA%, %APPDATA%, %TEMP%)
@@ -9,14 +13,21 @@
 //! <base>\outside3\       target of the junction planted ON a walk root (CrashDumps)
 //! <base>\outside4\       target of the junction swapped in AFTER the scan (TOCTOU)
 //! <base>\control\        never named by any rule; the snapshot proves it is untouched
+//! <base>\recycle-bin\    where Trash mode moves a sandbox file (see `sandbox_trash`)
 //! ```
 //!
-//! Junction cleanup: every junction is created inside the `TempDir`, so it is
-//! removed by `TempDir::drop`. That drop runs even when an assertion fails,
-//! because the test profile unwinds — `panic = "abort"` is set on the
-//! `[profile.release]` of `src-tauri/Cargo.toml` only, and `cargo test` builds
-//! the dev profile. A harness moved to a panic-abort profile would leak the
-//! junctions of a failing run into `%TEMP%`.
+//! All four variables the rules may use — `%USERPROFILE%`, `%LOCALAPPDATA%`,
+//! `%APPDATA%`, `%TEMP%` — are mapped **inside `<base>\profile`**, so the
+//! containment the application already enforces (textual `under_profile`, then
+//! `confined_root` and `deletable_path` replayed on disk) applies to the
+//! sandbox unchanged: nothing outside `<base>` can be named, walked or deleted.
+//!
+//! Junction cleanup: every junction is created inside the base directory, so
+//! the harness's `TempDir::drop` removes it. That drop runs even when an
+//! assertion fails, because the test profile unwinds — `panic = "abort"` is set
+//! on the `[profile.release]` of `src-tauri/Cargo.toml` only, and `cargo test`
+//! builds the dev profile. A harness moved to a panic-abort profile would leak
+//! the junctions of a failing run into `%TEMP%`.
 //!
 //! Two families of files, both written with a content marker derived from the
 //! path itself so a silent rewrite is caught as well as a deletion:
@@ -24,9 +35,15 @@
 //! * JUNK — every file a rule is expected to remove.
 //! * SENTINELS — every file that must survive, whatever rule is selected.
 
+use crate::rules::{
+    load_rules_with, memoized_env, EnvLookup, Rule, RULES_TOML,
+};
+use crate::winapp2::{
+    convert_with, detect_file_exists_with, detected_rules_with, ConversionReport, WINAPP2_INI,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
 use walkdir::WalkDir;
 
 /// Directory under `%TEMP%` swapped for a junction between the scan and the
@@ -52,7 +69,6 @@ pub struct Fixture {
     /// The junction links themselves (not their targets).
     pub junctions: Vec<PathBuf>,
     vars: HashMap<String, String>,
-    _dir: TempDir,
 }
 
 /// Windows hands `canonicalize` back a `\\?\` verbatim path. Rule patterns are
@@ -73,8 +89,13 @@ fn is_reparse(path: &Path) -> bool {
 }
 
 /// Creates a directory junction. `mklink /J` needs no privilege, unlike
-/// `mklink /D`: the harness runs unelevated.
-fn junction(link: &Path, target: &Path) {
+/// `mklink /D`: the harness — and the sandbox — run unelevated.
+///
+/// Fallible rather than panicking: this is the one step of the build that can
+/// legitimately fail on a user's machine (a policy blocking `cmd`, a volume
+/// with no reparse-point support), and `sandbox_enter` has to report that as
+/// an error instead of aborting the process.
+fn junction(link: &Path, target: &Path) -> Result<(), String> {
     let out = std::process::Command::new("cmd")
         .arg("/C")
         .arg("mklink")
@@ -82,12 +103,14 @@ fn junction(link: &Path, target: &Path) {
         .arg(link)
         .arg(target)
         .output()
-        .expect("mklink could not be started");
-    assert!(
-        out.status.success(),
-        "mklink /J failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+        .map_err(|e| format!("mklink could not be started: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "mklink /J failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 impl Fixture {
@@ -126,18 +149,28 @@ impl Fixture {
         self.vars.get(name).cloned()
     }
 
-    pub fn build() -> Self {
-        let dir = TempDir::new().unwrap();
+    /// Builds the whole fixture under `base`, which must already exist and is
+    /// expected to be empty. The caller owns `base` and its removal: the
+    /// harness hands a `TempDir`, `commands::enter_sandbox` a directory it
+    /// created under `%TEMP%` and deletes again on leave.
+    ///
+    /// **Every one of the four rule variables is mapped under `base\profile`.**
+    /// That is what makes the application's own containment cover the sandbox:
+    /// a rule cannot even name a path outside `base`.
+    pub fn build_in(base: &Path) -> Result<Self, String> {
         // Canonicalised so the injected variables and what `canonicalize`
-        // returns during the walk describe the same directory: `TempDir` sits
+        // returns during the walk describe the same directory: the base sits
         // under `%TMP%`, which Windows may hand out in 8.3 short form.
-        let base = strip_verbatim_str(&std::fs::canonicalize(dir.path()).unwrap());
+        let base = strip_verbatim_str(
+            &std::fs::canonicalize(base)
+                .map_err(|e| format!("{}: {e}", base.display()))?,
+        );
         let profile = base.join("profile");
         let local = profile.join("AppData").join("Local");
         let roaming = profile.join("AppData").join("Roaming");
         let temp = local.join("Temp");
-        std::fs::create_dir_all(&temp).unwrap();
-        std::fs::create_dir_all(&roaming).unwrap();
+        std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&roaming).map_err(|e| e.to_string())?;
 
         let vars = HashMap::from([
             ("USERPROFILE".to_string(), profile.display().to_string()),
@@ -157,14 +190,13 @@ impl Fixture {
             sentinels: Vec::new(),
             junctions: Vec::new(),
             vars,
-            _dir: dir,
         };
 
         fx.populate_junk();
         fx.populate_sentinels();
         fx.populate_detect_files();
-        fx.populate_junctions();
-        fx
+        fx.populate_junctions()?;
+        Ok(fx)
     }
 
     /// One or more files for EVERY `kind = "files"` rule of `rules.toml`.
@@ -442,16 +474,17 @@ impl Fixture {
     /// Two junctions pointing outside the profile: one on the `%TEMP%` walk,
     /// one buried inside the Chrome cache. `mklink /J` needs no privilege,
     /// which is exactly why the containment guards exist.
-    fn populate_junctions(&mut self) {
+    fn populate_junctions(&mut self) -> Result<(), String> {
         let temp_link = self.profile.join(r"AppData\Local\Temp\linked");
-        junction(&temp_link, &self.outside);
+        junction(&temp_link, &self.outside)?;
         self.junctions.push(temp_link);
 
         let cache_link = self
             .profile
             .join(r"AppData\Local\Google\Chrome\User Data\Default\Cache\link");
-        junction(&cache_link, &self.outside2);
+        junction(&cache_link, &self.outside2)?;
         self.junctions.push(cache_link);
+        Ok(())
     }
 
     /// Replaces the `windows.crash-dumps` walk root ITSELF with a junction to
@@ -469,7 +502,7 @@ impl Fixture {
         let under = |p: &Path| p.to_string_lossy().to_lowercase().starts_with(&prefix);
         self.junk.retain(|p| !under(p));
         self.sentinels.retain(|s| !under(&s.path));
-        junction(&root, &self.outside3);
+        junction(&root, &self.outside3).expect("mklink /J over the crash-dump root");
         self.junctions.push(root.clone());
         root
     }
@@ -486,7 +519,7 @@ impl Fixture {
     pub fn swap_toctou_dir_for_junction(&self) -> PathBuf {
         let dir = self.profile.join(r"AppData\Local\Temp").join(TOCTOU_DIR);
         std::fs::remove_dir_all(&dir).unwrap();
-        junction(&dir, &self.outside4);
+        junction(&dir, &self.outside4).expect("mklink /J over the TOCTOU directory");
         dir
     }
 
@@ -631,4 +664,208 @@ fn concrete_segment(seg: &str) -> Option<String> {
     } else {
         Some(trimmed)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox mode: what the fixture becomes once the application, and not the
+// harness, is the one driving it.
+// ---------------------------------------------------------------------------
+
+/// One file that must survive, and the exact bytes it must still carry. The
+/// marker is derived from the path (`Fixture::sentinel_content`), so a silent
+/// rewrite is caught as well as a deletion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestSentinel {
+    pub path: PathBuf,
+    pub marker: String,
+}
+
+/// What the sandbox promised to build, kept so `verify` can compare it with
+/// what is on disk after a clean. Serialisable: paths cross as strings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxManifest {
+    pub root: PathBuf,
+    pub profile_dir: PathBuf,
+    pub sentinels: Vec<ManifestSentinel>,
+    pub junk: Vec<PathBuf>,
+    /// The sentinels that do NOT live under `profile_dir`: junction targets,
+    /// their bait, and the control directory no rule ever names.
+    pub outside: Vec<PathBuf>,
+    /// The junction links themselves (not their targets).
+    pub junctions: Vec<PathBuf>,
+}
+
+/// What the front end is told when a sandbox opens, and while it is active.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxSummary {
+    pub root: String,
+    pub sentinels: u32,
+    pub junk: u32,
+    pub winapp2_rules: u32,
+}
+
+/// The verdict a user reads after cleaning the sandbox: what survived, what
+/// went, and whether the indirections were refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxVerdict {
+    pub sentinels_total: u32,
+    pub sentinels_intact: u32,
+    /// Paths of the sentinels that were deleted or rewritten. Empty is the
+    /// only acceptable answer.
+    pub sentinels_damaged: Vec<String>,
+    pub junk_total: u32,
+    pub junk_removed: u32,
+    pub junk_remaining: Vec<String>,
+    /// Sentinels outside the fake profile: reachable only through a junction,
+    /// or named by no rule at all.
+    pub outside_total: u32,
+    pub outside_intact: u32,
+    /// Every junction link still stands and every file behind one is intact:
+    /// the walk refused to cross them rather than following them out.
+    pub junctions_refused: bool,
+}
+
+impl Fixture {
+    /// The promise this fixture makes, frozen before anything is cleaned.
+    pub fn manifest(&self) -> SandboxManifest {
+        let sentinels: Vec<ManifestSentinel> = self
+            .sentinels
+            .iter()
+            .map(|s| ManifestSentinel {
+                path: s.path.clone(),
+                marker: String::from_utf8_lossy(&Fixture::sentinel_content(&s.path)).into_owned(),
+            })
+            .collect();
+        let outside = self
+            .sentinels
+            .iter()
+            .map(|s| s.path.clone())
+            .filter(|p| !p.starts_with(&self.profile))
+            .collect();
+        SandboxManifest {
+            root: self.base.clone(),
+            profile_dir: self.profile.clone(),
+            sentinels,
+            junk: self.junk.clone(),
+            outside,
+            junctions: self.junctions.clone(),
+        }
+    }
+}
+
+/// Compares the disk with the manifest. Pure over `(manifest, disk)`: nothing
+/// here is remembered from the run that did the cleaning.
+pub fn verify(manifest: &SandboxManifest) -> SandboxVerdict {
+    let intact =
+        |s: &ManifestSentinel| std::fs::read(&s.path).is_ok_and(|b| b == s.marker.as_bytes());
+    let damaged: Vec<String> = manifest
+        .sentinels
+        .iter()
+        .filter(|s| !intact(s))
+        .map(|s| s.path.display().to_string())
+        .collect();
+    let remaining: Vec<String> = manifest
+        .junk
+        .iter()
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .collect();
+    let outside_ok = manifest
+        .sentinels
+        .iter()
+        .filter(|s| manifest.outside.contains(&s.path))
+        .filter(|s| intact(s))
+        .count() as u32;
+    let junctions_refused =
+        manifest.junctions.iter().all(|j| j.exists()) && outside_ok == manifest.outside.len() as u32;
+
+    SandboxVerdict {
+        sentinels_total: manifest.sentinels.len() as u32,
+        sentinels_intact: manifest.sentinels.len() as u32 - damaged.len() as u32,
+        sentinels_damaged: damaged,
+        junk_total: manifest.junk.len() as u32,
+        junk_removed: manifest.junk.len() as u32 - remaining.len() as u32,
+        junk_remaining: remaining,
+        outside_total: manifest.outside.len() as u32,
+        outside_intact: outside_ok,
+        junctions_refused,
+    }
+}
+
+/// The native rules, loaded against the fixture's variables through the very
+/// loader the application uses.
+pub fn native_rules(fx: &Fixture) -> Result<Vec<Rule>, String> {
+    let lookup = |n: &str| fx.lookup(n);
+    load_rules_with(RULES_TOML, &lookup).map_err(|e| e.to_string())
+}
+
+/// The native rules plus the Winapp2 entries this fixture makes "detected".
+///
+/// The registry probe always answers `false`: detection is decided by the files
+/// the fixture created, never by what happens to be installed on the machine.
+/// The safety harness and the Sandbox mode share this one builder, so what a
+/// user watches is what CI proves.
+pub fn full_catalogue(fx: &Fixture) -> Result<(Vec<Rule>, Vec<Rule>, ConversionReport), String> {
+    let native = native_rules(fx)?;
+    let raw = |n: &str| fx.lookup(n);
+    let memo = memoized_env(&raw);
+    let (converted, report) = convert_with(WINAPP2_INI, &native, &memo);
+    let file = |p: &str| detect_file_exists_with(p, &memo);
+    let winapp2 = detected_rules_with(converted, &|_| false, &file);
+    Ok((native, winapp2, report))
+}
+
+/// Every path the given rules resolve to against this fixture, so
+/// `add_winapp2_junk` can materialise one concrete file per converted glob.
+pub fn resolved_patterns(fx: &Fixture, rules: &[Rule]) -> Result<Vec<String>, String> {
+    let lookup: EnvLookup = &|n: &str| fx.lookup(n);
+    let mut out = Vec::new();
+    for rule in rules {
+        out.extend(crate::rules::resolved_paths_with(rule, lookup).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+/// The sandbox's stand-in for `SHQueryRecycleBinW`. The real bin is never
+/// queried and never emptied while a sandbox is active: the
+/// `windows.recycle-bin` rule reports nothing rather than reporting the user's
+/// own bin.
+pub fn sandbox_recycle_query() -> Result<(u64, u64), String> {
+    Ok((0, 0))
+}
+
+/// The sandbox's stand-in for `SHEmptyRecycleBinW`. Does nothing, on purpose.
+pub fn sandbox_recycle_empty() -> Result<(), String> {
+    Ok(())
+}
+
+/// Where `Trash` mode puts a sandbox file, under the sandbox root.
+pub const SANDBOX_BIN: &str = "recycle-bin";
+
+/// `Trash` mode inside the sandbox. The file is **moved** into
+/// `<root>\recycle-bin`, never handed to `trash::delete`: the real Recycle Bin
+/// of the volume stays out of reach, and the mode still means what it says —
+/// the file leaves its place and stays recoverable, which is what a user
+/// checking the cautious mode wants to see.
+///
+/// The destination name is the path relative to the root with its separators
+/// flattened, so two files sharing a base name cannot collide. `recycle-bin`
+/// sits beside `profile`, not under it, so no rule can ever name what landed
+/// there and the verdict cannot mistake it for a survivor.
+pub fn sandbox_trash(root: &Path, path: &Path) -> Result<(), String> {
+    // `clean::deletable_path` hands its caller the canonical path, verbatim
+    // `\\?\` prefix included; the root is a plain path. Reconcile the two forms
+    // before comparing, or every file is refused as "outside the sandbox root".
+    let path = &strip_verbatim_str(path);
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| format!("outside the sandbox root: {}", path.display()))?;
+    let flat: String = relative
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '\\' || c == '/' || c == ':' { '_' } else { c })
+        .collect();
+    let bin = root.join(SANDBOX_BIN);
+    std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+    std::fs::rename(path, bin.join(flat)).map_err(|e| e.to_string())
 }

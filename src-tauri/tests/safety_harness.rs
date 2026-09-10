@@ -9,20 +9,47 @@
 //!
 //! What it proves and what it deliberately does not: `docs/safety-harness.md`.
 
-mod support;
-
 use std::collections::{BTreeSet, HashMap};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use support::fake_profile::Fixture;
+use tempfile::TempDir;
 use wincleaner_lib::clean::{clean_rule_with_trash, CleanMode, CleanReport};
 use wincleaner_lib::commands::{clean_rules_with, scan_rules_with, ScanProgress};
-use wincleaner_lib::rules::{
-    load_rules_with, memoized_env, resolved_paths_with, Rule, RuleError, RuleKind,
-};
+use wincleaner_lib::rules::{load_rules_with, resolved_paths_with, Rule, RuleError, RuleKind};
+use wincleaner_lib::sandbox::Fixture;
 use wincleaner_lib::scan::{scan_rule_with_api, ScanResult};
-use wincleaner_lib::winapp2::{convert_with, detect_file_exists_with, detected_rules_with};
+
+/// The fixture plus the `TempDir` that owns its directory. The builder itself
+/// now lives in the library (`wincleaner_lib::sandbox`), because the Sandbox
+/// mode of the application builds the very same tree; `tempfile` stays a
+/// dev-dependency, so the harness is what pairs it with a temporary directory.
+/// Dropping this removes the whole tree, junctions included, even when an
+/// assertion has just failed.
+struct Fx {
+    fixture: Fixture,
+    _dir: TempDir,
+}
+
+impl Deref for Fx {
+    type Target = Fixture;
+    fn deref(&self) -> &Fixture {
+        &self.fixture
+    }
+}
+
+impl DerefMut for Fx {
+    fn deref_mut(&mut self) -> &mut Fixture {
+        &mut self.fixture
+    }
+}
+
+fn fixture() -> Fx {
+    let dir = TempDir::new().unwrap();
+    let fixture = Fixture::build_in(dir.path()).expect("the fake profile must build");
+    Fx { fixture, _dir: dir }
+}
 
 /// What the injected recycle-bin query reports. Non-zero so that a rule that
 /// silently stopped calling the API would show up in the totals.
@@ -40,22 +67,19 @@ fn recycle_empty() -> Result<(), String> {
 }
 
 fn native_rules(fx: &Fixture) -> Vec<Rule> {
-    let lookup = |n: &str| fx.lookup(n);
-    load_rules_with(wincleaner_lib::rules::RULES_TOML, &lookup)
-        .expect("rules.toml must load against the fake profile")
+    wincleaner_lib::sandbox::native_rules(fx).expect("rules.toml must load against the fake profile")
 }
 
 /// Native rules plus the Winapp2 entries this fake profile makes "detected".
 /// The registry probe always answers false: detection is decided by the files
 /// the fixture created, never by what happens to be installed on the machine
 /// running the test.
+///
+/// This is the builder Sandbox mode uses too (`commands::enter_sandbox`), so
+/// what a user watches on their own machine is what this harness proves.
 fn full_catalogue(fx: &Fixture) -> (Vec<Rule>, Vec<Rule>) {
-    let native = native_rules(fx);
-    let raw = |n: &str| fx.lookup(n);
-    let memo = memoized_env(&raw);
-    let (converted, _report) = convert_with(wincleaner_lib::winapp2::WINAPP2_INI, &native, &memo);
-    let file = |p: &str| detect_file_exists_with(p, &memo);
-    let winapp2 = detected_rules_with(converted, &|_| false, &file);
+    let (native, winapp2, _report) =
+        wincleaner_lib::sandbox::full_catalogue(fx).expect("the sandbox catalogue must build");
     (native, winapp2)
 }
 
@@ -211,7 +235,7 @@ fn assert_only_junk_disappeared(
 #[test]
 fn the_nine_native_rules_delete_their_junk_and_spare_every_sentinel() {
     let started = Instant::now();
-    let fx = Fixture::build();
+    let fx = fixture();
     let rules = native_rules(&fx);
     assert_eq!(rules.len(), 9, "rules.toml declares nine native rules");
     assert!(
@@ -294,7 +318,7 @@ fn the_nine_native_rules_delete_their_junk_and_spare_every_sentinel() {
 #[test]
 fn the_whole_catalogue_spares_user_data_and_never_crosses_a_junction() {
     let started = Instant::now();
-    let mut fx = Fixture::build();
+    let mut fx = fixture();
     let (native, winapp2) = full_catalogue(&fx);
     let ids: BTreeSet<&str> = winapp2.iter().map(|r| r.id.as_str()).collect();
     assert!(
@@ -385,7 +409,7 @@ fn the_whole_catalogue_spares_user_data_and_never_crosses_a_junction() {
 
 #[test]
 fn trash_mode_hands_the_recycle_bin_exactly_the_junk() {
-    let fx = Fixture::build();
+    let fx = fixture();
     assert!(!fx.junk.is_empty(), "the fixture must plant junk");
     let rules = native_rules(&fx);
     let (report, trashed) = clean_all_trash_recording(&fx, &rules);
@@ -448,7 +472,7 @@ risk = "low"
 /// it there.
 #[test]
 fn a_junction_at_a_rule_root_is_refused_never_walked_and_never_deleted() {
-    let mut fx = Fixture::build();
+    let mut fx = fixture();
     let root = fx.junction_over_crash_dumps();
     let bait = fx.outside3.join("bait.dmp");
     assert!(bait.exists(), "the fixture must plant the bait");
@@ -513,7 +537,7 @@ fn a_junction_at_a_rule_root_is_refused_never_walked_and_never_deleted() {
 /// mode whose deletion call is injectable, and the guard runs before it.
 #[test]
 fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
-    let fx = Fixture::build();
+    let fx = fixture();
     let victim = fx.outside4.join("victim.txt");
     let scanned_victim = fx.toctou_victim_path();
     assert!(victim.exists() && scanned_victim.exists(), "fixture");
@@ -588,7 +612,7 @@ fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
 /// and the user's documents.
 #[test]
 fn a_rule_set_carrying_a_parent_segment_is_rejected_by_the_loader() {
-    let fx = Fixture::build();
+    let fx = fixture();
     let thesis = fx.profile.join("Documents").join("thesis.docx");
     assert!(thesis.exists(), "fixture");
 
