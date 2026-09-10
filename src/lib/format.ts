@@ -16,3 +16,10 @@ export function formatBytes(bytes: number): string {
     : String(rounded).replace(".", ",");
   return `${text} ${UNITS[unit]}`;
 }
+
+const COUNT = new Intl.NumberFormat("fr-FR");
+
+/// Compteurs de fichiers : groupés par milliers, lisibles d'un coup d'œil.
+export function formatCount(count: number): string {
+  return Number.isFinite(count) ? COUNT.format(Math.max(0, Math.trunc(count))) : "0";
+}

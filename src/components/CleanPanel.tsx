@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +9,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { formatBytes } from "@/lib/format";
+import { ReclaimGauge } from "@/components/ReclaimGauge";
+import { formatBytes, formatCount } from "@/lib/format";
 import {
   clean,
   groupByCategory,
@@ -19,6 +22,17 @@ import {
   type RuleSummary,
   type ScanResult,
 } from "@/lib/api";
+
+function Screen({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <header className="shrink-0 px-8 pt-7 pb-5">
+        <h1 className="screen-title">Nettoyage</h1>
+      </header>
+      {children}
+    </>
+  );
+}
 
 export function CleanPanel() {
   const [rules, setRules] = useState<RuleSummary[]>([]);
@@ -88,8 +102,10 @@ export function CleanPanel() {
   async function onClean() {
     setBusy(true);
     try {
-      setReport(await clean(scannedIds, mode));
+      const done = await clean(scannedIds, mode);
+      setReport(done);
       setResults(null);
+      toast.success(`Nettoyé : ${formatBytes(done.freed_bytes)} libérés`);
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -99,128 +115,227 @@ export function CleanPanel() {
 
   if (rulesError) {
     return (
-      <div
-        data-testid="rules-error"
-        className="flex flex-col items-start gap-3 rounded-md border border-red-500 bg-red-50 p-4 text-red-900 dark:bg-red-950 dark:text-red-100"
-      >
-        <p>{rulesError}</p>
-        <Button
-          variant="secondary"
-          onClick={() => {
-            setResults(null);
-            setReport(null);
-            setReloadKey((k) => k + 1);
-          }}
-        >
-          Réessayer
-        </Button>
-      </div>
+      <Screen>
+        <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">
+          <div
+            data-testid="rules-error"
+            className="flex max-w-xl flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
+          >
+            <p className="font-medium">Impossible de charger les règles.</p>
+            <p className="font-mono text-xs text-muted-foreground">{rulesError}</p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setResults(null);
+                setReport(null);
+                setReloadKey((k) => k + 1);
+              }}
+            >
+              Réessayer
+            </Button>
+          </div>
+        </div>
+      </Screen>
     );
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {browsers.length > 0 && (
-        <div
-          data-testid="browser-warning"
-          className="rounded-md border border-amber-500 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100"
-        >
-          Navigateur ouvert : {browsers.join(", ")}. Les fichiers en cours
-          d'utilisation seront ignorés. Fermez-le pour un nettoyage complet.
-        </div>
-      )}
+    <Screen>
+      <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-auto px-8 pb-8">
+        {browsers.length > 0 && (
+          <div
+            data-testid="browser-warning"
+            className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/12 px-4 py-3 text-sm text-warning-foreground"
+          >
+            <TriangleAlert className="mt-px size-4 shrink-0 text-warning" />
+            <p>
+              <span className="font-mono">{browsers.join(", ")}</span> est ouvert :
+              ses fichiers en cours d'utilisation seront ignorés.
+            </p>
+          </div>
+        )}
 
-      {results && (
-        <div className="flex items-baseline gap-2">
-          <span className="text-sm text-muted-foreground">Total récupérable</span>
-          <span data-testid="total-bytes" className="text-2xl font-semibold">
-            {formatBytes(total)}
-          </span>
-        </div>
-      )}
-
-      {grouped.map(([category, catRules]) => (
-        <section key={category} className="flex flex-col gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            {category}
-          </h2>
-          <ul className="flex flex-col gap-1">
-            {catRules.map((rule) => {
-              const result = (results ?? []).find((r) => r.rule_id === rule.id);
-              return (
-                <li key={rule.id} className="rounded-md border p-3">
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      id={rule.id}
-                      aria-label={rule.label}
-                      checked={selected.has(rule.id)}
-                      onCheckedChange={() => toggleRule(rule.id)}
-                    />
-                    <span
-                      className="flex-1 cursor-pointer"
-                      onClick={() => toggleRule(rule.id)}
-                    >
-                      {rule.label}
-                    </span>
-                    {rule.risk === "medium" && <Badge variant="secondary">risque moyen</Badge>}
-                    {rule.kind === "recycle-bin" && (
-                      <Badge data-testid={`note-${rule.id}`} variant="destructive">
-                        tous les volumes · définitif
-                      </Badge>
-                    )}
-                    {result && (
-                      <span data-testid={`result-${rule.id}`} className="text-sm">
-                        {formatBytes(result.total_bytes)} · {result.file_count} fichiers
-                        {result.skipped > 0 && ` · ${result.skipped} ignorés`}
-                      </span>
-                    )}
-                  </div>
-                  {rule.kind === "recycle-bin" && (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Vide la corbeille de tous les volumes du poste, y compris
-                      hors du profil utilisateur. Suppression définitive et
-                      irréversible : le mode de suppression ne s'y applique pas.
-                    </p>
-                  )}
-                  {result && result.paths.length > 0 && (
-                    <Collapsible
-                      open={openPaths.has(rule.id)}
-                      onOpenChange={() => togglePaths(rule.id)}
-                    >
-                      <CollapsibleTrigger
-                        data-testid={`toggle-paths-${rule.id}`}
-                        className="mt-2 text-xs underline text-muted-foreground"
-                      >
-                        {openPaths.has(rule.id) ? "Masquer" : "Afficher"} les chemins
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <ul className="mt-2 max-h-48 overflow-auto text-xs font-mono">
-                          {result.paths.map((p) => (
-                            <li key={p}>{p}</li>
-                          ))}
-                        </ul>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+        <section className="flex flex-col gap-5 rounded-lg border bg-card p-5">
+          <div className="flex items-start justify-between gap-6">
+            <div className="min-w-0">
+              <p className="eyebrow text-muted-foreground">Récupérable</p>
+              {results ? (
+                <p
+                  data-testid="total-bytes"
+                  className="mt-1.5 font-mono tnum text-[2rem] leading-none font-semibold"
+                >
+                  {formatBytes(total)}
+                </p>
+              ) : (
+                <p className="mt-1.5 text-[2rem] leading-none font-normal text-muted-foreground">
+                  —
+                </p>
+              )}
+            </div>
+            <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
+              Analyser
+            </Button>
+          </div>
+          {results ? (
+            <ReclaimGauge rules={rules} results={results} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Analysez pour mesurer ce qui peut être libéré.
+            </p>
+          )}
         </section>
-      ))}
 
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-3">
-          <Button onClick={onScan} disabled={busy || selected.size === 0}>
-            Analyser
-          </Button>
-          <label htmlFor="clean-mode" className="text-sm">
-            Mode de suppression
-          </label>
+        {grouped.map(([category, catRules]) => {
+          const catBytes = (results ?? [])
+            .filter((r) => catRules.some((rule) => rule.id === r.rule_id))
+            .reduce((sum, r) => sum + r.total_bytes, 0);
+          return (
+            <section key={category} className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between px-1">
+                <h2 className="eyebrow text-muted-foreground">{category}</h2>
+                <p className="text-xs text-muted-foreground">
+                  {catRules.length} règles
+                  {results && (
+                    <>
+                      {" · "}
+                      <span className="font-mono tnum">{formatBytes(catBytes)}</span>
+                    </>
+                  )}
+                </p>
+              </div>
+              <ul className="overflow-hidden rounded-lg border bg-card">
+                {catRules.map((rule, index) => {
+                  const result = (results ?? []).find((r) => r.rule_id === rule.id);
+                  return (
+                    <li
+                      key={rule.id}
+                      className={index > 0 ? "border-t" : undefined}
+                    >
+                      <div className="flex h-11 items-center gap-3 px-4">
+                        <Checkbox
+                          id={rule.id}
+                          aria-label={rule.label}
+                          checked={selected.has(rule.id)}
+                          onCheckedChange={() => toggleRule(rule.id)}
+                        />
+                        <span
+                          className="min-w-0 flex-1 cursor-pointer truncate text-sm"
+                          onClick={() => toggleRule(rule.id)}
+                        >
+                          {rule.label}
+                        </span>
+                        {rule.risk === "medium" && (
+                          <Badge
+                            variant="outline"
+                            className="border-warning/40 bg-warning/12 text-warning-foreground"
+                          >
+                            risque moyen
+                          </Badge>
+                        )}
+                        {rule.kind === "recycle-bin" && (
+                          <Badge
+                            data-testid={`note-${rule.id}`}
+                            variant="outline"
+                            className="border-destructive/40 text-destructive"
+                          >
+                            tous les volumes
+                          </Badge>
+                        )}
+                        {result && (
+                          <div
+                            data-testid={`result-${rule.id}`}
+                            className="flex shrink-0 items-baseline gap-3"
+                          >
+                            {result.skipped > 0 && (
+                              <span className="font-mono tnum text-xs text-muted-foreground">
+                                {formatCount(result.skipped)} ignoré
+                                {result.skipped > 1 ? "s" : ""}
+                              </span>
+                            )}
+                            <span className="w-24 text-right font-mono tnum text-sm">
+                              {formatBytes(result.total_bytes)}
+                            </span>
+                            <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
+                              {formatCount(result.file_count)}
+                              <span className="sr-only"> fichiers</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {rule.kind === "recycle-bin" && (
+                        <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
+                          Vide la corbeille de tous les volumes du poste, y compris
+                          hors du profil utilisateur. Suppression définitive et
+                          irréversible : le mode de suppression ne s'y applique pas.
+                        </p>
+                      )}
+                      {result && result.paths.length > 0 && (
+                        <Collapsible
+                          open={openPaths.has(rule.id)}
+                          onOpenChange={() => togglePaths(rule.id)}
+                        >
+                          <CollapsibleTrigger
+                            data-testid={`toggle-paths-${rule.id}`}
+                            className="mb-3 ml-11 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                          >
+                            {openPaths.has(rule.id) ? "Masquer" : "Afficher"} les chemins
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
+                              {result.paths.map((p) => (
+                                <li key={p} className="truncate">
+                                  {p}
+                                </li>
+                              ))}
+                            </ul>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          );
+        })}
+
+        {report && (
+          <section
+            data-testid="clean-report"
+            className="rounded-lg border bg-card p-5"
+          >
+            <h2 className="eyebrow text-muted-foreground">Dernier nettoyage</h2>
+            <p className="mt-2 text-sm">
+              <span className="font-mono tnum">{formatBytes(report.freed_bytes)}</span>{" "}
+              libérés ·{" "}
+              <span className="font-mono tnum">{formatCount(report.deleted)}</span>{" "}
+              fichiers
+              supprimés
+            </p>
+            {report.skipped.length > 0 && (
+              <>
+                <h3 className="mt-4 text-xs font-medium text-muted-foreground">
+                  Ignorés (<span className="font-mono tnum">{formatCount(report.skipped.length)}</span>)
+                </h3>
+                <ul className="mt-1.5 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
+                  {report.skipped.map((s) => (
+                    <li key={s.path} className="truncate">
+                      {s.path} — {s.reason}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+        )}
+      </div>
+
+      <footer className="flex shrink-0 items-center gap-4 border-t bg-background px-8 py-3.5">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <select
             id="clean-mode"
             aria-label="Mode de suppression"
-            className="rounded-md border bg-transparent px-2 py-1 text-sm"
+            className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             value={mode}
             onChange={(e) => setMode(e.target.value as CleanMode)}
           >
@@ -228,42 +343,23 @@ export function CleanPanel() {
             <option value="trash">Corbeille</option>
             <option value="permanent">Définitif</option>
           </select>
-          <Button
-            variant="destructive"
-            onClick={onClean}
-            disabled={busy || !results || scannedIds.length === 0}
-          >
-            Nettoyer
-          </Button>
-        </div>
-        <p data-testid="mode-help" className="text-xs text-muted-foreground">
-          Auto : suppression définitive pour les éléments à faible risque,
-          corbeille pour les autres.
-        </p>
-      </div>
-
-      {report && (
-        <div data-testid="clean-report" className="rounded-md border p-4">
-          <h3 className="mb-2 font-semibold">Rapport</h3>
-          <p>
-            {formatBytes(report.freed_bytes)} libérés · {report.deleted} fichiers supprimés
+          <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
+            Auto : suppression définitive pour les éléments à faible risque,
+            corbeille pour les autres.
           </p>
-          {report.skipped.length > 0 && (
-            <>
-              <h4 className="mt-3 text-sm font-semibold">
-                Ignorés ({report.skipped.length})
-              </h4>
-              <ul className="mt-1 max-h-48 overflow-auto text-xs font-mono">
-                {report.skipped.map((s) => (
-                  <li key={s.path}>
-                    {s.path} — {s.reason}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
         </div>
-      )}
-    </div>
+        <Button
+          size="lg"
+          variant="destructive"
+          onClick={onClean}
+          disabled={busy || !results || scannedIds.length === 0}
+        >
+          Nettoyer
+          {results && total > 0 && (
+            <span className="font-mono tnum">{formatBytes(total)}</span>
+          )}
+        </Button>
+      </footer>
+    </Screen>
   );
 }
