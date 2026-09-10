@@ -198,6 +198,16 @@ describe("CleanPanel", () => {
     );
   });
 
+  it("annonce que la Corbeille est vidée en premier quand elle est cochée", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Corbeille");
+    expect(screen.queryByTestId("recycle-order-note")).toBeNull();
+    await user.click(screen.getByLabelText("Corbeille"));
+    expect(screen.getByTestId("recycle-order-note")).toHaveTextContent(/vidée en premier/);
+  });
+
   it("demande confirmation avant de nettoyer", async () => {
     const user = userEvent.setup();
     api.scan.mockResolvedValue([

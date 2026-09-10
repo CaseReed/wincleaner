@@ -81,6 +81,10 @@ export function CleanPanel() {
     [results]
   );
   const scannedIds = useMemo(() => (results ?? []).map((r) => r.rule_id), [results]);
+  const corbeilleCochee = useMemo(
+    () => rules.some((r) => r.kind === "recycle-bin" && selected.has(r.id)),
+    [rules, selected]
+  );
   /// Les règles analysées que le mode courant détruira sans retour possible.
   const irreversibles = useMemo(
     () =>
@@ -396,8 +400,17 @@ export function CleanPanel() {
                 <option value="permanent">Définitif</option>
               </select>
               <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
-                Auto : suppression définitive pour les éléments à faible risque,
-                corbeille pour les autres.
+                {corbeilleCochee ? (
+                  <span data-testid="recycle-order-note">
+                    La Corbeille est vidée en premier : ce que les autres règles
+                    y déposeront dans la même passe n'est pas emporté.
+                  </span>
+                ) : (
+                  <>
+                    Auto : suppression définitive pour les éléments à faible
+                    risque, corbeille pour les autres.
+                  </>
+                )}
               </p>
             </div>
             <Button

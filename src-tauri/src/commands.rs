@@ -108,8 +108,18 @@ fn clean_all(
     report
 }
 
+/// La corbeille est vidée EN PREMIER, quel que soit l'ordre de rules.toml ou
+/// celui que le front envoie. Sinon, en mode « Corbeille », les règles
+/// « files » y déposent leurs fichiers et la règle Corbeille les détruit
+/// définitivement dans la même passe : le mode prudent ne protège plus rien.
+/// `sort_by_key` est stable : l'ordre relatif des autres règles est conservé.
+fn ordre_de_nettoyage(mut rules: Vec<Rule>) -> Vec<Rule> {
+    rules.sort_by_key(|r| r.kind != RuleKind::RecycleBin);
+    rules
+}
+
 fn clean_rules(rule_ids: &[String], mode: CleanMode) -> Result<CleanReport, String> {
-    let rules = find_rules(rule_ids)?;
+    let rules = ordre_de_nettoyage(find_rules(rule_ids)?);
     Ok(clean_all(&rules, |rule| {
         clean_rule(rule, mode).map_err(|e| e.to_string())
     }))
@@ -252,6 +262,39 @@ mod tests {
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].path, "b");
         assert_eq!(report.skipped[0].reason, "accès refusé");
+    }
+
+    fn regle_corbeille() -> Rule {
+        Rule {
+            id: "windows.recycle-bin".into(),
+            category: "Système".into(),
+            label: "Corbeille".into(),
+            paths: vec![],
+            exclude: vec![],
+            risk: Risk::Low,
+            kind: RuleKind::RecycleBin,
+            default_checked: false,
+        }
+    }
+
+    #[test]
+    fn la_regle_corbeille_est_traitee_avant_les_regles_fichiers() {
+        // Sinon, en mode « Corbeille », la règle 2 vide ce que la règle 1
+        // vient d'y déposer : le mode prudent détruit définitivement.
+        let regles = ordre_de_nettoyage(vec![regle("a"), regle_corbeille(), regle("b")]);
+        let vus = std::cell::RefCell::new(Vec::new());
+        clean_all(&regles, |r| {
+            vus.borrow_mut().push(r.id.clone());
+            Ok(CleanReport::default())
+        });
+        assert_eq!(*vus.borrow(), vec!["windows.recycle-bin", "a", "b"]);
+    }
+
+    #[test]
+    fn lordre_des_regles_fichiers_est_conserve() {
+        let regles = ordre_de_nettoyage(vec![regle("a"), regle("b"), regle("c")]);
+        let ids: Vec<&str> = regles.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b", "c"]);
     }
 
     #[test]
