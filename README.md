@@ -10,7 +10,7 @@ network access, no registry cleaner.
 
 ## Features
 
-- **Ten audited built-in rules**, all declared in a single readable file
+- **Nine audited built-in rules**, all declared in a single readable file
   (`src-tauri/rules.toml`) — nothing is hidden in the code.
 - **Measure before you delete.** Analyze reports the reclaimable size per rule,
   with the exact list of files it would touch.
@@ -24,7 +24,7 @@ network access, no registry cleaner.
 
 ## What it cleans
 
-Ten built-in rules across three categories, plus the community rules converted
+Nine built-in rules across three categories, plus the community rules converted
 from [Winapp2](https://github.com/MoscaDotTo/Winapp2), which are shown only
 when the application they target is detected and are never checked by default.
 
@@ -39,7 +39,6 @@ when the application they target is detected and are never checked by default.
 | Browsers | Google Chrome cache | Checked | Low |
 | Browsers | Mozilla Firefox cache | Checked | Low |
 | Applications | npm cache (`%LOCALAPPDATA%\npm-cache`) | Checked | Low |
-| Applications | pip cache (`%LOCALAPPDATA%\pip\Cache`) | Checked | Low |
 
 The browser rules cover HTTP, code, GPU and service-worker caches only. Local
 Storage, IndexedDB, Session Storage and service-worker registrations are

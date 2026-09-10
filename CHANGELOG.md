@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Embedded the [Winapp2](https://github.com/MoscaDotTo/Winapp2) community rule
   base (`Non-CCleaner/Winapp2.ini`, snapshot 2026-09-10, CC-BY-SA-4.0) under
   `src-tauri/third_party/winapp2/`, refreshed with `npm run winapp2:update`.
-- Two native rules for package-manager caches Winapp2 does not cover: npm
-  cache (`%LOCALAPPDATA%\npm-cache`) and pip cache
-  (`%LOCALAPPDATA%\pip\Cache`), both low risk and checked by default.
+- One native rule for the package-manager cache Winapp2 does not cover: npm
+  cache (`%LOCALAPPDATA%\npm-cache`), low risk and checked by default. pip's
+  cache is not duplicated: Winapp2's `[Python *]` section already covers
+  `%LOCALAPPDATA%\Pip\cache`.
 
 ## [0.1.0] - 2026-09-10
 

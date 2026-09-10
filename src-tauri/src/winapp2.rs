@@ -1094,4 +1094,93 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert!(!registry_key_exists(r"HKCU\"));
         assert!(!registry_key_exists(r"HKCU\ "));
     }
+
+    /// Rule ids that overlap a converted Winapp2 rule on purpose, and why it
+    /// is safe to leave as-is rather than drop the native rule. Each entry
+    /// must be reviewed, never appended just to silence the test below.
+    ///
+    /// Currently empty: `pip.cache` was the one real collision (Winapp2's
+    /// `[Python *]` already covers `%LocalAppData%\Pip\cache`) and was
+    /// removed from `rules.toml` rather than allow-listed here.
+    const KNOWN_OVERLAPS: &[(&str, &str, &str)] = &[];
+
+    /// `a` and `b` collide when they are the same glob string, or when one is
+    /// a path prefix of the other up to a `\` boundary — e.g.
+    /// `%LOCALAPPDATA%\Pip\cache` is a prefix of
+    /// `%LOCALAPPDATA%\Pip\cache\**\*`. A comparison on bytes is safe: every
+    /// rule path is ASCII (the four allowed variables and the literal
+    /// directory names upstream and native rules use).
+    fn overlaps(a: &str, b: &str) -> bool {
+        let a = a.to_ascii_lowercase();
+        let b = b.to_ascii_lowercase();
+        if a == b {
+            return true;
+        }
+        let (shorter, longer) = if a.len() < b.len() { (&a, &b) } else { (&b, &a) };
+        longer.starts_with(shorter.as_str()) && longer.as_bytes()[shorter.len()] == b'\\'
+    }
+
+    /// Guards against re-adding a native rule (`rules.toml`) that duplicates a
+    /// path the converted Winapp2 catalogue already cleans — the mistake
+    /// `pip.cache` made: it counted the same bytes as Winapp2's `[Python *]`
+    /// entry, doubling the reported reclaimable size and turning the second
+    /// pass into a bogus "skipped" entry.
+    ///
+    /// The Winapp2 side is converted independently of detection (every entry
+    /// that survives `convert_with`, not just the ones `is_detected_with`
+    /// would show on this machine): a native rule must not collide with a
+    /// Winapp2 rule whether or not the corresponding application happens to
+    /// be installed on the machine running the test.
+    #[test]
+    fn no_native_rule_overlaps_a_converted_winapp2_rule() {
+        use crate::rules::{load_rules_with, resolved_paths_with, RuleKind, RULES_TOML};
+
+        let native = load_rules_with(RULES_TOML, &fake_env).unwrap();
+        let native_globs: Vec<(&str, String)> = native
+            .iter()
+            .filter(|r| r.kind == RuleKind::Files)
+            .flat_map(|r| {
+                resolved_paths_with(r, &fake_env)
+                    .unwrap()
+                    .into_iter()
+                    .map(move |p| (r.id.as_str(), p))
+            })
+            .collect();
+
+        let (converted, _) = convert_with(WINAPP2_INI, &fake_env);
+        let converted_globs: Vec<(&str, String)> = converted
+            .iter()
+            .flat_map(|c| {
+                resolved_paths_with(&c.rule, &fake_env)
+                    .unwrap()
+                    .into_iter()
+                    .map(move |p| (c.rule.id.as_str(), p))
+            })
+            .collect();
+
+        let mut collisions: Vec<(&str, &str, String, String)> = Vec::new();
+        for (native_id, native_path) in &native_globs {
+            for (winapp2_id, winapp2_path) in &converted_globs {
+                if overlaps(native_path, winapp2_path) {
+                    let known = KNOWN_OVERLAPS
+                        .iter()
+                        .any(|(n, w, _)| n == native_id && w == winapp2_id);
+                    if !known {
+                        collisions.push((
+                            native_id,
+                            winapp2_id,
+                            native_path.clone(),
+                            winapp2_path.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            collisions.is_empty(),
+            "native rule(s) overlap a converted Winapp2 rule (add to \
+             KNOWN_OVERLAPS with a reason if the overlap is deliberate, \
+             otherwise drop the native rule): {collisions:#?}"
+        );
+    }
 }

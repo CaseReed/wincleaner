@@ -657,7 +657,7 @@ default_checked = false"#,
     #[test]
     fn the_embedded_rules_toml_is_valid() {
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
-        assert_eq!(rules.len(), 10);
+        assert_eq!(rules.len(), 9);
         // Declared risk included: any risk change changes the deletion mode in
         // Auto, so it must be a deliberate test change.
         let seen: Vec<(&str, Risk)> = rules.iter().map(|r| (r.id.as_str(), r.risk)).collect();
@@ -673,7 +673,6 @@ default_checked = false"#,
                 ("chrome.cache", Risk::Low),
                 ("firefox.cache", Risk::Low),
                 ("npm.cache", Risk::Low),
-                ("pip.cache", Risk::Low),
             ]
         );
     }
@@ -772,7 +771,7 @@ default_checked = false"#,
     #[test]
     fn the_embedded_rules_load_with_the_real_environment() {
         let rules = load_rules_with(RULES_TOML, &system_env).unwrap();
-        assert_eq!(rules.len(), 10);
+        assert_eq!(rules.len(), 9);
     }
 
     #[test]
