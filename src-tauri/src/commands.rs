@@ -5,11 +5,11 @@ use crate::startup::StartupEntry;
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 
-/// Processus considérés comme « navigateur ouvert » pour l'avertissement.
+/// Processes considered "an open browser" for the warning banner.
 pub const BROWSER_PROCESSES: [&str; 3] = ["msedge.exe", "chrome.exe", "firefox.exe"];
 
-/// Ce que le front reçoit pour construire la liste des règles. Ne contient
-/// jamais de chemin : le front n'a pas à connaître ce qui sera supprimé.
+/// What the front end receives to build the rule list. Never contains a path:
+/// the front end has no business knowing what will be deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleSummary {
     pub id: String,
@@ -17,11 +17,11 @@ pub struct RuleSummary {
     pub label: String,
     pub risk: Risk,
     pub kind: RuleKind,
-    /// Case cochée au premier lancement (cf. `rules.toml`).
+    /// Checkbox ticked on first launch (see `rules.toml`).
     pub default_checked: bool,
-    /// Renseigné quand la règle ne s'applique pas sur cette machine. Le front
-    /// grise la ligne et affiche ce motif ; la règle n'est ni analysée ni
-    /// nettoyée, même si son identifiant était envoyé.
+    /// Set when the rule does not apply on this machine. The front end greys
+    /// the row out and shows this reason; the rule is neither scanned nor
+    /// cleaned, even if its id were sent.
     pub unavailable_reason: Option<String>,
 }
 
@@ -33,7 +33,7 @@ fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
             all.iter()
                 .find(|r| &r.id == id)
                 .cloned()
-                .ok_or_else(|| format!("règle inconnue : « {id} »"))
+                .ok_or_else(|| format!("unknown rule: \"{id}\""))
         })
         .collect()
 }
@@ -66,10 +66,10 @@ pub fn list_rules() -> Result<Vec<RuleSummary>, String> {
         .collect())
 }
 
-/// Exécute un travail bloquant hors du fil principal. Une commande Tauri
-/// synchrone s'exécute sur le fil principal et gèle la boucle d'évènements de
-/// la webview le temps de son exécution : sur un profil chargé, un parcours de
-/// disque de plusieurs secondes rendrait la fenêtre « ne répond pas ».
+/// Runs blocking work off the main thread. A synchronous Tauri command runs on
+/// the main thread and freezes the webview event loop while it executes: on a
+/// loaded profile, a disk walk lasting several seconds would make the window
+/// "not responding".
 async fn blocking<T, F>(work: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
@@ -77,12 +77,12 @@ where
 {
     tauri::async_runtime::spawn_blocking(work)
         .await
-        .map_err(|e| format!("tâche interrompue : {e}"))?
+        .map_err(|e| format!("task interrupted: {e}"))?
 }
 
-/// Analyse chaque règle en refusant sur place celles qui ne s'appliquent pas
-/// à cette machine. `run` est injecté pour que le test exerce ce refus ici
-/// même, et non dans une copie de la boucle.
+/// Scans each rule, refusing on the spot those that do not apply to this
+/// machine. `run` is injected so that the test exercises that refusal right
+/// here, and not in a copy of the loop.
 fn scan_rules_with(
     rules: &[Rule],
     mut run: impl FnMut(&Rule) -> Result<ScanResult, String>,
@@ -90,8 +90,8 @@ fn scan_rules_with(
     rules
         .iter()
         .map(|r| match &r.unavailable_reason {
-            // La règle ne s'applique pas sur cette machine : rien à parcourir,
-            // et surtout rien à supprimer. Comptée « ignorée », pas en erreur.
+            // The rule does not apply on this machine: nothing to walk, and
+            // above all nothing to delete. Counted as "skipped", not an error.
             Some(_) => Ok(ScanResult {
                 rule_id: r.id.clone(),
                 file_count: 0,
@@ -115,36 +115,37 @@ pub async fn scan(rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
     blocking(move || scan_rules(&rule_ids)).await
 }
 
-/// La corbeille est vidée EN PREMIER, quel que soit l'ordre de rules.toml ou
-/// celui que le front envoie. Sinon, en mode « Corbeille », les règles
-/// « files » y déposent leurs fichiers et la règle Corbeille les détruit
-/// définitivement dans la même passe : le mode prudent ne protège plus rien.
-/// `sort_by_key` est stable : l'ordre relatif des autres règles est conservé.
-fn ordre_de_nettoyage(mut rules: Vec<Rule>) -> Vec<Rule> {
+/// The recycle bin is emptied FIRST, whatever the order in rules.toml or the
+/// order the front end sends. Otherwise, in "Recycle Bin" mode, the "files"
+/// rules drop their files into it and the Recycle Bin rule destroys them
+/// permanently in the same pass: the cautious mode no longer protects
+/// anything. `sort_by_key` is stable: the relative order of the other rules is
+/// preserved.
+fn cleaning_order(mut rules: Vec<Rule>) -> Vec<Rule> {
     rules.sort_by_key(|r| r.kind != RuleKind::RecycleBin);
     rules
 }
 
-/// Nettoie les règles dans l'ordre imposé par `ordre_de_nettoyage`, en
-/// refusant sur place celles qui ne s'appliquent pas à cette machine.
-/// L'échec d'une règle ne jette jamais ce qui a déjà été nettoyé : il devient
-/// une entrée `skipped` portant l'identifiant de la règle.
+/// Cleans the rules in the order imposed by `cleaning_order`, refusing on the
+/// spot those that do not apply to this machine. The failure of one rule never
+/// throws away what has already been cleaned: it becomes a `skipped` entry
+/// carrying the rule id.
 ///
-/// `run` est injecté pour que le test exerce cet ordre et ce refus ici même :
-/// un test qui rejouerait la séquence à la main ne verrouillerait rien.
+/// `run` is injected so that the test exercises this order and this refusal
+/// right here: a test replaying the sequence by hand would lock nothing down.
 fn clean_rules_with(
     rules: Vec<Rule>,
     mode: CleanMode,
     mut run: impl FnMut(&Rule, CleanMode) -> Result<CleanReport, String>,
 ) -> CleanReport {
     let mut report = CleanReport::default();
-    for rule in ordre_de_nettoyage(rules) {
-        let issue = match &rule.unavailable_reason {
-            Some(raison) => Err(raison.clone()),
+    for rule in cleaning_order(rules) {
+        let outcome = match &rule.unavailable_reason {
+            Some(reason) => Err(reason.clone()),
             None => run(&rule, mode),
         };
-        match issue {
-            Ok(partiel) => report.merge(partiel),
+        match outcome {
+            Ok(partial) => report.merge(partial),
             Err(reason) => report.skipped.push(SkippedItem {
                 path: rule.id.clone(),
                 reason,
@@ -195,8 +196,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ne_retient_que_les_navigateurs_cibles() {
-        let noms: Vec<String> = [
+    fn only_the_targeted_browsers_are_retained() {
+        let names: Vec<String> = [
             "explorer.exe",
             "msedge.exe",
             "MSEDGE.EXE",
@@ -206,71 +207,71 @@ mod tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        let mut got = running_browsers_from(&noms);
+        let mut got = running_browsers_from(&names);
         got.sort();
         assert_eq!(got, vec!["chrome.exe", "msedge.exe"]);
     }
 
     #[test]
-    fn deduplique_les_processus_multiples() {
-        let noms: Vec<String> = ["firefox.exe", "firefox.exe", "firefox.exe"]
+    fn duplicate_processes_are_deduplicated() {
+        let names: Vec<String> = ["firefox.exe", "firefox.exe", "firefox.exe"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        assert_eq!(running_browsers_from(&noms), vec!["firefox.exe"]);
+        assert_eq!(running_browsers_from(&names), vec!["firefox.exe"]);
     }
 
     #[test]
-    fn aucun_navigateur_rend_une_liste_vide() {
-        let noms: Vec<String> = ["explorer.exe".to_string()].to_vec();
-        assert!(running_browsers_from(&noms).is_empty());
+    fn no_browser_returns_an_empty_list() {
+        let names: Vec<String> = ["explorer.exe".to_string()].to_vec();
+        assert!(running_browsers_from(&names).is_empty());
     }
 
     #[test]
-    fn le_resume_des_regles_reprend_les_huit_regles_embarquees() {
-        let resumes = list_rules().unwrap();
-        assert_eq!(resumes.len(), 8);
-        assert_eq!(resumes[0].id, "windows.temp");
-        assert_eq!(resumes[1].kind, crate::rules::RuleKind::RecycleBin);
+    fn the_rule_summary_carries_the_eight_embedded_rules() {
+        let summaries = list_rules().unwrap();
+        assert_eq!(summaries.len(), 8);
+        assert_eq!(summaries[0].id, "windows.temp");
+        assert_eq!(summaries[1].kind, crate::rules::RuleKind::RecycleBin);
     }
 
-    /// Le front construit ses cases à partir de ce champ : s'il ne traverse
-    /// pas l'IPC, tout redevient coché par défaut.
+    /// The front end builds its checkboxes from this field: if it does not
+    /// cross the IPC, everything becomes checked by default again.
     #[test]
-    fn le_resume_transmet_la_case_par_defaut() {
-        let resumes = list_rules().unwrap();
-        let corbeille = resumes
+    fn the_summary_carries_the_default_checkbox_state() {
+        let summaries = list_rules().unwrap();
+        let recycle_bin = summaries
             .iter()
             .find(|r| r.id == "windows.recycle-bin")
             .unwrap();
-        assert!(!corbeille.default_checked);
-        let temp = resumes.iter().find(|r| r.id == "windows.temp").unwrap();
+        assert!(!recycle_bin.default_checked);
+        let temp = summaries.iter().find(|r| r.id == "windows.temp").unwrap();
         assert!(temp.default_checked);
     }
 
-    /// Le point de l'item : une commande synchrone s'exécuterait sur le fil
-    /// appelant — le fil principal en production, celui qui pompe les
-    /// évènements de la fenêtre. `blocking` doit déporter le travail ailleurs.
+    /// The whole point of the item: a synchronous command would run on the
+    /// calling thread — the main thread in production, the one pumping the
+    /// window events. `blocking` must move the work elsewhere.
     #[test]
-    fn le_travail_bloquant_quitte_le_fil_appelant() {
-        let appelant = std::thread::current().id();
-        let dedans =
+    fn blocking_work_leaves_the_calling_thread() {
+        let caller = std::thread::current().id();
+        let inside =
             tauri::async_runtime::block_on(blocking(|| Ok(std::thread::current().id()))).unwrap();
-        assert_ne!(appelant, dedans);
+        assert_ne!(caller, inside);
     }
 
-    /// Passe par la commande asynchrone, donc par `spawn_blocking` : vérifie
-    /// que le travail déporté hors du fil principal rend bien son résultat.
+    /// Goes through the async command, and therefore through `spawn_blocking`:
+    /// checks that the work moved off the main thread does return its result.
     #[test]
-    fn scanner_un_identifiant_inconnu_est_une_erreur() {
-        let err = tauri::async_runtime::block_on(scan(vec!["inexistant".to_string()])).unwrap_err();
-        assert!(err.contains("inexistant"));
+    fn scanning_an_unknown_id_is_an_error() {
+        let err = tauri::async_runtime::block_on(scan(vec!["nonexistent".to_string()])).unwrap_err();
+        assert!(err.contains("nonexistent"));
     }
 
-    fn regle(id: &str) -> Rule {
+    fn rule(id: &str) -> Rule {
         Rule {
             id: id.into(),
-            category: "Système".into(),
+            category: "System".into(),
             label: id.into(),
             paths: vec![r"%TEMP%\*".into()],
             exclude: vec![],
@@ -282,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn lechec_dune_regle_ne_jette_pas_le_rapport_des_precedentes() {
-        let regles = vec![regle("a"), regle("b"), regle("c")];
-        let report = clean_rules_with(regles, CleanMode::Auto, |r, _| {
+    fn one_rule_failing_does_not_throw_away_the_report_of_the_previous_ones() {
+        let rules = vec![rule("a"), rule("b"), rule("c")];
+        let report = clean_rules_with(rules, CleanMode::Auto, |r, _| {
             if r.id == "b" {
-                Err("accès refusé".to_string())
+                Err("access denied".to_string())
             } else {
                 Ok(CleanReport {
                     freed_bytes: 10,
@@ -299,14 +300,14 @@ mod tests {
         assert_eq!(report.freed_bytes, 20);
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].path, "b");
-        assert_eq!(report.skipped[0].reason, "accès refusé");
+        assert_eq!(report.skipped[0].reason, "access denied");
     }
 
-    fn regle_corbeille() -> Rule {
+    fn recycle_bin_rule() -> Rule {
         Rule {
             id: "windows.recycle-bin".into(),
-            category: "Système".into(),
-            label: "Corbeille".into(),
+            category: "System".into(),
+            label: "Recycle Bin".into(),
             paths: vec![],
             exclude: vec![],
             risk: Risk::Low,
@@ -316,89 +317,89 @@ mod tests {
         }
     }
 
-    /// Une règle indisponible ne doit jamais atteindre le disque, même si le
-    /// front envoie son identifiant. Le refus est exercé là où il vit, dans
-    /// `scan_rules_with` et `clean_rules_with`.
+    /// An unavailable rule must never reach the disk, even if the front end
+    /// sends its id. The refusal is exercised where it lives, in
+    /// `scan_rules_with` and `clean_rules_with`.
     #[test]
-    fn une_regle_indisponible_nest_ni_analysee_ni_nettoyee() {
-        let mut regle = regle("x.y");
-        regle.paths = vec![r"%TEMP%\**\*".into()];
-        regle.unavailable_reason = Some("%TEMP% sort du profil".into());
+    fn an_unavailable_rule_is_neither_scanned_nor_cleaned() {
+        let mut unavailable = rule("x.y");
+        unavailable.paths = vec![r"%TEMP%\**\*".into()];
+        unavailable.unavailable_reason = Some("%TEMP% is outside the profile".into());
 
-        let analyses = scan_rules_with(std::slice::from_ref(&regle), |_| {
-            panic!("une règle indisponible ne doit pas être analysée")
+        let scans = scan_rules_with(std::slice::from_ref(&unavailable), |_| {
+            panic!("an unavailable rule must not be scanned")
         })
         .unwrap();
-        assert_eq!(analyses.len(), 1);
-        assert_eq!(analyses[0].file_count, 0);
-        assert!(analyses[0].paths.is_empty());
-        assert_eq!(analyses[0].skipped, 1);
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].file_count, 0);
+        assert!(scans[0].paths.is_empty());
+        assert_eq!(scans[0].skipped, 1);
 
-        let rapport = clean_rules_with(vec![regle], CleanMode::Auto, |_, _| {
-            panic!("une règle indisponible ne doit pas être nettoyée")
+        let report = clean_rules_with(vec![unavailable], CleanMode::Auto, |_, _| {
+            panic!("an unavailable rule must not be cleaned")
         });
-        assert_eq!(rapport.deleted, 0);
-        assert_eq!(rapport.skipped.len(), 1);
-        assert_eq!(rapport.skipped[0].path, "x.y");
-        assert_eq!(rapport.skipped[0].reason, "%TEMP% sort du profil");
+        assert_eq!(report.deleted, 0);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].path, "x.y");
+        assert_eq!(report.skipped[0].reason, "%TEMP% is outside the profile");
     }
 
-    /// Verrouille l'ordre au point d'appel, pas dans une séquence rejouée à
-    /// la main : `clean_rules_with` est la fonction que `clean` exécute, et
-    /// l'API corbeille injectée dit quand la corbeille a réellement été vidée.
+    /// Locks the order down at the call site, not in a sequence replayed by
+    /// hand: `clean_rules_with` is the function `clean` executes, and the
+    /// injected recycle bin API says when the bin was actually emptied.
     #[test]
-    fn la_corbeille_est_videe_avant_toute_regle_fichiers() {
-        // Sinon, en mode « Corbeille », la règle « files » y dépose ses
-        // fichiers et la règle Corbeille les détruit dans la même passe.
+    fn the_recycle_bin_is_emptied_before_any_files_rule() {
+        // Otherwise, in "Recycle Bin" mode, the "files" rule drops its files
+        // into it and the Recycle Bin rule destroys them in the same pass.
         let dir = tempfile::TempDir::new().unwrap();
-        let racine = dir.path().to_string_lossy().to_string();
+        let root = dir.path().to_string_lossy().to_string();
         std::fs::create_dir_all(dir.path().join(r"AppData\Local\Temp")).unwrap();
         std::fs::write(dir.path().join(r"AppData\Local\Temp\a.txt"), b"aaa").unwrap();
-        let lookup = move |nom: &str| match nom {
-            "USERPROFILE" => Some(racine.clone()),
-            "TEMP" => Some(format!(r"{racine}\AppData\Local\Temp")),
+        let lookup = move |name: &str| match name {
+            "USERPROFILE" => Some(root.clone()),
+            "TEMP" => Some(format!(r"{root}\AppData\Local\Temp")),
             _ => None,
         };
-        let journal = std::cell::RefCell::new(Vec::new());
+        let log = std::cell::RefCell::new(Vec::new());
         let query = || Ok((2u64, 20u64));
         let empty = || {
-            journal.borrow_mut().push("corbeille vidée".to_string());
+            log.borrow_mut().push("recycle bin emptied".to_string());
             Ok(())
         };
 
-        let rapport = clean_rules_with(
-            vec![regle("a"), regle_corbeille(), regle("b")],
+        let report = clean_rules_with(
+            vec![rule("a"), recycle_bin_rule(), rule("b")],
             CleanMode::Permanent,
-            |rule, mode| {
-                journal.borrow_mut().push(rule.id.clone());
-                crate::clean::clean_rule_with_api(rule, mode, &lookup, &query, &empty)
+            |r, mode| {
+                log.borrow_mut().push(r.id.clone());
+                crate::clean::clean_rule_with_api(r, mode, &lookup, &query, &empty)
                     .map_err(|e| e.to_string())
             },
         );
 
         assert_eq!(
-            *journal.borrow(),
-            vec!["windows.recycle-bin", "corbeille vidée", "a", "b"]
+            *log.borrow(),
+            vec!["windows.recycle-bin", "recycle bin emptied", "a", "b"]
         );
-        assert!(rapport.skipped.is_empty(), "{:?}", rapport.skipped);
-        // 2 éléments annoncés par la corbeille + le fichier de la règle « a ».
-        assert_eq!(rapport.deleted, 3);
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        // 2 items announced by the recycle bin + the file of rule "a".
+        assert_eq!(report.deleted, 3);
     }
 
     #[test]
-    fn lordre_des_regles_fichiers_est_conserve() {
-        let regles = ordre_de_nettoyage(vec![regle("a"), regle("b"), regle("c")]);
-        let ids: Vec<&str> = regles.iter().map(|r| r.id.as_str()).collect();
+    fn the_order_of_the_files_rules_is_preserved() {
+        let rules = cleaning_order(vec![rule("a"), rule("b"), rule("c")]);
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
     }
 
     #[test]
-    fn nettoyer_un_identifiant_inconnu_est_une_erreur() {
+    fn cleaning_an_unknown_id_is_an_error() {
         let err = tauri::async_runtime::block_on(clean(
-            vec!["inexistant".to_string()],
+            vec!["nonexistent".to_string()],
             crate::clean::CleanMode::Auto,
         ))
         .unwrap_err();
-        assert!(err.contains("inexistant"));
+        assert!(err.contains("nonexistent"));
     }
 }

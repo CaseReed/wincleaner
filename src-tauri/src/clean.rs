@@ -1,7 +1,7 @@
-use crate::rules::{profile_canon_with, system_env, EnvLookup, Risk, Rule, RuleError, RuleKind};
+use crate::rules::{canonical_profile_with, system_env, EnvLookup, Risk, Rule, RuleError, RuleKind};
 use crate::scan::{
-    build_set, est_point_danalyse, query_recycle_bin, racine_confinee, scan_rule_with_api, to_slash,
-    walk_roots, Confinement, RecycleQuery,
+    build_set, confined_root, is_reparse_point, query_recycle_bin, scan_rule_with_api, to_slash,
+    walk_roots, Containment, RecycleQuery,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -36,10 +36,10 @@ impl CleanReport {
     }
 }
 
-/// Vidage de la corbeille, injecté pour rester testable.
+/// Emptying of the recycle bin, injected to stay testable.
 pub type RecycleEmpty<'a> = &'a dyn Fn() -> Result<(), String>;
 
-/// Résout `Auto` en fonction du risque de la règle. Ne renvoie jamais `Auto`.
+/// Resolves `Auto` from the rule risk. Never returns `Auto`.
 pub fn effective_mode(mode: CleanMode, risk: Risk) -> CleanMode {
     match mode {
         CleanMode::Auto => match risk {
@@ -50,73 +50,76 @@ pub fn effective_mode(mode: CleanMode, risk: Risk) -> CleanMode {
     }
 }
 
-/// Dernière vérification avant de supprimer : le re-scan a beau être
-/// immédiat, un processus tournant sous le même compte peut remplacer un
-/// nom entre le `metadata()` du parcours et l'appel de suppression. On exige
-/// donc, sur le chemin lui-même et non sur ce qu'il pointe, un fichier
-/// régulier dont l'emplacement réel reste sous le profil.
+/// Last check before deleting: immediate as the re-scan is, a process running
+/// under the same account can replace a name between the walk's `metadata()`
+/// and the delete call. We therefore require, on the path itself and not on
+/// what it points to, a regular file whose real location stays under the
+/// profile.
 ///
-/// Rend le chemin canonique à supprimer, préfixe verbatim `\\?\` compris, et
-/// sa taille. `trash::delete` comme `remove_file` acceptent cette forme ; rien
-/// n'est affiché à partir d'elle (les entrées `skipped` reprennent le chemin
-/// analysé), donc rien ne justifie de la raccourcir.
-fn chemin_supprimable(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64), String> {
+/// Returns the canonical path to delete, verbatim `\\?\` prefix included, and
+/// its size. Both `trash::delete` and `remove_file` accept that form; nothing
+/// is displayed from it (`skipped` entries carry the scanned path), so nothing
+/// justifies shortening it.
+fn deletable_path(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64), String> {
     let md = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    if est_point_danalyse(&md) {
-        return Err("le chemin est devenu un point d'analyse".to_string());
+    if is_reparse_point(&md) {
+        return Err("the path has become a reparse point".to_string());
     }
     if !md.is_file() {
-        return Err("le chemin n'est plus un fichier régulier".to_string());
+        return Err("the path is no longer a regular file".to_string());
     }
-    let reel = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
-    if !reel.starts_with(profile_canon) {
-        return Err("le chemin sort du profil utilisateur au moment de la suppression".to_string());
+    let real = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    if !real.starts_with(profile_canon) {
+        return Err("the path is outside the user profile at deletion time".to_string());
     }
-    Ok((reel, md.len()))
+    Ok((real, md.len()))
 }
 
-/// Supprime les répertoires que la règle vient de vider.
+/// Removes the directories the rule has just emptied.
 ///
-/// Un répertoire n'est candidat que si les motifs de la règle le
-/// retiendraient : le périmètre du balayage est exactement celui de la règle,
-/// jamais plus large — la racine de marche elle-même n'est jamais supprimée
-/// (`min_depth(1)`). `remove_dir`, et non `remove_dir_all`, rend l'opération
-/// sûre par construction : un répertoire non vide fait échouer l'appel, qui
-/// est ignoré. Un répertoire vide ne porte aucune donnée, la passe est donc
-/// faite dans les deux modes de suppression.
-fn supprimer_les_repertoires_vides(
+/// A directory is a candidate only if the rule patterns would match it: the
+/// sweep has exactly the scope of the rule, never wider — and the walk root
+/// itself is never removed (`min_depth(1)`). `remove_dir`, rather than
+/// `remove_dir_all`, makes the operation safe by construction: a non-empty
+/// directory fails the call, which is ignored. An empty directory holds no
+/// data, so the pass runs in both deletion modes.
+fn remove_emptied_directories(
     patterns: &[String],
     excludes: &[String],
     profile_canon: &Path,
 ) -> Result<(), RuleError> {
     let include = build_set(patterns)?;
     let exclude = build_set(excludes)?;
-    for racine in walk_roots(patterns) {
-        let win_root = racine.chemin.replace('/', "\\");
-        if racine_confinee(&win_root, profile_canon) != Confinement::Marchable {
+    for root in walk_roots(patterns) {
+        let win_root = root.path.replace('/', "\\");
+        if confined_root(&win_root, profile_canon) != Containment::Walkable {
             continue;
         }
-        let mut marche = WalkDir::new(&win_root)
+        let mut walk = WalkDir::new(&win_root)
             .follow_links(false)
             .min_depth(1)
             .contents_first(true);
-        if let Some(profondeur) = racine.profondeur {
-            marche = marche.max_depth(profondeur);
+        if let Some(depth) = root.depth {
+            walk = walk.max_depth(depth);
         }
-        for entree in marche.into_iter().filter_map(|e| e.ok()) {
-            if !entree.file_type().is_dir() {
+        for entry in walk.into_iter().filter_map(|e| e.ok()) {
+            if !entry.file_type().is_dir() {
                 continue;
             }
-            // Un point d'analyse n'est pas un répertoire vide : `remove_dir`
-            // en effacerait le lien, pas son contenu.
-            if entree.metadata().map(|m| est_point_danalyse(&m)).unwrap_or(true) {
+            // A reparse point is not an empty directory: `remove_dir` would
+            // erase the link, not its contents.
+            if entry
+                .metadata()
+                .map(|m| is_reparse_point(&m))
+                .unwrap_or(true)
+            {
                 continue;
             }
-            let slash = to_slash(&entree.path().to_string_lossy());
+            let slash = to_slash(&entry.path().to_string_lossy());
             if !include.is_match(&slash) || exclude.is_match(&slash) {
                 continue;
             }
-            let _ = std::fs::remove_dir(entree.path());
+            let _ = std::fs::remove_dir(entry.path());
         }
     }
     Ok(())
@@ -129,8 +132,8 @@ pub fn clean_rule_with_api(
     recycle_query: RecycleQuery,
     recycle_empty: RecycleEmpty,
 ) -> Result<CleanReport, RuleError> {
-    // Re-scan interne juste avant suppression : le front n'a jamais envoyé
-    // de chemin, et l'état du disque a pu changer depuis l'analyse.
+    // Internal re-scan just before deleting: the front end never sent a path,
+    // and the state of the disk may have changed since the scan.
     let scan = scan_rule_with_api(rule, lookup, recycle_query)?;
 
     if rule.kind == RuleKind::RecycleBin {
@@ -152,13 +155,13 @@ pub fn clean_rule_with_api(
     }
 
     let target = effective_mode(mode, rule.risk);
-    let profile_canon = profile_canon_with(lookup)?;
+    let profile_canon = canonical_profile_with(lookup)?;
     let patterns = crate::rules::resolved_paths_with(rule, lookup)?;
     let excludes = crate::rules::resolved_excludes_with(rule, lookup)?;
     let mut report = CleanReport::default();
 
     for path in &scan.paths {
-        let (reel, size) = match chemin_supprimable(path, &profile_canon) {
+        let (real, size) = match deletable_path(path, &profile_canon) {
             Ok(v) => v,
             Err(reason) => {
                 report.skipped.push(SkippedItem {
@@ -169,9 +172,9 @@ pub fn clean_rule_with_api(
             }
         };
         let outcome = match target {
-            CleanMode::Permanent => std::fs::remove_file(&reel).map_err(|e| e.to_string()),
-            CleanMode::Trash => trash::delete(&reel).map_err(|e| e.to_string()),
-            CleanMode::Auto => unreachable!("effective_mode ne renvoie jamais Auto"),
+            CleanMode::Permanent => std::fs::remove_file(&real).map_err(|e| e.to_string()),
+            CleanMode::Trash => trash::delete(&real).map_err(|e| e.to_string()),
+            CleanMode::Auto => unreachable!("effective_mode never returns Auto"),
         };
         match outcome {
             Ok(()) => {
@@ -185,7 +188,7 @@ pub fn clean_rule_with_api(
         }
     }
 
-    supprimer_les_repertoires_vides(&patterns, &excludes, &profile_canon)?;
+    remove_emptied_directories(&patterns, &excludes, &profile_canon)?;
     Ok(report)
 }
 
@@ -199,9 +202,8 @@ pub fn clean_rule(rule: &Rule, mode: CleanMode) -> Result<CleanReport, RuleError
     )
 }
 
-/// Vide la corbeille de tous les volumes, sans confirmation, sans barre de
-/// progression et sans son. Irréversible : n'est appelée que par la règle
-/// `windows.recycle-bin`.
+/// Empties the recycle bin of every volume, without confirmation, progress bar
+/// or sound. Irreversible: only called by the `windows.recycle-bin` rule.
 pub fn empty_recycle_bin() -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::{
@@ -210,7 +212,7 @@ pub fn empty_recycle_bin() -> Result<(), String> {
 
     let flags = SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND;
     unsafe { SHEmptyRecycleBinW(None, PCWSTR::null(), flags) }
-        .map_err(|e| format!("SHEmptyRecycleBinW a échoué : {e}"))
+        .map_err(|e| format!("SHEmptyRecycleBinW failed: {e}"))
 }
 
 #[cfg(test)]
@@ -222,7 +224,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    fn faux_profil() -> TempDir {
+    fn fake_profile() -> TempDir {
         let dir = TempDir::new().unwrap();
         let temp = dir.path().join("AppData").join("Local").join("Temp");
         fs::create_dir_all(temp.join("sub")).unwrap();
@@ -242,11 +244,11 @@ mod tests {
         }
     }
 
-    fn regle_temp(risk: Risk) -> Rule {
+    fn temp_rule(risk: Risk) -> Rule {
         Rule {
             id: "windows.temp".into(),
-            category: "Système".into(),
-            label: "Fichiers temporaires".into(),
+            category: "System".into(),
+            label: "Temporary files".into(),
             paths: vec![r"%TEMP%\**\*".into()],
             exclude: vec![],
             risk,
@@ -256,11 +258,11 @@ mod tests {
         }
     }
 
-    fn regle_corbeille() -> Rule {
+    fn recycle_bin_rule() -> Rule {
         Rule {
             id: "windows.recycle-bin".into(),
-            category: "Système".into(),
-            label: "Corbeille".into(),
+            category: "System".into(),
+            label: "Recycle Bin".into(),
             paths: vec![],
             exclude: vec![],
             risk: Risk::Low,
@@ -270,87 +272,87 @@ mod tests {
         }
     }
 
-    fn recycle_interdit_query() -> Result<(u64, u64), String> {
-        panic!("l'API corbeille ne doit pas être appelée pour une règle « files »");
+    fn forbidden_recycle_query() -> Result<(u64, u64), String> {
+        panic!("the recycle bin API must not be called for a \"files\" rule");
     }
 
-    fn recycle_interdit_empty() -> Result<(), String> {
-        panic!("l'API corbeille ne doit pas être appelée pour une règle « files »");
+    fn forbidden_recycle_empty() -> Result<(), String> {
+        panic!("the recycle bin API must not be called for a \"files\" rule");
     }
 
-    fn jonction(lien: &Path, cible: &Path) {
+    fn junction(link: &Path, target: &Path) {
         let out = std::process::Command::new("cmd")
             .arg("/C")
             .arg("mklink")
             .arg("/J")
-            .arg(lien)
-            .arg(cible)
+            .arg(link)
+            .arg(target)
             .output()
-            .expect("mklink n'a pas pu être lancé");
+            .expect("mklink could not be started");
         assert!(
             out.status.success(),
-            "mklink /J a échoué : {}",
+            "mklink /J failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
 
     #[test]
-    fn un_fichier_reel_sous_le_profil_est_supprimable() {
+    fn a_real_file_under_the_profile_is_deletable() {
         let dir = TempDir::new().unwrap();
-        let profil = std::fs::canonicalize(dir.path()).unwrap();
+        let profile = std::fs::canonicalize(dir.path()).unwrap();
         let f = dir.path().join("a.txt");
         fs::write(&f, b"aaa").unwrap();
-        let (_, taille) =
-            chemin_supprimable(&f.to_string_lossy(), &profil).expect("devrait être supprimable");
-        assert_eq!(taille, 3);
+        let (_, size) =
+            deletable_path(&f.to_string_lossy(), &profile).expect("should be deletable");
+        assert_eq!(size, 3);
     }
 
     #[test]
-    fn un_chemin_devenu_repertoire_entre_le_scan_et_la_suppression_est_ignore() {
+    fn a_path_that_became_a_directory_between_scan_and_delete_is_skipped() {
         let dir = TempDir::new().unwrap();
-        let profil = std::fs::canonicalize(dir.path()).unwrap();
+        let profile = std::fs::canonicalize(dir.path()).unwrap();
         let d = dir.path().join("a.txt");
         fs::create_dir(&d).unwrap();
-        let err = chemin_supprimable(&d.to_string_lossy(), &profil).unwrap_err();
-        assert!(err.contains("fichier régulier"), "raison = {err}");
+        let err = deletable_path(&d.to_string_lossy(), &profile).unwrap_err();
+        assert!(err.contains("regular file"), "reason = {err}");
     }
 
     #[test]
-    fn un_chemin_devenu_jonction_entre_le_scan_et_la_suppression_est_ignore() {
+    fn a_path_that_became_a_junction_between_scan_and_delete_is_skipped() {
         let base = TempDir::new().unwrap();
-        let profil_dir = base.path().join("profil");
-        let dehors = base.path().join("dehors");
-        fs::create_dir_all(&profil_dir).unwrap();
-        fs::create_dir_all(&dehors).unwrap();
-        fs::write(dehors.join("precieux.txt"), b"precieux").unwrap();
-        let profil = std::fs::canonicalize(&profil_dir).unwrap();
-        // Le nom qui avait été analysé comme un fichier est devenu une jonction.
-        let piege = profil_dir.join("a.txt");
-        jonction(&piege, &dehors);
+        let profile_dir = base.path().join("profile");
+        let outside = base.path().join("outside");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("precious.txt"), b"precious").unwrap();
+        let profile = std::fs::canonicalize(&profile_dir).unwrap();
+        // The name that had been scanned as a file has become a junction.
+        let trap = profile_dir.join("a.txt");
+        junction(&trap, &outside);
 
-        let err = chemin_supprimable(&piege.to_string_lossy(), &profil).unwrap_err();
-        assert!(err.contains("point d'analyse"), "raison = {err}");
-        assert!(dehors.join("precieux.txt").exists());
+        let err = deletable_path(&trap.to_string_lossy(), &profile).unwrap_err();
+        assert!(err.contains("reparse point"), "reason = {err}");
+        assert!(outside.join("precious.txt").exists());
     }
 
     #[test]
-    fn un_fichier_hors_du_profil_nest_pas_supprimable() {
+    fn a_file_outside_the_profile_is_not_deletable() {
         let base = TempDir::new().unwrap();
-        let profil_dir = base.path().join("profil");
-        let dehors = base.path().join("dehors");
-        fs::create_dir_all(&profil_dir).unwrap();
-        fs::create_dir_all(&dehors).unwrap();
-        let f = dehors.join("precieux.txt");
-        fs::write(&f, b"precieux").unwrap();
-        let profil = std::fs::canonicalize(&profil_dir).unwrap();
+        let profile_dir = base.path().join("profile");
+        let outside = base.path().join("outside");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let f = outside.join("precious.txt");
+        fs::write(&f, b"precious").unwrap();
+        let profile = std::fs::canonicalize(&profile_dir).unwrap();
 
-        let err = chemin_supprimable(&f.to_string_lossy(), &profil).unwrap_err();
-        assert!(err.contains("sort du profil"), "raison = {err}");
+        let err = deletable_path(&f.to_string_lossy(), &profile).unwrap_err();
+        assert!(err.contains("outside the user profile"), "reason = {err}");
         assert!(f.exists());
     }
 
     #[test]
-    fn auto_devient_permanent_pour_un_risque_faible() {
+    fn auto_becomes_permanent_for_a_low_risk() {
         assert_eq!(
             effective_mode(CleanMode::Auto, Risk::Low),
             CleanMode::Permanent
@@ -358,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_devient_corbeille_pour_un_risque_moyen() {
+    fn auto_becomes_trash_for_a_medium_risk() {
         assert_eq!(
             effective_mode(CleanMode::Auto, Risk::Medium),
             CleanMode::Trash
@@ -366,11 +368,8 @@ mod tests {
     }
 
     #[test]
-    fn un_mode_explicite_nest_pas_reinterprete() {
-        assert_eq!(
-            effective_mode(CleanMode::Trash, Risk::Low),
-            CleanMode::Trash
-        );
+    fn an_explicit_mode_is_not_reinterpreted() {
+        assert_eq!(effective_mode(CleanMode::Trash, Risk::Low), CleanMode::Trash);
         assert_eq!(
             effective_mode(CleanMode::Permanent, Risk::Medium),
             CleanMode::Permanent
@@ -378,16 +377,16 @@ mod tests {
     }
 
     #[test]
-    fn suppression_definitive_efface_les_fichiers() {
-        let dir = faux_profil();
+    fn permanent_deletion_erases_the_files() {
+        let dir = fake_profile();
         let lookup = lookup_for(dir.path());
-        let rule = regle_temp(Risk::Low);
+        let rule = temp_rule(Risk::Low);
         let report = clean_rule_with_api(
             &rule,
             CleanMode::Permanent,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
         assert_eq!(report.deleted, 2);
@@ -399,16 +398,16 @@ mod tests {
     }
 
     #[test]
-    fn suppression_corbeille_efface_les_fichiers_du_repertoire() {
-        let dir = faux_profil();
+    fn trash_deletion_erases_the_files_from_the_directory() {
+        let dir = fake_profile();
         let lookup = lookup_for(dir.path());
-        let rule = regle_temp(Risk::Medium);
+        let rule = temp_rule(Risk::Medium);
         let report = clean_rule_with_api(
             &rule,
             CleanMode::Trash,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
         assert_eq!(report.deleted, 2);
@@ -418,13 +417,13 @@ mod tests {
     }
 
     #[test]
-    fn un_fichier_verrouille_finit_dans_skipped() {
-        let dir = faux_profil();
+    fn a_locked_file_ends_up_in_skipped() {
+        let dir = fake_profile();
         let lookup = lookup_for(dir.path());
         let temp = dir.path().join("AppData").join("Local").join("Temp");
-        let verrou = temp.join("a.txt");
-        // Ouverture en écriture avec partage refusé : Windows renvoie
-        // ERROR_SHARING_VIOLATION à toute tentative de suppression.
+        let locked = temp.join("a.txt");
+        // Opened for writing with sharing denied: Windows returns
+        // ERROR_SHARING_VIOLATION to any delete attempt.
         let _handle = {
             #[cfg(windows)]
             {
@@ -432,22 +431,22 @@ mod tests {
                 OpenOptions::new()
                     .write(true)
                     .share_mode(0)
-                    .open(&verrou)
+                    .open(&locked)
                     .unwrap()
             }
             #[cfg(not(windows))]
             {
-                OpenOptions::new().write(true).open(&verrou).unwrap()
+                OpenOptions::new().write(true).open(&locked).unwrap()
             }
         };
 
-        let rule = regle_temp(Risk::Low);
+        let rule = temp_rule(Risk::Low);
         let report = clean_rule_with_api(
             &rule,
             CleanMode::Permanent,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
 
@@ -456,91 +455,91 @@ mod tests {
         assert_eq!(report.skipped.len(), 1);
         assert!(report.skipped[0].path.ends_with("a.txt"));
         assert!(!report.skipped[0].reason.is_empty());
-        assert!(verrou.exists());
+        assert!(locked.exists());
     }
 
     #[test]
-    fn le_nettoyage_supprime_les_repertoires_devenus_vides_mais_pas_la_racine() {
-        // Sans cette passe, %TEMP% garde des dizaines de milliers de
-        // répertoires vides : chaque analyse doit les reparcourir pour ne
-        // rien y trouver, et l'utilisateur voit son dossier toujours plein.
-        let dir = faux_profil();
+    fn cleaning_removes_the_emptied_directories_but_not_the_root() {
+        // Without this pass, %TEMP% keeps tens of thousands of empty
+        // directories: every scan has to walk them again to find nothing, and
+        // the user sees a folder that still looks full.
+        let dir = fake_profile();
         let lookup = lookup_for(dir.path());
         let temp = dir.path().join("AppData").join("Local").join("Temp");
-        fs::create_dir_all(temp.join("garde").join("profond")).unwrap();
-        fs::write(temp.join("garde").join("c.keep"), b"c").unwrap();
+        fs::create_dir_all(temp.join("keep").join("deep")).unwrap();
+        fs::write(temp.join("keep").join("c.keep"), b"c").unwrap();
 
         let rule = Rule {
             exclude: vec![r"%TEMP%\**\*.keep".into()],
-            ..regle_temp(Risk::Low)
+            ..temp_rule(Risk::Low)
         };
         clean_rule_with_api(
             &rule,
             CleanMode::Permanent,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
 
-        assert!(temp.exists(), "la racine de la règle n'est jamais supprimée");
-        assert!(!temp.join("sub").exists(), "sub, vidé, doit disparaître");
+        assert!(temp.exists(), "the rule root is never removed");
+        assert!(!temp.join("sub").exists(), "sub, emptied, must disappear");
         assert!(
-            !temp.join("garde").join("profond").exists(),
-            "profond, vide, doit disparaître"
+            !temp.join("keep").join("deep").exists(),
+            "deep, empty, must disappear"
         );
         assert!(
-            temp.join("garde").exists(),
-            "garde contient encore c.keep : remove_dir doit échouer et être ignoré"
+            temp.join("keep").exists(),
+            "keep still holds c.keep: remove_dir must fail and be ignored"
         );
     }
 
-    /// Le balayage des répertoires vides a exactement le périmètre de la
-    /// règle : sans le garde `include.is_match`, il effacerait des
-    /// répertoires que la règle n'aurait jamais eu le droit de toucher.
+    /// The empty-directory sweep has exactly the scope of the rule: without
+    /// the `include.is_match` guard it would erase directories the rule was
+    /// never allowed to touch.
     #[test]
-    fn un_repertoire_vide_hors_des_motifs_de_la_regle_survit() {
-        let dir = faux_profil();
+    fn an_empty_directory_outside_the_rule_patterns_survives() {
+        let dir = fake_profile();
         let lookup = lookup_for(dir.path());
         let temp = dir.path().join("AppData").join("Local").join("Temp");
-        // Vide, sous la racine parcourue, mais ne correspond pas à `*.txt`.
-        fs::create_dir_all(temp.join("etranger")).unwrap();
+        // Empty, under the walked root, but does not match `*.txt`.
+        fs::create_dir_all(temp.join("stranger")).unwrap();
 
         let rule = Rule {
             paths: vec![r"%TEMP%\**\*.txt".into()],
-            ..regle_temp(Risk::Low)
+            ..temp_rule(Risk::Low)
         };
         let report = clean_rule_with_api(
             &rule,
             CleanMode::Permanent,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
 
         assert_eq!(report.deleted, 2);
         assert!(
-            temp.join("etranger").exists(),
-            "un répertoire vide hors des motifs de la règle ne doit pas être supprimé"
+            temp.join("stranger").exists(),
+            "an empty directory outside the rule patterns must not be removed"
         );
         assert!(
             temp.join("sub").exists(),
-            "sub non plus : vidé par la règle, mais hors de ses motifs"
+            "neither must sub: emptied by the rule, but outside its patterns"
         );
     }
 
     #[test]
-    fn nettoyer_un_repertoire_vide_ne_fait_rien() {
+    fn cleaning_an_empty_directory_does_nothing() {
         let dir = TempDir::new().unwrap();
         let lookup = lookup_for(dir.path());
-        let rule = regle_temp(Risk::Low);
+        let rule = temp_rule(Risk::Low);
         let report = clean_rule_with_api(
             &rule,
             CleanMode::Permanent,
             &lookup,
-            &recycle_interdit_query,
-            &recycle_interdit_empty,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
         )
         .unwrap();
         assert_eq!(report.deleted, 0);
@@ -549,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_additionne_deux_rapports() {
+    fn merge_adds_two_reports_together() {
         let mut a = CleanReport {
             freed_bytes: 10,
             deleted: 2,
@@ -572,13 +571,13 @@ mod tests {
     }
 
     #[test]
-    fn la_regle_corbeille_appelle_lapi_corbeille() {
+    fn the_recycle_bin_rule_calls_the_recycle_bin_api() {
         let dir = TempDir::new().unwrap();
         let lookup = lookup_for(dir.path());
         let query = || Ok((4u64, 4096u64));
         let empty = || Ok(());
         let report = clean_rule_with_api(
-            &regle_corbeille(),
+            &recycle_bin_rule(),
             CleanMode::Auto,
             &lookup,
             &query,
@@ -591,17 +590,22 @@ mod tests {
     }
 
     #[test]
-    fn un_echec_de_lapi_corbeille_finit_dans_skipped() {
+    fn a_failed_recycle_bin_api_call_ends_up_in_skipped() {
         let dir = TempDir::new().unwrap();
         let lookup = lookup_for(dir.path());
         let query = || Ok((4u64, 4096u64));
-        let empty = || Err("accès refusé".to_string());
-        let report =
-            clean_rule_with_api(&regle_corbeille(), CleanMode::Auto, &lookup, &query, &empty)
-                .unwrap();
+        let empty = || Err("access denied".to_string());
+        let report = clean_rule_with_api(
+            &recycle_bin_rule(),
+            CleanMode::Auto,
+            &lookup,
+            &query,
+            &empty,
+        )
+        .unwrap();
         assert_eq!(report.deleted, 0);
         assert_eq!(report.freed_bytes, 0);
         assert_eq!(report.skipped.len(), 1);
-        assert_eq!(report.skipped[0].reason, "accès refusé");
+        assert_eq!(report.skipped[0].reason, "access denied");
     }
 }

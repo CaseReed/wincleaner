@@ -30,36 +30,36 @@ pub struct StartupEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartupError {
-    /// Identifiant d'entrée mal formé.
+    /// Malformed entry id.
     BadId(String),
-    /// `RunOnce` est en lecture seule dans le MVP.
+    /// `RunOnce` is read-only in the MVP.
     ReadOnlySource,
-    /// Aucune entrée ne porte cet identifiant.
+    /// No entry carries this id.
     NotFound(String),
-    /// Erreur d'accès au registre ou au système de fichiers.
+    /// Registry or file system access error.
     Io(String),
 }
 
 impl fmt::Display for StartupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StartupError::BadId(id) => write!(f, "identifiant d'entrée invalide : « {id} »"),
+            StartupError::BadId(id) => write!(f, "invalid startup entry id: \"{id}\""),
             StartupError::ReadOnlySource => write!(
                 f,
-                "les entrées RunOnce sont en lecture seule et ne peuvent pas être désactivées"
+                "RunOnce entries are read-only and cannot be disabled"
             ),
-            StartupError::NotFound(id) => write!(f, "aucune entrée de démarrage « {id} »"),
-            StartupError::Io(m) => write!(f, "accès au démarrage impossible : {m}"),
+            StartupError::NotFound(id) => write!(f, "no startup entry \"{id}\""),
+            StartupError::Io(m) => write!(f, "cannot access startup entries: {m}"),
         }
     }
 }
 
 impl std::error::Error for StartupError {}
 
-/// Blob StartupApproved : 12 octets.
-/// octet 0 : 0x02 activé, 0x03 désactivé.
-/// octets 1..4 : zéro.
-/// octets 4..12 : FILETIME de la désactivation, petit-boutien (0 si activé).
+/// StartupApproved blob: 12 bytes.
+/// byte 0: 0x02 enabled, 0x03 disabled.
+/// bytes 1..4: zero.
+/// bytes 4..12: FILETIME of the deactivation, little-endian (0 when enabled).
 pub fn encode_startup_state(enabled: bool, filetime: u64) -> [u8; 12] {
     let mut blob = [0u8; 12];
     blob[0] = if enabled { 0x02 } else { 0x03 };
@@ -68,12 +68,12 @@ pub fn encode_startup_state(enabled: bool, filetime: u64) -> [u8; 12] {
     blob
 }
 
-/// Absence de valeur (slice vide) ou blob de moins de 12 octets : activé.
+/// Missing value (empty slice) or a blob shorter than 12 bytes: enabled.
 ///
-/// Windows code l'état dans le bit 0 de l'octet 0 : `0x02`, `0x06`, `0x0A`
-/// sont activés, `0x03`, `0x07`, `0x0B` désactivés. Les valeurs autres que
-/// `0x02`/`0x03` sont écrites par d'autres outils (Gestionnaire des tâches,
-/// Autoruns) et doivent être lues correctement.
+/// Windows encodes the state in bit 0 of byte 0: `0x02`, `0x06`, `0x0A` are
+/// enabled, `0x03`, `0x07`, `0x0B` disabled. Values other than `0x02`/`0x03`
+/// are written by other tools (Task Manager, Autoruns) and must be read
+/// correctly.
 pub fn decode_startup_state(blob: &[u8]) -> bool {
     if blob.len() < 12 {
         return true;
@@ -109,8 +109,8 @@ pub fn parse_entry_id(id: &str) -> Result<(StartupSource, String), StartupError>
     Ok((source, name.to_string()))
 }
 
-/// Lit une valeur binaire sous HKCU. `Ok(None)` si la clé ou la valeur
-/// n'existe pas — ce qui, pour StartupApproved, signifie « activé ».
+/// Reads a binary value under HKCU. `Ok(None)` when the key or the value does
+/// not exist — which, for StartupApproved, means "enabled".
 pub fn read_hkcu_binary(subkey: &str, value_name: &str) -> Result<Option<Vec<u8>>, StartupError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = match hkcu.open_subkey_with_flags(subkey, KEY_READ) {
@@ -125,7 +125,7 @@ pub fn read_hkcu_binary(subkey: &str, value_name: &str) -> Result<Option<Vec<u8>
     }
 }
 
-/// Écrit une valeur binaire sous HKCU, en créant la sous-clé au besoin.
+/// Writes a binary value under HKCU, creating the subkey if needed.
 pub fn write_hkcu_binary(subkey: &str, value_name: &str, blob: &[u8]) -> Result<(), StartupError> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = match hkcu.open_subkey_with_flags(subkey, KEY_SET_VALUE) {
@@ -144,14 +144,14 @@ pub fn write_hkcu_binary(subkey: &str, value_name: &str, blob: &[u8]) -> Result<
         .map_err(|e| StartupError::Io(e.to_string()))
 }
 
-/// FILETIME courant : centaines de nanosecondes depuis le 1er janvier 1601.
+/// Current FILETIME: hundreds of nanoseconds since 1 January 1601.
 pub fn now_filetime() -> u64 {
-    const UNIX_EPOCH_EN_FILETIME: u64 = 116_444_736_000_000_000;
+    const UNIX_EPOCH_IN_FILETIME: u64 = 116_444_736_000_000_000;
     let since_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64 / 100)
         .unwrap_or(0);
-    UNIX_EPOCH_EN_FILETIME + since_unix
+    UNIX_EPOCH_IN_FILETIME + since_unix
 }
 
 fn read_run_values(subkey: &str) -> Result<Vec<(String, String)>, StartupError> {
@@ -218,7 +218,7 @@ pub fn list_startup() -> Result<Vec<StartupEntry>, StartupError> {
             id: entry_id(StartupSource::RunOnce, &name),
             name: name.clone(),
             command,
-            // RunOnce n'a pas d'état StartupApproved : toujours affiché actif.
+            // RunOnce has no StartupApproved state: always shown as enabled.
             source: StartupSource::RunOnce,
             enabled: true,
         });
@@ -250,15 +250,15 @@ pub fn list_startup() -> Result<Vec<StartupEntry>, StartupError> {
     Ok(entries)
 }
 
-/// Active ou désactive une entrée en écrivant son blob StartupApproved.
-/// L'entrée n'est jamais supprimée. `RunOnce` est refusé.
+/// Enables or disables an entry by writing its StartupApproved blob. The entry
+/// is never deleted. `RunOnce` is refused.
 pub fn set_startup_enabled(id: &str, enabled: bool) -> Result<(), StartupError> {
     let (source, name) = parse_entry_id(id)?;
     if source == StartupSource::RunOnce {
         return Err(StartupError::ReadOnlySource);
     }
-    let existe = list_startup()?.into_iter().any(|e| e.id == id);
-    if !existe {
+    let exists = list_startup()?.into_iter().any(|e| e.id == id);
+    if !exists {
         return Err(StartupError::NotFound(id.to_string()));
     }
     let blob = encode_startup_state(enabled, now_filetime());
@@ -271,22 +271,22 @@ mod tests {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
-    /// Sous-clé de test, créée et supprimée par le test lui-même.
-    /// Ne jamais pointer sur les vraies clés Run.
+    /// Test subkey, created and deleted by the test itself.
+    /// Never point this at the real Run keys.
     const TEST_KEY: &str = r"Software\wincleaner-test";
 
-    struct CleClaireDeTest(String);
+    struct ScratchTestKey(String);
 
-    impl CleClaireDeTest {
+    impl ScratchTestKey {
         fn new(suffix: &str) -> Self {
             let path = format!("{TEST_KEY}\\{suffix}");
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
             hkcu.create_subkey(&path).unwrap();
-            CleClaireDeTest(path)
+            ScratchTestKey(path)
         }
     }
 
-    impl Drop for CleClaireDeTest {
+    impl Drop for ScratchTestKey {
         fn drop(&mut self) {
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
             let _ = hkcu.delete_subkey_all(&self.0);
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_active_met_0x02_et_un_filetime_nul() {
+    fn encoding_enabled_writes_0x02_and_a_zero_filetime() {
         let blob = encode_startup_state(true, 0);
         assert_eq!(blob.len(), 12);
         assert_eq!(blob[0], 0x02);
@@ -304,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_desactive_met_0x03_et_le_filetime_en_petit_boutien() {
+    fn encoding_disabled_writes_0x03_and_the_filetime_little_endian() {
         let blob = encode_startup_state(false, 0x0102_0304_0506_0708);
         assert_eq!(blob[0], 0x03);
         assert_eq!(&blob[1..4], &[0, 0, 0]);
@@ -315,58 +315,58 @@ mod tests {
     }
 
     #[test]
-    fn decode_absence_de_valeur_vaut_active() {
+    fn decoding_a_missing_value_means_enabled() {
         assert!(decode_startup_state(&[]));
     }
 
     #[test]
-    fn decode_blob_trop_court_vaut_active() {
+    fn decoding_a_too_short_blob_means_enabled() {
         assert!(decode_startup_state(&[0x03, 0x00, 0x00]));
     }
 
     #[test]
-    fn decode_0x03_vaut_desactive() {
+    fn decoding_0x03_means_disabled() {
         let blob = encode_startup_state(false, 42);
         assert!(!decode_startup_state(&blob));
     }
 
     #[test]
-    fn decode_0x02_vaut_active() {
+    fn decoding_0x02_means_enabled() {
         let blob = encode_startup_state(true, 0);
         assert!(decode_startup_state(&blob));
     }
 
     #[test]
-    fn decode_0x06_ecrit_par_un_autre_outil_vaut_active() {
+    fn decoding_0x06_written_by_another_tool_means_enabled() {
         let mut blob = [0u8; 12];
         blob[0] = 0x06;
         assert!(decode_startup_state(&blob));
     }
 
     #[test]
-    fn decode_0x07_ecrit_par_un_autre_outil_vaut_desactive() {
-        // Windows et le Gestionnaire des tâches encodent l'état dans le bit 0 :
-        // 0x02/0x06/0x0A sont activés, 0x03/0x07/0x0B désactivés.
-        for premier in [0x03u8, 0x07, 0x0B] {
+    fn decoding_0x07_written_by_another_tool_means_disabled() {
+        // Windows and Task Manager encode the state in bit 0:
+        // 0x02/0x06/0x0A are enabled, 0x03/0x07/0x0B disabled.
+        for first in [0x03u8, 0x07, 0x0B] {
             let mut blob = [0u8; 12];
-            blob[0] = premier;
+            blob[0] = first;
             assert!(
                 !decode_startup_state(&blob),
-                "0x{premier:02X} doit être lu comme désactivé"
+                "0x{first:02X} must be read as disabled"
             );
         }
-        for premier in [0x02u8, 0x06, 0x0A] {
+        for first in [0x02u8, 0x06, 0x0A] {
             let mut blob = [0u8; 12];
-            blob[0] = premier;
+            blob[0] = first;
             assert!(
                 decode_startup_state(&blob),
-                "0x{premier:02X} doit être lu comme activé"
+                "0x{first:02X} must be read as enabled"
             );
         }
     }
 
     #[test]
-    fn encode_puis_decode_est_une_identite() {
+    fn encoding_then_decoding_is_an_identity() {
         assert!(decode_startup_state(&encode_startup_state(true, 0)));
         assert!(!decode_startup_state(&encode_startup_state(
             false,
@@ -375,12 +375,9 @@ mod tests {
     }
 
     #[test]
-    fn identifiants_aller_retour() {
+    fn entry_ids_round_trip() {
         assert_eq!(entry_id(StartupSource::Run, "OneDrive"), "run:OneDrive");
-        assert_eq!(
-            entry_id(StartupSource::RunOnce, "Patch"),
-            "run-once:Patch"
-        );
+        assert_eq!(entry_id(StartupSource::RunOnce, "Patch"), "run-once:Patch");
         assert_eq!(
             entry_id(StartupSource::Folder, "Notes.lnk"),
             "folder:Notes.lnk"
@@ -390,15 +387,15 @@ mod tests {
             (StartupSource::Run, "OneDrive".to_string())
         );
         assert_eq!(
-            parse_entry_id("folder:Mon App.lnk").unwrap(),
-            (StartupSource::Folder, "Mon App.lnk".to_string())
+            parse_entry_id("folder:My App.lnk").unwrap(),
+            (StartupSource::Folder, "My App.lnk".to_string())
         );
     }
 
     #[test]
-    fn parse_dun_identifiant_invalide_echoue() {
+    fn parsing_an_invalid_id_fails() {
         assert!(matches!(
-            parse_entry_id("bidon:X").unwrap_err(),
+            parse_entry_id("bogus:X").unwrap_err(),
             StartupError::BadId(_)
         ));
         assert!(matches!(
@@ -408,40 +405,40 @@ mod tests {
     }
 
     #[test]
-    fn ecriture_puis_lecture_dun_blob_dans_hkcu() {
-        let cle = CleClaireDeTest::new("approved");
+    fn writing_then_reading_a_blob_in_hkcu() {
+        let key = ScratchTestKey::new("approved");
         let blob = encode_startup_state(false, 0x1122_3344_5566_7788);
 
-        assert_eq!(read_hkcu_binary(&cle.0, "MonApp").unwrap(), None);
+        assert_eq!(read_hkcu_binary(&key.0, "MyApp").unwrap(), None);
 
-        write_hkcu_binary(&cle.0, "MonApp", &blob).unwrap();
-        let relu = read_hkcu_binary(&cle.0, "MonApp").unwrap().unwrap();
-        assert_eq!(relu, blob.to_vec());
-        assert!(!decode_startup_state(&relu));
+        write_hkcu_binary(&key.0, "MyApp", &blob).unwrap();
+        let read_back = read_hkcu_binary(&key.0, "MyApp").unwrap().unwrap();
+        assert_eq!(read_back, blob.to_vec());
+        assert!(!decode_startup_state(&read_back));
 
-        write_hkcu_binary(&cle.0, "MonApp", &encode_startup_state(true, 0)).unwrap();
-        let relu = read_hkcu_binary(&cle.0, "MonApp").unwrap().unwrap();
-        assert!(decode_startup_state(&relu));
+        write_hkcu_binary(&key.0, "MyApp", &encode_startup_state(true, 0)).unwrap();
+        let read_back = read_hkcu_binary(&key.0, "MyApp").unwrap().unwrap();
+        assert!(decode_startup_state(&read_back));
     }
 
     #[test]
-    fn lecture_dune_cle_absente_rend_none() {
-        let absent = r"Software\wincleaner-test\jamais-cree";
-        assert_eq!(read_hkcu_binary(absent, "X").unwrap(), None);
+    fn reading_a_missing_key_returns_none() {
+        let missing = r"Software\wincleaner-test\never-created";
+        assert_eq!(read_hkcu_binary(missing, "X").unwrap(), None);
     }
 
     #[test]
-    fn desactiver_une_entree_run_once_est_refuse() {
+    fn disabling_a_run_once_entry_is_refused() {
         let err = set_startup_enabled("run-once:Patch", false).unwrap_err();
         assert!(matches!(err, StartupError::ReadOnlySource));
     }
 
-    /// Test couplé à l'environnement : il lit les vraies clés Run/RunOnce et
-    /// le vrai dossier Démarrage de l'utilisateur courant (lecture seule, rien
-    /// n'est modifié). La liste dépend donc du poste : les assertions ne
-    /// portent que sur des invariants de forme, jamais sur un contenu attendu.
+    /// Environment-coupled test: it reads the real Run/RunOnce keys and the
+    /// real Startup folder of the current user (read-only, nothing is
+    /// modified). The list therefore depends on the machine: the assertions
+    /// only cover shape invariants, never expected content.
     #[test]
-    fn lister_le_demarrage_ne_panique_pas() {
+    fn listing_startup_entries_does_not_panic() {
         let entries = list_startup().unwrap();
         for e in &entries {
             assert!(!e.id.is_empty());

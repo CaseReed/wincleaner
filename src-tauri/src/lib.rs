@@ -4,19 +4,19 @@ pub mod rules;
 pub mod scan;
 pub mod startup;
 
-/// Texte affiché quand les règles embarquées refusent de se charger. En
-/// release `windows_subsystem = "windows"` : la sortie d'erreur n'est visible
-/// nulle part, le message doit passer par une boîte de dialogue.
+/// Text shown when the embedded rules refuse to load. In release,
+/// `windows_subsystem = "windows"` means standard error is visible nowhere, so
+/// the message has to go through a dialog box.
 pub fn startup_error_message(err: &rules::RuleError) -> String {
     format!(
-        "WinCleaner ne peut pas démarrer.\n\n\
-         Le fichier de règles embarqué (rules.toml) est invalide :\n{err}\n\n\
-         Aucun fichier n'a été touché. L'application va se fermer."
+        "WinCleaner cannot start.\n\n\
+         The embedded rules file (rules.toml) is invalid:\n{err}\n\n\
+         No file has been touched. The application will now close."
     )
 }
 
-/// Affiche le message d'échec de démarrage. En release le binaire n'a pas de
-/// console : sans boîte de dialogue, l'application se fermerait en silence.
+/// Shows the startup failure message. In release the binary has no console:
+/// without a dialog box, the application would close silently.
 fn show_startup_error(message: &str) {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
@@ -38,7 +38,7 @@ fn show_startup_error(message: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Chargement bloquant : un rules.toml invalide interdit le démarrage.
+    // Blocking load: an invalid rules.toml forbids startup.
     if let Err(err) = rules::embedded_rules() {
         let message = startup_error_message(&err);
         eprintln!("{message}");
@@ -56,7 +56,7 @@ pub fn run() {
             commands::set_startup_enabled,
         ])
         .run(tauri::generate_context!())
-        .expect("erreur au lancement de WinCleaner");
+        .expect("error while launching WinCleaner");
 }
 
 #[cfg(test)]
@@ -65,9 +65,9 @@ mod tests {
     use crate::rules::RuleError;
 
     #[test]
-    fn le_message_de_la_porte_de_demarrage_reprend_lerreur() {
+    fn the_startup_gate_message_carries_the_error() {
         let msg = startup_error_message(&RuleError::UnknownVar("WINDIR".to_string()));
-        assert!(msg.starts_with("WinCleaner ne peut pas démarrer"));
+        assert!(msg.starts_with("WinCleaner cannot start"));
         assert!(msg.contains("rules.toml"));
         assert!(msg.contains("%WINDIR%"));
     }

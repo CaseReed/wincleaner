@@ -2,15 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 
-/// Contenu de `src-tauri/rules.toml`, embarqué dans le binaire.
+/// Contents of `src-tauri/rules.toml`, embedded in the binary.
 pub const RULES_TOML: &str = include_str!("../rules.toml");
 
-/// Liste blanche exhaustive des variables d'environnement utilisables
-/// dans un chemin de règle.
+/// Exhaustive allow-list of the environment variables a rule path may use.
 pub const ALLOWED_VARS: [&str; 4] = ["TEMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"];
 
-/// Fonction de résolution d'une variable d'environnement. Injectée pour
-/// que les tests n'aient jamais besoin du vrai profil utilisateur.
+/// Environment variable resolver. Injected so that tests never need the real
+/// user profile.
 pub type EnvLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,20 +39,20 @@ pub struct Rule {
     pub risk: Risk,
     #[serde(default)]
     pub kind: RuleKind,
-    /// Case cochée au premier lancement. Faux pour ce qu'un utilisateur ne
-    /// doit jamais nettoyer sans l'avoir voulu explicitement : irréversible,
-    /// hors du profil, ou données curées à la main.
-    #[serde(default = "coche_par_defaut")]
+    /// Checkbox ticked on first launch. False for anything a user must never
+    /// clean without having explicitly asked for it: irreversible, outside the
+    /// profile, or hand-curated data.
+    #[serde(default = "checked_by_default")]
     pub default_checked: bool,
-    /// Renseigné quand la règle ne s'applique pas sur CETTE machine :
-    /// variable absente, ou pointant hors du profil. La règle est chargée,
-    /// affichée grisée avec ce motif, et jamais analysée ni nettoyée. Ce
-    /// n'est pas un rules.toml fautif, donc ce n'est pas bloquant.
+    /// Set when the rule does not apply on THIS machine: variable missing, or
+    /// pointing outside the profile. The rule is loaded, shown greyed out with
+    /// this reason, and never scanned nor cleaned. This is not a faulty
+    /// rules.toml, so it is not fatal.
     #[serde(skip)]
     pub unavailable_reason: Option<String>,
 }
 
-fn coche_par_defaut() -> bool {
+fn checked_by_default() -> bool {
     true
 }
 
@@ -65,27 +64,27 @@ struct RuleFile {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleError {
-    /// Le chemin ne commence pas par `%VAR%\`.
+    /// The path does not start with `%VAR%\`.
     NotVarPrefixed(String),
-    /// Variable absente de la liste blanche.
+    /// Variable missing from the allow-list.
     UnknownVar(String),
-    /// Variable de la liste blanche mais non définie dans l'environnement.
+    /// Variable on the allow-list but undefined in the environment.
     MissingVar(String),
-    /// Un segment `..` a été trouvé.
+    /// A `..` segment was found.
     ParentSegment(String),
-    /// Le chemin résolu sort de `%USERPROFILE%`.
+    /// The resolved path escapes `%USERPROFILE%`.
     OutsideProfile(String),
-    /// `%USERPROFILE%` ne se résout pas sur le disque : sans référence réelle,
-    /// aucun confinement ne peut être vérifié, donc rien n'est parcouru.
+    /// `%USERPROFILE%` does not resolve on disk: without a real reference no
+    /// containment can be checked, so nothing is walked.
     UnresolvableProfile(String),
-    /// Deux règles portent le même `id`.
+    /// Two rules share the same `id`.
     DuplicateId(String),
-    /// Une règle `kind = "files"` n'a aucun chemin.
+    /// A `kind = "files"` rule declares no path.
     EmptyPaths(String),
-    /// Erreur de syntaxe ou de typage TOML.
+    /// TOML syntax or typing error.
     Toml(String),
-    /// Un motif de chemin n'est pas un glob valide. Distinct de `Toml` :
-    /// le fichier peut être syntaxiquement correct et le motif fautif.
+    /// A path pattern is not a valid glob. Distinct from `Toml`: the file may
+    /// be syntactically correct and the pattern still be wrong.
     Glob { pattern: String, cause: String },
 }
 
@@ -94,33 +93,32 @@ impl fmt::Display for RuleError {
         match self {
             RuleError::NotVarPrefixed(p) => write!(
                 f,
-                "le chemin « {p} » doit commencer par une variable, par exemple %TEMP%\\"
+                "path \"{p}\" must start with a variable, for example %TEMP%\\"
             ),
             RuleError::UnknownVar(v) => write!(
                 f,
-                "la variable %{v}% n'est pas autorisée (autorisées : TEMP, LOCALAPPDATA, APPDATA, USERPROFILE)"
+                "variable %{v}% is not allowed (allowed: TEMP, LOCALAPPDATA, APPDATA, USERPROFILE)"
             ),
             RuleError::MissingVar(v) => {
-                write!(f, "la variable d'environnement %{v}% n'est pas définie")
+                write!(f, "environment variable %{v}% is not defined")
             }
             RuleError::ParentSegment(p) => {
-                write!(f, "le chemin « {p} » contient un segment « .. »")
+                write!(f, "path \"{p}\" contains a \"..\" segment")
             }
             RuleError::OutsideProfile(p) => {
-                write!(f, "le chemin « {p} » sort du profil utilisateur")
+                write!(f, "path \"{p}\" is outside the user profile")
             }
-            RuleError::UnresolvableProfile(m) => write!(
-                f,
-                "le profil utilisateur ne se résout pas sur le disque : {m}"
-            ),
-            RuleError::DuplicateId(id) => write!(f, "l'identifiant de règle « {id} » est dupliqué"),
+            RuleError::UnresolvableProfile(m) => {
+                write!(f, "the user profile does not resolve on disk: {m}")
+            }
+            RuleError::DuplicateId(id) => write!(f, "rule id \"{id}\" is duplicated"),
             RuleError::EmptyPaths(id) => write!(
                 f,
-                "la règle « {id} » est de type « files » mais ne déclare aucun chemin"
+                "rule \"{id}\" is of kind \"files\" but declares no path"
             ),
-            RuleError::Toml(m) => write!(f, "rules.toml est invalide : {m}"),
+            RuleError::Toml(m) => write!(f, "rules.toml is invalid: {m}"),
             RuleError::Glob { pattern, cause } => {
-                write!(f, "glob « {pattern} » invalide : {cause}")
+                write!(f, "invalid glob \"{pattern}\": {cause}")
             }
         }
     }
@@ -128,14 +126,10 @@ impl fmt::Display for RuleError {
 
 impl std::error::Error for RuleError {}
 
-/// Convertit un chemin Windows (potentiellement en forme courte 8.3, comme
-/// le `%TEMP%` que Windows peut fournir quand le nom de compte contient un
-/// espace) vers sa forme longue. Si le chemin n'existe pas ou que l'appel
-/// échoue, l'entrée est renvoyée inchangée.
-/// Découpe le tampon rendu par `GetLongPathNameW`. `None` si l'appel a échoué
-/// (`written == 0`) ou si la longueur annoncée dépasse le tampon — le chemin a
-/// pu s'allonger entre les deux appels, et découper hors bornes paniquerait,
-/// ce qui avorte le processus (`panic = "abort"`).
+/// Splits the buffer returned by `GetLongPathNameW`. `None` when the call
+/// failed (`written == 0`) or when the announced length exceeds the buffer —
+/// the path may have grown between the two calls, and slicing out of bounds
+/// would panic, which aborts the process (`panic = "abort"`).
 fn long_path_from_buffer(buf: &[u16], written: u32) -> Option<String> {
     let written = written as usize;
     if written == 0 || written > buf.len() {
@@ -144,6 +138,10 @@ fn long_path_from_buffer(buf: &[u16], written: u32) -> Option<String> {
     Some(String::from_utf16_lossy(&buf[..written]))
 }
 
+/// Converts a Windows path (possibly in 8.3 short form, like the `%TEMP%`
+/// Windows may hand out when the account name contains a space) to its long
+/// form. If the path does not exist or the call fails, the input is returned
+/// unchanged.
 fn long_path(value: &str) -> String {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetLongPathNameW;
@@ -159,7 +157,7 @@ fn long_path(value: &str) -> String {
     long_path_from_buffer(&buf, written).unwrap_or_else(|| value.to_string())
 }
 
-/// Résolution réelle, adossée à l'environnement du processus.
+/// Real resolution, backed by the process environment.
 pub fn system_env(name: &str) -> Option<String> {
     let value = std::env::var(name).ok()?;
     if ALLOWED_VARS.contains(&name) {
@@ -169,9 +167,8 @@ pub fn system_env(name: &str) -> Option<String> {
     }
 }
 
-/// Remplace la variable `%VAR%` de tête. Une seule variable est acceptée,
-/// et uniquement en tête : un chemin de règle est toujours de la forme
-/// `%VAR%\reste`.
+/// Replaces the leading `%VAR%`. A single variable is accepted, and only at
+/// the front: a rule path always has the form `%VAR%\rest`.
 pub fn expand_env_with(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
     if !raw.starts_with('%') {
         return Err(RuleError::NotVarPrefixed(raw.to_string()));
@@ -189,16 +186,16 @@ pub fn expand_env_with(raw: &str, lookup: EnvLookup) -> Result<String, RuleError
         return Err(RuleError::NotVarPrefixed(raw.to_string()));
     }
     let value = lookup(name).ok_or_else(|| RuleError::MissingVar(name.to_string()))?;
-    // Seule la valeur de la variable est échappée : le suffixe est écrit par
-    // la règle et ses jokers doivent rester des jokers. `globset::escape`
-    // enferme chaque métacaractère dans une classe à un caractère (`[*]`),
-    // jamais derrière un antislash : l'échappement survit donc à la réécriture
-    // de `\` en `/` faite plus loin dans la chaîne de traitement.
+    // Only the variable value is escaped: the suffix is written by the rule
+    // and its wildcards must stay wildcards. `globset::escape` wraps every
+    // metacharacter in a one-character class (`[*]`), never behind a
+    // backslash: the escaping therefore survives the `\` to `/` rewrite done
+    // further down the pipeline.
     let value = globset::escape(value.trim_end_matches(['\\', '/']));
     Ok(format!("{value}{rest}"))
 }
 
-/// Met le chemin sous forme Windows (`\`) et refuse tout segment `..`.
+/// Puts the path in Windows form (`\`) and refuses any `..` segment.
 pub fn normalize(raw: &str) -> Result<String, RuleError> {
     let win = raw.replace('/', "\\");
     if win.split('\\').any(|seg| seg == "..") {
@@ -216,8 +213,8 @@ fn under_profile(path: &str, profile: &str) -> bool {
 fn resolve_one(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
     let expanded = expand_env_with(raw, lookup)?;
     let normalized = normalize(&expanded)?;
-    // Le profil passe par `expand_env_with` pour subir exactement le même
-    // échappement que le chemin comparé.
+    // The profile goes through `expand_env_with` so that it undergoes exactly
+    // the same escaping as the path it is compared against.
     let profile = expand_env_with("%USERPROFILE%", lookup)?;
     let profile = normalize(&profile)?;
     if !under_profile(&normalized, &profile) {
@@ -226,15 +223,15 @@ fn resolve_one(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
     Ok(normalized)
 }
 
-/// Chemin réel du profil utilisateur, résolu sur le disque.
+/// Real user profile path, resolved on disk.
 ///
-/// Le confinement vérifié au chargement est purement textuel : il ne dit rien
-/// de ce que le disque fait réellement d'un chemin (jonction, lien, forme 8.3).
-/// C'est cette valeur — et elle seule — qui sert de référence au confinement
-/// réel, au moment de marcher et au moment de supprimer.
-pub fn profile_canon_with(lookup: EnvLookup) -> Result<std::path::PathBuf, RuleError> {
+/// The containment checked when rules are loaded is purely textual: it says
+/// nothing about what the disk actually does with a path (junction, link, 8.3
+/// form). This value — and only this value — is the reference for the real
+/// containment, both when walking and when deleting.
+pub fn canonical_profile_with(lookup: EnvLookup) -> Result<std::path::PathBuf, RuleError> {
     let raw = lookup("USERPROFILE").ok_or_else(|| RuleError::MissingVar("USERPROFILE".into()))?;
-    std::fs::canonicalize(&raw).map_err(|e| RuleError::UnresolvableProfile(format!("{raw} : {e}")))
+    std::fs::canonicalize(&raw).map_err(|e| RuleError::UnresolvableProfile(format!("{raw}: {e}")))
 }
 
 pub fn resolved_paths_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<String>, RuleError> {
@@ -245,11 +242,11 @@ pub fn resolved_excludes_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<Stri
     rule.exclude.iter().map(|p| resolve_one(p, lookup)).collect()
 }
 
-/// Sépare « rules.toml est mal écrit » — un bug du binaire, bloquant — de
-/// « cette règle ne s'applique pas sur cette machine ». Un poste où %TEMP%
-/// est redirigé vers D:\Temp, ou %APPDATA% vers un partage par stratégie de
-/// groupe, sont des configurations légitimes : elles désactivent la règle
-/// concernée, elles n'empêchent pas l'application de démarrer.
+/// Separates "rules.toml is badly written" — a bug in the binary, fatal —
+/// from "this rule does not apply on this machine". A workstation where %TEMP%
+/// is redirected to D:\Temp, or %APPDATA% to a network share by group policy,
+/// are legitimate setups: they disable the rule concerned, they do not prevent
+/// the application from starting.
 pub fn load_rules_with(src: &str, lookup: EnvLookup) -> Result<Vec<Rule>, RuleError> {
     let parsed: RuleFile = toml::from_str(src).map_err(|e| RuleError::Toml(e.to_string()))?;
     let mut seen: HashSet<String> = HashSet::new();
@@ -278,8 +275,8 @@ pub fn load_rules(src: &str) -> Result<Vec<Rule>, RuleError> {
     load_rules_with(src, &system_env)
 }
 
-/// Charge les règles embarquées avec le vrai environnement. Une erreur ici
-/// est bloquante : l'application doit refuser de démarrer.
+/// Loads the embedded rules with the real environment. An error here is
+/// fatal: the application must refuse to start.
 pub fn embedded_rules() -> Result<Vec<Rule>, RuleError> {
     load_rules(RULES_TOML)
 }
@@ -303,76 +300,76 @@ mod tests {
     }
 
     #[test]
-    fn expand_remplace_la_variable_de_tete() {
+    fn expand_replaces_the_leading_variable() {
         let got = expand_env_with(r"%TEMP%\a\b", &fake_env).unwrap();
         assert_eq!(got, r"C:\Users\Test\AppData\Local\Temp\a\b");
     }
 
     #[test]
-    fn expand_echappe_les_metacaracteres_de_la_valeur_mais_pas_le_suffixe() {
-        let profil_crochets = |name: &str| match name {
+    fn expand_escapes_the_value_metacharacters_but_not_the_suffix() {
+        let bracket_profile = |name: &str| match name {
             "USERPROFILE" | "TEMP" => Some(r"C:\Users\a[b]c".to_string()),
             _ => None,
         };
-        let got = expand_env_with(r"%TEMP%\**\*", &profil_crochets).unwrap();
-        // La valeur devient littérale, le `**\*` écrit par la règle reste un joker.
+        let got = expand_env_with(r"%TEMP%\**\*", &bracket_profile).unwrap();
+        // The value becomes literal, the `**\*` written by the rule stays a wildcard.
         assert_eq!(got, r"C:\Users\a[[]b[]]c\**\*");
     }
 
     #[test]
-    fn expand_echappe_tous_les_metacaracteres_de_glob() {
-        // Les six métacaractères de globset, tous neutralisés par une classe à
-        // un caractère — jamais par un antislash, qui serait détruit par la
-        // réécriture `\` -> `/` faite au moment de la compilation du glob.
-        let profil_exotique = |name: &str| match name {
+    fn expand_escapes_every_glob_metacharacter() {
+        // The six globset metacharacters, all neutralised by a one-character
+        // class — never by a backslash, which the `\` -> `/` rewrite done when
+        // the glob is compiled would destroy.
+        let exotic_profile = |name: &str| match name {
             "USERPROFILE" | "TEMP" => Some(r"C:\Users\a?b*c[d]e{f}g".to_string()),
             _ => None,
         };
-        let got = expand_env_with(r"%TEMP%\*", &profil_exotique).unwrap();
+        let got = expand_env_with(r"%TEMP%\*", &exotic_profile).unwrap();
         assert_eq!(got, r"C:\Users\a[?]b[*]c[[]d[]]e[{]f[}]g\*");
     }
 
     #[test]
-    fn une_regle_dont_le_profil_contient_des_crochets_se_charge() {
+    fn a_rule_whose_profile_contains_brackets_loads() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
 risk = "low""#,
         );
-        let profil_crochets = |name: &str| match name {
+        let bracket_profile = |name: &str| match name {
             "USERPROFILE" | "TEMP" => Some(r"C:\Users\a[b]c".to_string()),
             _ => None,
         };
-        assert!(load_rules_with(&src, &profil_crochets).is_ok());
+        assert!(load_rules_with(&src, &bracket_profile).is_ok());
     }
 
     #[test]
-    fn expand_refuse_une_variable_hors_liste_blanche() {
+    fn expand_refuses_a_variable_outside_the_allow_list() {
         let err = expand_env_with(r"%WINDIR%\a", &fake_env).unwrap_err();
         assert!(matches!(err, RuleError::UnknownVar(ref v) if v == "WINDIR"));
     }
 
     #[test]
-    fn expand_refuse_un_chemin_sans_variable_de_tete() {
+    fn expand_refuses_a_path_without_a_leading_variable() {
         let err = expand_env_with(r"C:\Windows\Temp\*", &fake_env).unwrap_err();
         assert!(matches!(err, RuleError::NotVarPrefixed(_)));
     }
 
     #[test]
-    fn normalize_convertit_les_slashs_et_refuse_les_segments_parents() {
+    fn normalize_converts_slashes_and_refuses_parent_segments() {
         assert_eq!(normalize("C:/a/b").unwrap(), r"C:\a\b");
         let err = normalize(r"C:\a\..\b").unwrap_err();
         assert!(matches!(err, RuleError::ParentSegment(_)));
     }
 
     #[test]
-    fn charge_une_regle_valide() {
+    fn loads_a_valid_rule() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
@@ -386,54 +383,57 @@ risk = "low""#,
     }
 
     #[test]
-    fn une_variable_hors_profil_desactive_la_regle_sans_bloquer_le_chargement() {
-        // Poste d'entreprise où %TEMP% est redirigé vers D:\Temp, ou %APPDATA%
-        // vers un partage par stratégie de groupe : ce n'est pas un rules.toml
-        // fautif, c'est la machine. L'application doit démarrer.
+    fn a_variable_outside_the_profile_disables_the_rule_without_blocking_loading() {
+        // Corporate workstation where %TEMP% is redirected to D:\Temp, or
+        // %APPDATA% to a share by group policy: this is not a faulty
+        // rules.toml, it is the machine. The application must start.
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
 risk = "low""#,
         );
-        let temp_ailleurs = |name: &str| match name {
+        let temp_elsewhere = |name: &str| match name {
             "TEMP" => Some(r"D:\Temp".to_string()),
             _ => fake_env(name),
         };
-        let rules = load_rules_with(&src, &temp_ailleurs).unwrap();
+        let rules = load_rules_with(&src, &temp_elsewhere).unwrap();
         assert_eq!(rules.len(), 1);
-        let raison = rules[0]
+        let reason = rules[0]
             .unavailable_reason
             .as_deref()
-            .expect("la règle doit être marquée indisponible");
-        assert!(raison.contains("sort du profil"), "raison = {raison}");
+            .expect("the rule must be marked unavailable");
+        assert!(
+            reason.contains("outside the user profile"),
+            "reason = {reason}"
+        );
     }
 
     #[test]
-    fn une_variable_absente_desactive_la_regle_sans_bloquer_le_chargement() {
+    fn a_missing_variable_disables_the_rule_without_blocking_loading() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%APPDATA%\\*"]
 exclude = []
 risk = "low""#,
         );
-        let sans_appdata = |name: &str| match name {
+        let without_appdata = |name: &str| match name {
             "APPDATA" => None,
             _ => fake_env(name),
         };
-        let rules = load_rules_with(&src, &sans_appdata).unwrap();
+        let rules = load_rules_with(&src, &without_appdata).unwrap();
         assert!(rules[0].unavailable_reason.is_some());
     }
 
     #[test]
-    fn une_regle_resolvable_nest_pas_marquee_indisponible() {
+    fn a_resolvable_rule_is_not_marked_unavailable() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
@@ -444,13 +444,13 @@ risk = "low""#,
             .is_none());
     }
 
-    /// Une erreur structurelle reste bloquante : c'est un bug du binaire, pas
-    /// une particularité du poste.
+    /// A structural error stays fatal: that is a bug in the binary, not a
+    /// quirk of the machine.
     #[test]
-    fn un_segment_parent_reste_bloquant() {
+    fn a_parent_segment_stays_fatal() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\..\\..\\Windows\\*"]
 exclude = []
@@ -463,10 +463,10 @@ risk = "low""#,
     }
 
     #[test]
-    fn refuse_une_variable_inconnue_dans_une_regle() {
+    fn refuses_an_unknown_variable_in_a_rule() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%SYSTEMROOT%\\**\\*"]
 exclude = []
@@ -477,10 +477,10 @@ risk = "low""#,
     }
 
     #[test]
-    fn refuse_un_segment_parent_dans_une_regle() {
+    fn refuses_a_parent_segment_in_a_rule() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\..\\..\\Windows\\*"]
 exclude = []
@@ -491,12 +491,12 @@ risk = "low""#,
     }
 
     #[test]
-    fn refuse_un_id_duplique() {
+    fn refuses_a_duplicate_id() {
         let src = format!(
             "{}{}",
             toml_one(
                 r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "A"
 paths = ["%TEMP%\\*"]
 exclude = []
@@ -504,7 +504,7 @@ risk = "low""#
             ),
             toml_one(
                 r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "B"
 paths = ["%TEMP%\\*"]
 exclude = []
@@ -516,10 +516,10 @@ risk = "low""#
     }
 
     #[test]
-    fn refuse_un_risque_inconnu() {
+    fn refuses_an_unknown_risk() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\*"]
 exclude = []
@@ -532,11 +532,11 @@ risk = "high""#,
     }
 
     #[test]
-    fn la_regle_corbeille_na_pas_de_chemin() {
+    fn the_recycle_bin_rule_has_no_path() {
         let src = toml_one(
             r#"id = "windows.recycle-bin"
-category = "Système"
-label = "Corbeille"
+category = "System"
+label = "Recycle Bin"
 kind = "recycle-bin"
 paths = []
 exclude = []
@@ -548,10 +548,10 @@ risk = "low""#,
     }
 
     #[test]
-    fn refuse_une_regle_files_sans_chemin() {
+    fn refuses_a_files_rule_without_a_path() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = []
 exclude = []
@@ -564,10 +564,10 @@ risk = "low""#,
     }
 
     #[test]
-    fn une_regle_est_cochee_par_defaut_sauf_mention_contraire() {
+    fn a_rule_is_checked_by_default_unless_stated_otherwise() {
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\*"]
 exclude = []
@@ -577,7 +577,7 @@ risk = "low""#,
 
         let src = toml_one(
             r#"id = "x.y"
-category = "Système"
+category = "System"
 label = "Test"
 paths = ["%TEMP%\\*"]
 exclude = []
@@ -588,18 +588,17 @@ default_checked = false"#,
     }
 
     #[test]
-    fn les_regles_irreversibles_ne_sont_pas_cochees_par_defaut() {
-        // Le parcours minimal jusqu'à la perte de données était : ouvrir,
-        // Analyser, Nettoyer. Deux clics, et la corbeille d'une clé USB
-        // branchée était vidée.
+    fn irreversible_rules_are_not_checked_by_default() {
+        // The shortest path to data loss was: open, Analyze, Clean. Two
+        // clicks, and the recycle bin of a plugged-in USB stick was emptied.
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
-        let decochees: Vec<&str> = rules
+        let unchecked: Vec<&str> = rules
             .iter()
             .filter(|r| !r.default_checked)
             .map(|r| r.id.as_str())
             .collect();
         assert_eq!(
-            decochees,
+            unchecked,
             vec![
                 "windows.recycle-bin",
                 "windows.explorer-recent",
@@ -609,14 +608,14 @@ default_checked = false"#,
     }
 
     #[test]
-    fn le_rules_toml_embarque_est_valide() {
+    fn the_embedded_rules_toml_is_valid() {
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
         assert_eq!(rules.len(), 8);
-        // Risque déclaré compris : tout changement de risque change le mode de
-        // suppression en Auto, donc doit être un changement de test délibéré.
-        let vus: Vec<(&str, Risk)> = rules.iter().map(|r| (r.id.as_str(), r.risk)).collect();
+        // Declared risk included: any risk change changes the deletion mode in
+        // Auto, so it must be a deliberate test change.
+        let seen: Vec<(&str, Risk)> = rules.iter().map(|r| (r.id.as_str(), r.risk)).collect();
         assert_eq!(
-            vus,
+            seen,
             vec![
                 ("windows.temp", Risk::Low),
                 ("windows.recycle-bin", Risk::Low),
@@ -630,30 +629,30 @@ default_checked = false"#,
         );
     }
 
-    /// Un chemin que ce motif retient à coup sûr.
-    fn exemple_depuis(motif: &str) -> String {
-        motif.replace(r"**\*", r"x\y").replace('*', "x")
+    /// A path this pattern is guaranteed to match.
+    fn example_from(pattern: &str) -> String {
+        pattern.replace(r"**\*", r"x\y").replace('*', "x")
     }
 
     #[test]
-    fn aucune_regle_embarquee_nen_recouvre_une_autre() {
-        // Deux règles qui se recouvrent comptent deux fois les mêmes octets
-        // dans le total « Récupérable », et la seconde échoue à supprimer ce
-        // que la première a déjà supprimé : le rapport affiche de faux
-        // « Ignorés » pour des fichiers correctement traités.
+    fn no_embedded_rule_overlaps_another() {
+        // Two overlapping rules count the same bytes twice in the
+        // "Reclaimable" total, and the second one fails to delete what the
+        // first already deleted: the report then shows bogus "Skipped" entries
+        // for files that were handled correctly.
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
-        let fichiers: Vec<&Rule> = rules.iter().filter(|r| r.kind == RuleKind::Files).collect();
-        for a in &fichiers {
+        let file_rules: Vec<&Rule> = rules.iter().filter(|r| r.kind == RuleKind::Files).collect();
+        for a in &file_rules {
             let set = crate::scan::build_set(&resolved_paths_with(a, &fake_env).unwrap()).unwrap();
-            for b in &fichiers {
+            for b in &file_rules {
                 if a.id == b.id {
                     continue;
                 }
-                for motif in resolved_paths_with(b, &fake_env).unwrap() {
-                    let exemple = crate::scan::to_slash(&exemple_depuis(&motif));
+                for pattern in resolved_paths_with(b, &fake_env).unwrap() {
+                    let example = crate::scan::to_slash(&example_from(&pattern));
                     assert!(
-                        !set.is_match(&exemple),
-                        "« {} » retient « {exemple} », qui appartient à « {} »",
+                        !set.is_match(&example),
+                        "\"{}\" matches \"{example}\", which belongs to \"{}\"",
                         a.id,
                         b.id
                     );
@@ -663,16 +662,16 @@ default_checked = false"#,
     }
 
     #[test]
-    fn long_path_convertit_un_chemin_court_en_long() {
+    fn long_path_converts_a_short_path_to_its_long_form() {
         use windows::Win32::Storage::FileSystem::GetShortPathNameW;
 
         let dir = tempfile::tempdir().unwrap();
-        let long_dir = dir.path().join("Nom Long Avec Espaces");
+        let long_dir = dir.path().join("Long Name With Spaces");
         std::fs::create_dir(&long_dir).unwrap();
-        // `tempfile` construit son chemin à partir de %TEMP% tel quel, qui peut
-        // déjà être une forme courte 8.3 sur cette machine : on passe par
-        // `canonicalize` pour obtenir une référence longue indépendante de
-        // `long_path`, la fonction sous test.
+        // `tempfile` builds its path from %TEMP% as-is, which may already be
+        // an 8.3 short form on this machine: we go through `canonicalize` to
+        // get a long reference independent of `long_path`, the function under
+        // test.
         let canonical = std::fs::canonicalize(&long_dir).unwrap();
         let long_dir = canonical
             .to_str()
@@ -683,16 +682,13 @@ default_checked = false"#,
         let mut wide: Vec<u16> = long_dir.encode_utf16().chain(std::iter::once(0)).collect();
         let mut buf = vec![0u16; 260];
         let len = unsafe {
-            GetShortPathNameW(
-                windows::core::PCWSTR(wide.as_mut_ptr()),
-                Some(&mut buf),
-            )
+            GetShortPathNameW(windows::core::PCWSTR(wide.as_mut_ptr()), Some(&mut buf))
         };
-        assert!(len > 0, "GetShortPathNameW a échoué");
+        assert!(len > 0, "GetShortPathNameW failed");
         let short: String = String::from_utf16_lossy(&buf[..len as usize]);
 
         if short.eq_ignore_ascii_case(&long_dir) {
-            // Génération de noms 8.3 désactivée sur ce volume : rien à convertir.
+            // 8.3 name generation disabled on this volume: nothing to convert.
             assert_eq!(long_path(&long_dir), long_dir);
             return;
         }
@@ -707,10 +703,10 @@ default_checked = false"#,
     }
 
     #[test]
-    fn long_path_from_buffer_refuse_une_longueur_hors_bornes() {
-        // `GetLongPathNameW` peut rendre une longueur supérieure au tampon si
-        // le chemin s'est allongé entre les deux appels : découper le tampon
-        // paniquerait, et `panic = "abort"` tue le processus.
+    fn long_path_from_buffer_refuses_an_out_of_bounds_length() {
+        // `GetLongPathNameW` can report a length larger than the buffer if the
+        // path grew between the two calls: slicing the buffer would panic, and
+        // `panic = "abort"` kills the process.
         let buf = [0x41u16, 0x42];
         assert_eq!(long_path_from_buffer(&buf, 5), None);
         assert_eq!(long_path_from_buffer(&buf, 0), None);
@@ -719,22 +715,22 @@ default_checked = false"#,
     }
 
     #[test]
-    fn long_path_rend_l_entree_inchangee_si_le_chemin_n_existe_pas() {
-        let input = r"C:\chemin\qui\n\existe\pas\ABCDEF~1";
+    fn long_path_returns_the_input_unchanged_when_the_path_does_not_exist() {
+        let input = r"C:\path\that\does\not\exist\ABCDEF~1";
         assert_eq!(long_path(input), input);
     }
 
     #[test]
-    fn les_regles_embarquees_se_chargent_avec_l_environnement_reel() {
+    fn the_embedded_rules_load_with_the_real_environment() {
         let rules = load_rules_with(RULES_TOML, &system_env).unwrap();
         assert_eq!(rules.len(), 8);
     }
 
     #[test]
-    fn resolved_paths_rend_les_chemins_absolus() {
+    fn resolved_paths_returns_absolute_paths() {
         let rule = Rule {
             id: "x.y".into(),
-            category: "Système".into(),
+            category: "System".into(),
             label: "Test".into(),
             paths: vec![r"%TEMP%\**\*".into()],
             exclude: vec![],
