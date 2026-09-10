@@ -11,11 +11,11 @@ export interface RuleSummary {
   label: string;
   risk: Risk;
   kind: RuleKind;
-  /// Case cochée au premier lancement. Faux pour ce qu'on ne nettoie pas
-  /// sans l'avoir voulu explicitement (cf. src-tauri/rules.toml).
+  /// Checkbox ticked on first launch. False for anything we do not clean
+  /// without having explicitly asked for it (see src-tauri/rules.toml).
   default_checked: boolean;
-  /// Renseigné quand la règle ne s'applique pas sur cette machine (variable
-  /// absente, ou pointant hors du profil). La ligne est grisée et inerte.
+  /// Set when the rule does not apply on this machine (variable missing, or
+  /// pointing outside the profile). The row is greyed out and inert.
   unavailable_reason: string | null;
 }
 
@@ -70,7 +70,7 @@ export function setStartupEnabled(id: string, enabled: boolean): Promise<void> {
   return invoke<void>("set_startup_enabled", { id, enabled });
 }
 
-/// Regroupe les règles par catégorie en conservant l'ordre de rules.toml.
+/// Groups rules by category, preserving the order of rules.toml.
 export function groupByCategory(rules: RuleSummary[]): [string, RuleSummary[]][] {
   const order: string[] = [];
   const buckets = new Map<string, RuleSummary[]>();

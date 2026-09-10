@@ -1,15 +1,15 @@
 [[rule]]
 id = "windows.temp"
-category = "Système"
-label = "Fichiers temporaires"
+category = "System"
+label = "Temporary files"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
 risk = "low"
 
 [[rule]]
 id = "windows.recycle-bin"
-category = "Système"
-label = "Corbeille"
+category = "System"
+label = "Recycle Bin"
 kind = "recycle-bin"
 paths = []
 exclude = []
@@ -18,8 +18,8 @@ default_checked = false
 
 [[rule]]
 id = "windows.thumbnails"
-category = "Système"
-label = "Cache des miniatures"
+category = "System"
+label = "Thumbnail cache"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db",
   "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\iconcache_*.db",
@@ -27,14 +27,14 @@ paths = [
 exclude = []
 risk = "low"
 
-# `Recent\**\*` descendait dans CustomDestinations, qui porte les éléments que
-# l'utilisateur a explicitement épinglés au clic droit sur la barre des tâches.
-# Ce ne sont pas des déchets : ce sont des données curées à la main. Le motif
-# `*.lnk` n'est pas récursif (literal_separator), il ne redescend pas.
+# `Recent\**\*` used to descend into CustomDestinations, which holds the items
+# the user explicitly pinned by right-clicking the taskbar. Those are not junk:
+# they are hand-curated data. The `*.lnk` pattern is not recursive
+# (literal_separator), so it does not descend.
 [[rule]]
 id = "windows.explorer-recent"
-category = "Système"
-label = "Éléments récents"
+category = "System"
+label = "Recent items"
 paths = [
   "%APPDATA%\\Microsoft\\Windows\\Recent\\*.lnk",
   "%APPDATA%\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\*",
@@ -43,28 +43,28 @@ exclude = []
 risk = "medium"
 default_checked = false
 
-# Anciennement « windows.user-logs », qui listait aussi `%LOCALAPPDATA%\Temp\*.log`
-# — un sous-ensemble strict de windows.temp sur une installation standard, donc
-# des octets comptés deux fois et de faux « Ignorés » au rapport. Risque moyen :
-# un vidage sur incident est exactement ce qu'un utilisateur en train de
-# diagnostiquer un plantage ne veut pas voir disparaître sans retour possible.
+# Formerly "windows.user-logs", which also listed `%LOCALAPPDATA%\Temp\*.log` —
+# a strict subset of windows.temp on a standard installation, hence bytes
+# counted twice and bogus "Skipped" entries in the report. Medium risk: a crash
+# dump is exactly what a user in the middle of diagnosing a crash does not want
+# to see disappear with no way back.
 [[rule]]
 id = "windows.crash-dumps"
-category = "Système"
-label = "Vidages sur incident"
+category = "System"
+label = "Crash dumps"
 paths = ["%LOCALAPPDATA%\\CrashDumps\\*"]
 exclude = []
 risk = "medium"
 default_checked = false
 
-# `Service Worker\Database` est délibérément absent : il porte les
-# enregistrements de service workers, pas leur cache — le vider casse le mode
-# hors ligne des applications web installées. Même raison pour ne pas toucher
-# `Local Storage`, `IndexedDB`, `Session Storage` : données d'application.
+# `Service Worker\Database` is deliberately absent: it holds the service worker
+# registrations, not their cache — clearing it breaks offline mode for
+# installed web apps. Same reason for not touching `Local Storage`,
+# `IndexedDB`, `Session Storage`: application data.
 [[rule]]
 id = "edge.cache"
-category = "Navigateurs"
-label = "Cache Microsoft Edge"
+category = "Browsers"
+label = "Microsoft Edge cache"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache\\**\\*",
@@ -80,8 +80,8 @@ risk = "low"
 
 [[rule]]
 id = "chrome.cache"
-category = "Navigateurs"
-label = "Cache Google Chrome"
+category = "Browsers"
+label = "Google Chrome cache"
 paths = [
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache\\**\\*",
@@ -97,8 +97,8 @@ risk = "low"
 
 [[rule]]
 id = "firefox.cache"
-category = "Navigateurs"
-label = "Cache Mozilla Firefox"
+category = "Browsers"
+label = "Mozilla Firefox cache"
 paths = [
   "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2\\**\\*",
   "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache\\**\\*",
