@@ -31,21 +31,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and create draft release
+      - name: Check version consistency
+        run: npm run version:check
+
+      - name: Check tag matches package version
+        id: version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg_version" >&2
+            exit 1
+          fi
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and create release
         id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: WinCleaner ${{ github.ref_name }}
+          releaseName: "WinCleaner ${{ github.ref_name }}"
           releaseBody: |
-            Release notes generated from tag ${{ github.ref_name }}.
+            See the `[${{ steps.version.outputs.version }}]` section of
+            [CHANGELOG.md](https://github.com/CaseReed/wincleaner/blob/main/CHANGELOG.md)
+            for release notes.
 
             Installers are unsigned until SignPath signing is configured in the
             repository secrets — see `docs/code-signing.md`.
-          releaseDraft: true
-          prerelease: false
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
       # --- SignPath signing skeleton (free for OSS) --------------------------
       #
