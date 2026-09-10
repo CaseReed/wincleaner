@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
@@ -21,6 +22,24 @@ const SOURCE_LABEL: Record<StartupSource, string> = {
   "run-once": "Registre (RunOnce)",
   folder: "Dossier Démarrage",
 };
+
+function Screen({
+  subtitle,
+  children,
+}: {
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <header className="shrink-0 px-8 pt-7 pb-5">
+        <h1 className="screen-title">Démarrage</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+      </header>
+      <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">{children}</div>
+    </>
+  );
+}
 
 export function StartupPanel() {
   const [entries, setEntries] = useState<StartupEntry[]>([]);
@@ -64,52 +83,95 @@ export function StartupPanel() {
 
   if (error) {
     return (
-      <div
-        data-testid="startup-error"
-        className="rounded-md border border-red-500 bg-red-50 p-4 text-red-900 dark:bg-red-950 dark:text-red-100"
-      >
-        {error}
-      </div>
+      <Screen subtitle="Décidez ce qui se lance avec votre session.">
+        <div
+          data-testid="startup-error"
+          className="flex max-w-xl flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
+        >
+          <p className="font-medium">Impossible de lire les programmes au démarrage.</p>
+          <p className="font-mono text-xs text-muted-foreground">{error}</p>
+        </div>
+      </Screen>
     );
   }
 
   if (entries.length === 0) {
     return (
-      <p data-testid="startup-empty" className="text-sm text-muted-foreground">
-        Aucun programme n'est configuré pour démarrer avec votre session.
-      </p>
+      <Screen subtitle="Décidez ce qui se lance avec votre session.">
+        <p data-testid="startup-empty" className="text-sm text-muted-foreground">
+          Aucun programme ne démarre avec votre session.
+        </p>
+      </Screen>
     );
   }
 
+  const enabled = entries.filter((e) => e.enabled).length;
+
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Nom</TableHead>
-          <TableHead>Commande</TableHead>
-          <TableHead>Source</TableHead>
-          <TableHead className="w-24 text-right">Activé</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {entries.map((entry) => (
-          <TableRow key={entry.id} data-testid={`startup-row-${entry.id}`}>
-            <TableCell className="font-medium">{entry.name}</TableCell>
-            <TableCell className="max-w-md truncate font-mono text-xs" title={entry.command}>
-              {entry.command}
-            </TableCell>
-            <TableCell className="text-sm">{SOURCE_LABEL[entry.source]}</TableCell>
-            <TableCell className="text-right">
-              <Switch
-                aria-label={`Activer ${entry.name}`}
-                checked={entry.enabled}
-                disabled={entry.source === "run-once" || pending === entry.id}
-                onCheckedChange={(next) => void onToggle(entry, next)}
-              />
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <Screen
+      subtitle={
+        entries.length > 1
+          ? `${entries.length} programmes, ${enabled} activés`
+          : `1 programme, ${enabled} activé`
+      }
+    >
+      <div className="overflow-hidden rounded-lg border bg-card">
+        {/* table-fixed : les commandes Windows sont longues, sans quoi elles
+            poussent la source et l'interrupteur hors de la fenêtre. */}
+        <Table className="table-fixed">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="eyebrow w-[30%] px-4 text-muted-foreground">
+                Nom
+              </TableHead>
+              <TableHead className="eyebrow px-4 text-muted-foreground">Commande</TableHead>
+              <TableHead className="eyebrow w-[9.5rem] px-4 text-muted-foreground">
+                Source
+              </TableHead>
+              <TableHead className="eyebrow w-20 px-4 text-right text-muted-foreground">
+                Activé
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((entry) => {
+              const readOnly = entry.source === "run-once";
+              return (
+                <TableRow
+                  key={entry.id}
+                  data-testid={`startup-row-${entry.id}`}
+                  title={readOnly ? "Lecture seule" : undefined}
+                  className={readOnly ? "text-muted-foreground" : undefined}
+                >
+                  <TableCell className="h-11 px-4 text-sm font-medium">
+                    <div className="truncate" title={entry.name}>
+                      {entry.name}
+                    </div>
+                  </TableCell>
+                  <TableCell className="h-11 px-4 font-mono text-xs text-muted-foreground">
+                    <div className="truncate" title={entry.command}>
+                      {entry.command}
+                    </div>
+                  </TableCell>
+                  <TableCell className="h-11 px-4">
+                    <Badge variant="outline" className="max-w-full text-muted-foreground">
+                      <span className="truncate">{SOURCE_LABEL[entry.source]}</span>
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="h-11 px-4 text-right">
+                    <Switch
+                      aria-label={`Activer ${entry.name}`}
+                      checked={entry.enabled}
+                      disabled={readOnly || pending === entry.id}
+                      onCheckedChange={(next) => void onToggle(entry, next)}
+                    />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </Screen>
   );
 }

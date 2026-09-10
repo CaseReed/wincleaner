@@ -1,49 +1,48 @@
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { AppShell, type Screen } from "@/components/AppShell";
 import { CleanPanel } from "@/components/CleanPanel";
 import { StartupPanel } from "@/components/StartupPanel";
 
-type Screen = "clean" | "startup";
+const THEME_KEY = "wincleaner.theme";
+
+/// Le choix mémorisé gagne ; sinon on suit le thème du système.
+function initialDark(): boolean {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === "dark") return true;
+    if (stored === "light") return false;
+  } catch {
+    // localStorage indisponible : on retombe sur le système.
+  }
+  return (
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+}
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("clean");
-  const [dark, setDark] = useState(false);
+  const [dark, setDark] = useState(initialDark);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
+    try {
+      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+    } catch {
+      // Rien à faire : le thème reste valable pour cette session.
+    }
   }, [dark]);
 
   return (
-    <div className="flex h-screen bg-background text-foreground">
-      <nav className="flex w-52 flex-col gap-1 border-r p-3">
-        <h1 className="mb-4 px-2 text-lg font-semibold">WinCleaner</h1>
-        <Button
-          variant={screen === "clean" ? "secondary" : "ghost"}
-          className="justify-start"
-          onClick={() => setScreen("clean")}
-        >
-          Nettoyage
-        </Button>
-        <Button
-          variant={screen === "startup" ? "secondary" : "ghost"}
-          className="justify-start"
-          onClick={() => setScreen("startup")}
-        >
-          Démarrage
-        </Button>
-        <Button
-          variant="ghost"
-          className="mt-auto justify-start"
-          onClick={() => setDark((v) => !v)}
-        >
-          {dark ? "Thème clair" : "Thème sombre"}
-        </Button>
-      </nav>
-      <main className="flex-1 overflow-auto p-6">
-        {screen === "clean" ? <CleanPanel /> : <StartupPanel />}
-      </main>
-      <Toaster />
-    </div>
+    <AppShell
+      screen={screen}
+      onScreenChange={setScreen}
+      dark={dark}
+      onToggleTheme={() => setDark((v) => !v)}
+    >
+      {screen === "clean" ? <CleanPanel /> : <StartupPanel />}
+      <Toaster theme={dark ? "dark" : "light"} />
+    </AppShell>
   );
 }
