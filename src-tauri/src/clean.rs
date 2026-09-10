@@ -50,23 +50,16 @@ pub fn effective_mode(mode: CleanMode, risk: Risk) -> CleanMode {
     }
 }
 
-/// Retire le préfixe verbatim que `canonicalize` ajoute. `IFileOperation`,
-/// derrière `trash::delete`, n'accepte pas un chemin `\?\`.
-fn sans_prefixe_verbatim(p: &Path) -> PathBuf {
-    let s = p.to_string_lossy().to_string();
-    match s.strip_prefix(r"\?\UNC\") {
-        Some(reste) => PathBuf::from(format!(r"\{reste}")),
-        None => PathBuf::from(s.strip_prefix(r"\?\").unwrap_or(&s)),
-    }
-}
-
 /// Dernière vérification avant de supprimer : le re-scan a beau être
 /// immédiat, un processus tournant sous le même compte peut remplacer un
 /// nom entre le `metadata()` du parcours et l'appel de suppression. On exige
 /// donc, sur le chemin lui-même et non sur ce qu'il pointe, un fichier
 /// régulier dont l'emplacement réel reste sous le profil.
 ///
-/// Rend le chemin à supprimer et sa taille.
+/// Rend le chemin canonique à supprimer, préfixe verbatim `\\?\` compris, et
+/// sa taille. `trash::delete` comme `remove_file` acceptent cette forme ; rien
+/// n'est affiché à partir d'elle (les entrées `skipped` reprennent le chemin
+/// analysé), donc rien ne justifie de la raccourcir.
 fn chemin_supprimable(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64), String> {
     let md = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if est_point_danalyse(&md) {
@@ -79,7 +72,7 @@ fn chemin_supprimable(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64)
     if !reel.starts_with(profile_canon) {
         return Err("le chemin sort du profil utilisateur au moment de la suppression".to_string());
     }
-    Ok((sans_prefixe_verbatim(&reel), md.len()))
+    Ok((reel, md.len()))
 }
 
 /// Supprime les répertoires que la règle vient de vider.
