@@ -34,7 +34,13 @@ step is simply skipped and the release published by `tauri-apps/tauri-action`
 stays unsigned, with a note in the release body. Once the secrets are set, the
 workflow uploads the installers as a build artifact, submits a signing request
 through `signpath/github-action-submit-signing-request`, waits for the signing
-to complete (`wait-for-completion: true`) and retrieves the signed installer.
+to complete (`wait-for-completion: true`) and retrieves the signed installer
+into `signed-installers/`. It then re-uploads those signed files onto the
+release created by `tauri-apps/tauri-action` with
+`gh release upload ... --clobber`, replacing the unsigned `.msi`/`.exe`
+assets, and edits the release notes to drop the "unsigned" sentence and add
+"Installers signed via SignPath Foundation." Both steps are idempotent, so
+re-running the workflow for the same tag is safe.
 
 ## Alternative: Azure Trusted Signing
 

@@ -117,8 +117,30 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-installers
 
-      # TODO (once signed up with SignPath): upload the contents of
-      # `signed-installers/` to the release created by tauri-action above (for
-      # example with `gh release upload` or softprops/action-gh-release), once
-      # the first signing attempt has been validated on a real SignPath
-      # project.
+      # Replace the unsigned assets on the release created by tauri-action
+      # above with the signed ones from `signed-installers/`, then update the
+      # release body to drop the "unsigned" note. `--clobber` makes the upload
+      # idempotent (safe to re-run), and the notes edit only rewrites the one
+      # sentence so re-running it is a no-op once already applied.
+      - name: Upload signed installers to release
+        if: steps.signpath-check.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" signed-installers/*.msi signed-installers/*.exe --clobber
+        shell: bash
+
+      - name: Update release notes for signed installers
+        if: steps.signpath-check.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="$(gh release view "${{ github.ref_name }}" --json body --jq .body)"
+          signed_note="Installers signed via SignPath Foundation."
+          if [ "${notes#*"$signed_note"}" = "$notes" ]; then
+            notes="$(printf '%s\n' "$notes" | grep -v 'Installers are unsigned until SignPath signing is configured')"
+            notes="$(printf '%s\n\n%s\n' "$notes" "$signed_note")"
+            printf '%s' "$notes" > "$RUNNER_TEMP/release-notes.md"
+            gh release edit "${{ github.ref_name }}" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+        shell: bash
