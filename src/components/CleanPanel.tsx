@@ -19,6 +19,7 @@ import {
   rulesSummary,
   runningBrowsers,
   scan,
+  sortGrouped,
   type CleanMode,
   type CleanReport,
   type RuleSummary,
@@ -38,6 +39,18 @@ const MODE_LABEL: Record<CleanMode, string> = {
 const COLLAPSED_BY_DEFAULT = ["Applications"];
 
 const WINAPP2_URL = "https://github.com/MoscaDotTo/Winapp2";
+
+const SORT_KEY = "wincleaner.sortBySize";
+
+/// `localStorage` throws in a webview with site data disabled: an unreadable
+/// preference is simply "off", never a crash on the first render.
+function readSortPreference(): boolean {
+  try {
+    return window.localStorage.getItem(SORT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 const RULE_COUNT = new Intl.NumberFormat("en-US");
 
@@ -74,6 +87,7 @@ export function CleanPanel() {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [summary, setSummary] = useState<RulesSummary | null>(null);
+  const [sortBySize, setSortBySize] = useState<boolean>(readSortPreference);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -94,10 +108,10 @@ export function CleanPanel() {
   }, [reloadKey]);
 
   const searching = query.trim().length > 0;
-  const grouped = useMemo(
-    () => groupByCategory(filterRules(rules, query)),
-    [rules, query]
-  );
+  const grouped = useMemo(() => {
+    const base = groupByCategory(filterRules(rules, query));
+    return sortBySize ? sortGrouped(base, results) : base;
+  }, [rules, query, sortBySize, results]);
   const total = useMemo(
     () => (results ?? []).reduce((sum, r) => sum + r.total_bytes, 0),
     [results]
@@ -147,6 +161,19 @@ export function CleanPanel() {
       const next = new Set(prev);
       if (next.has(category)) next.delete(category);
       else next.add(category);
+      return next;
+    });
+  }
+
+  function toggleSortBySize() {
+    setSortBySize((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SORT_KEY, next ? "1" : "0");
+      } catch {
+        // A preference we cannot persist is still a preference for this
+        // session: nothing to report to the user.
+      }
       return next;
     });
   }
@@ -238,9 +265,21 @@ export function CleanPanel() {
                 </p>
               )}
             </div>
-            <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
-              Analyze
-            </Button>
+            <div className="flex shrink-0 items-center gap-4">
+              <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox
+                  data-testid="sort-by-size"
+                  aria-label="Sort by size"
+                  checked={sortBySize}
+                  disabled={!results}
+                  onCheckedChange={toggleSortBySize}
+                />
+                <span aria-hidden="true">Sort by size</span>
+              </span>
+              <Button size="lg" onClick={onScan} disabled={busy || selected.size === 0}>
+                Analyze
+              </Button>
+            </div>
           </div>
           {results ? (
             <ReclaimGauge rules={rules} results={results} />
@@ -281,6 +320,12 @@ export function CleanPanel() {
           )}
         </div>
 
+        {searching && grouped.length === 0 && (
+          <p data-testid="search-empty" className="px-1 text-sm text-muted-foreground">
+            No rules match your search.
+          </p>
+        )}
+
         {grouped.map(([category, catRules]) => {
           const catBytes = (results ?? [])
             .filter((r) => catRules.some((rule) => rule.id === r.rule_id))
@@ -318,124 +363,124 @@ export function CleanPanel() {
               )}
               {open && (
                 <>
-              <ul className="overflow-hidden rounded-lg border bg-card">
-                {catRules.map((rule, index) => {
-                  const result = (results ?? []).find((r) => r.rule_id === rule.id);
-                  const unavailable = rule.unavailable_reason;
-                  return (
-                    <li
-                      key={rule.id}
-                      className={index > 0 ? "border-t" : undefined}
-                    >
-                      <div className="flex h-11 items-center gap-3 px-4">
-                        <Checkbox
-                          id={rule.id}
-                          aria-label={rule.label}
-                          checked={selected.has(rule.id)}
-                          disabled={!!unavailable}
-                          onCheckedChange={() => toggleRule(rule.id)}
-                        />
-                        <span
-                          className={
-                            unavailable
-                              ? "min-w-0 flex-1 truncate text-sm text-muted-foreground"
-                              : "min-w-0 flex-1 cursor-pointer truncate text-sm"
-                          }
-                          onClick={() => !unavailable && toggleRule(rule.id)}
+                  <ul className="overflow-hidden rounded-lg border bg-card">
+                    {catRules.map((rule, index) => {
+                      const result = (results ?? []).find((r) => r.rule_id === rule.id);
+                      const unavailable = rule.unavailable_reason;
+                      return (
+                        <li
+                          key={rule.id}
+                          className={index > 0 ? "border-t" : undefined}
                         >
-                          {rule.label}
-                        </span>
-                        {rule.risk === "medium" && (
-                          <Badge
-                            variant="outline"
-                            className="border-warning/40 bg-warning/12 text-warning-foreground"
-                          >
-                            medium risk
-                          </Badge>
-                        )}
-                        {rule.kind === "recycle-bin" && (
-                          <Badge
-                            data-testid={`note-${rule.id}`}
-                            variant="outline"
-                            className="border-destructive/40 text-destructive"
-                          >
-                            all volumes
-                          </Badge>
-                        )}
-                        {result && (
-                          <div
-                            data-testid={`result-${rule.id}`}
-                            className="flex shrink-0 items-baseline gap-3"
-                          >
-                            {result.skipped > 0 && (
-                              <span className="font-mono tnum text-xs text-muted-foreground">
-                                {formatCount(result.skipped)} skipped
-                              </span>
+                          <div className="flex h-11 items-center gap-3 px-4">
+                            <Checkbox
+                              id={rule.id}
+                              aria-label={rule.label}
+                              checked={selected.has(rule.id)}
+                              disabled={!!unavailable}
+                              onCheckedChange={() => toggleRule(rule.id)}
+                            />
+                            <span
+                              className={
+                                unavailable
+                                  ? "min-w-0 flex-1 truncate text-sm text-muted-foreground"
+                                  : "min-w-0 flex-1 cursor-pointer truncate text-sm"
+                              }
+                              onClick={() => !unavailable && toggleRule(rule.id)}
+                            >
+                              {rule.label}
+                            </span>
+                            {rule.risk === "medium" && (
+                              <Badge
+                                variant="outline"
+                                className="border-warning/40 bg-warning/12 text-warning-foreground"
+                              >
+                                medium risk
+                              </Badge>
                             )}
-                            <span className="w-24 text-right font-mono tnum text-sm">
-                              {formatBytes(result.total_bytes)}
-                            </span>
-                            <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
-                              {formatCount(result.file_count)}
-                              <span className="sr-only"> files</span>
-                            </span>
+                            {rule.kind === "recycle-bin" && (
+                              <Badge
+                                data-testid={`note-${rule.id}`}
+                                variant="outline"
+                                className="border-destructive/40 text-destructive"
+                              >
+                                all volumes
+                              </Badge>
+                            )}
+                            {result && (
+                              <div
+                                data-testid={`result-${rule.id}`}
+                                className="flex shrink-0 items-baseline gap-3"
+                              >
+                                {result.skipped > 0 && (
+                                  <span className="font-mono tnum text-xs text-muted-foreground">
+                                    {formatCount(result.skipped)} skipped
+                                  </span>
+                                )}
+                                <span className="w-24 text-right font-mono tnum text-sm">
+                                  {formatBytes(result.total_bytes)}
+                                </span>
+                                <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
+                                  {formatCount(result.file_count)}
+                                  <span className="sr-only"> files</span>
+                                </span>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                      {unavailable && (
-                        <p
-                          data-testid={`unavailable-${rule.id}`}
-                          className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
-                        >
-                          Unavailable on this machine: {unavailable}
-                        </p>
-                      )}
-                      {rule.kind === "recycle-bin" && (
-                        <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                          Empties the recycle bin of every volume on this machine,
-                          including outside the user profile. Permanent and
-                          irreversible: the deletion mode does not apply to it.
-                        </p>
-                      )}
-                      {rule.id === "windows.temp" && (
-                        <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                          Close any running installers before cleaning.
-                        </p>
-                      )}
-                      {rule.note && (
-                        <p
-                          data-testid={`warning-${rule.id}`}
-                          className="px-4 pb-3 pl-11 text-xs text-warning-foreground"
-                        >
-                          {rule.note}
-                        </p>
-                      )}
-                      {result && result.paths.length > 0 && (
-                        <Collapsible
-                          open={openPaths.has(rule.id)}
-                          onOpenChange={() => togglePaths(rule.id)}
-                        >
-                          <CollapsibleTrigger
-                            data-testid={`toggle-paths-${rule.id}`}
-                            className="mb-3 ml-11 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-                          >
-                            {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
-                              {result.paths.map((p) => (
-                                <li key={p} className="truncate">
-                                  {p}
-                                </li>
-                              ))}
-                            </ul>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                          {unavailable && (
+                            <p
+                              data-testid={`unavailable-${rule.id}`}
+                              className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
+                            >
+                              Unavailable on this machine: {unavailable}
+                            </p>
+                          )}
+                          {rule.kind === "recycle-bin" && (
+                            <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
+                              Empties the recycle bin of every volume on this machine,
+                              including outside the user profile. Permanent and
+                              irreversible: the deletion mode does not apply to it.
+                            </p>
+                          )}
+                          {rule.id === "windows.temp" && (
+                            <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
+                              Close any running installers before cleaning.
+                            </p>
+                          )}
+                          {rule.note && (
+                            <p
+                              data-testid={`warning-${rule.id}`}
+                              className="px-4 pb-3 pl-11 text-xs text-warning-foreground"
+                            >
+                              {rule.note}
+                            </p>
+                          )}
+                          {result && result.paths.length > 0 && (
+                            <Collapsible
+                              open={openPaths.has(rule.id)}
+                              onOpenChange={() => togglePaths(rule.id)}
+                            >
+                              <CollapsibleTrigger
+                                data-testid={`toggle-paths-${rule.id}`}
+                                className="mb-3 ml-11 rounded text-xs text-muted-foreground underline underline-offset-2 outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                              >
+                                {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
+                              </CollapsibleTrigger>
+                              <CollapsibleContent>
+                                <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
+                                  {result.paths.map((p) => (
+                                    <li key={p} className="truncate">
+                                      {p}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </CollapsibleContent>
+                            </Collapsible>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
                   {collapsible && (
                     <p
                       data-testid="winapp2-attribution"

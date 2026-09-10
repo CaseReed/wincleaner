@@ -397,4 +397,58 @@ describe("CleanPanel", () => {
       expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
     );
   });
+
+  it("shows a message when the search matches nothing", async () => {
+    const user = userEvent.setup();
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    await user.type(screen.getByTestId("rule-search"), "nothing matches this");
+
+    expect(await screen.findByTestId("search-empty")).toHaveTextContent(
+      "No rules match your search."
+    );
+  });
+
+  it("sorts the rules by size when the toggle is on, and remembers it", async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
+    ]);
+    const { unmount } = render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    // Off by default, and only usable once there is something to sort.
+    expect(screen.getByLabelText("Sort by size")).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+
+    await user.click(screen.getByLabelText("Sort by size"));
+    // Browsers (4 KB) now comes before System (1 KB).
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(["Browsers", "System"]);
+    expect(window.localStorage.getItem("wincleaner.sortBySize")).toBe("1");
+
+    unmount();
+    render(<CleanPanel />);
+    expect(await screen.findByLabelText("Sort by size")).toBeChecked();
+  });
+
+  it("keeps the rules.toml order when the toggle is off", async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 1, total_bytes: 1024, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(["System", "Browsers"]);
+  });
 });

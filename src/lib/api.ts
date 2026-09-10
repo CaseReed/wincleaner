@@ -105,3 +105,23 @@ export function filterRules(rules: RuleSummary[], query: string): RuleSummary[] 
   if (!needle) return rules;
   return rules.filter((rule) => rule.label.toLowerCase().includes(needle));
 }
+
+/// Biggest wins first: rules by reclaimable size inside each category, then
+/// categories by their total. A rule with no scan result counts as zero.
+/// Copies before sorting: `groupByCategory` returns the arrays the caller
+/// still renders in rules.toml order when the toggle is off.
+export function sortGrouped(
+  grouped: [string, RuleSummary[]][],
+  results: ScanResult[] | null,
+): [string, RuleSummary[]][] {
+  if (!results) return grouped;
+  const bytes = new Map(results.map((r) => [r.rule_id, r.total_bytes]));
+  const size = (rule: RuleSummary) => bytes.get(rule.id) ?? 0;
+  const total = (rules: RuleSummary[]) => rules.reduce((sum, r) => sum + size(r), 0);
+  return grouped
+    .map(
+      ([category, rules]) =>
+        [category, [...rules].sort((a, b) => size(b) - size(a))] as [string, RuleSummary[]],
+    )
+    .sort((a, b) => total(b[1]) - total(a[1]));
+}

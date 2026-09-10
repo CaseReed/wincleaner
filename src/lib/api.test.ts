@@ -12,6 +12,7 @@ import {
   runningBrowsers,
   groupByCategory,
   filterRules,
+  sortGrouped,
   type RuleSummary,
 } from "./api";
 
@@ -77,6 +78,36 @@ describe("api", () => {
       expect(filterRules(rules, "zip").map((r) => r.id)).toEqual(["winapp2.7-zip"]);
       expect(filterRules(rules, "TEMPORARY").map((r) => r.id)).toEqual(["windows.temp"]);
       expect(filterRules(rules, "nothing")).toEqual([]);
+    });
+  });
+
+  describe("sortGrouped", () => {
+    const grouped: [string, RuleSummary[]][] = [
+      ["System", [{ id: "a" }, { id: "b" }] as RuleSummary[]],
+      ["Applications", [{ id: "c" }] as RuleSummary[]],
+    ];
+    const results = [
+      { rule_id: "a", file_count: 1, total_bytes: 10, paths: [], skipped: 0 },
+      { rule_id: "b", file_count: 1, total_bytes: 300, paths: [], skipped: 0 },
+      { rule_id: "c", file_count: 1, total_bytes: 500, paths: [], skipped: 0 },
+    ];
+
+    it("returns the input untouched when there is no scan yet", () => {
+      expect(sortGrouped(grouped, null)).toEqual(grouped);
+    });
+
+    it("sorts rules inside a category and categories by their total, descending", () => {
+      // Applications totals 500 (just "c"), System totals 310 (300 + 10):
+      // Applications comes first, and within System "b" outranks "a".
+      const sorted = sortGrouped(grouped, results);
+      expect(sorted.map(([category]) => category)).toEqual(["Applications", "System"]);
+      expect(sorted[1][1].map((r) => r.id)).toEqual(["b", "a"]);
+    });
+
+    it("treats a rule with no result as zero bytes", () => {
+      const sorted = sortGrouped(grouped, [results[0]]);
+      expect(sorted.map(([category]) => category)).toEqual(["System", "Applications"]);
+      expect(sorted[0][1].map((r) => r.id)).toEqual(["a", "b"]);
     });
   });
 });
