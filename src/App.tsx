@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { CleanPanel } from "@/components/CleanPanel";
+import { StartupPanel } from "@/components/StartupPanel";
 
 type Screen = "clean" | "startup";
 
@@ -40,7 +41,7 @@ export default function App() {
         </Button>
       </nav>
       <main className="flex-1 overflow-auto p-6">
-        {screen === "clean" ? <CleanPanel /> : <p>Écran Démarrage</p>}
+        {screen === "clean" ? <CleanPanel /> : <StartupPanel />}
       </main>
       <Toaster />
     </div>
