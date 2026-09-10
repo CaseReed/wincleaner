@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Analyze now measures **every rule available on this machine**, checked or
+  not — scanning is read-only, so an unchecked rule can tell you what checking
+  it would free. Winapp2 rules, the Recycle Bin, Recent items and Crash dumps
+  finally show a size without having to be armed for deletion first.
+- The checkbox now only decides what **Clean** deletes. The "Reclaimable" total,
+  the gauge and the Clean button stay the sum of the checked rules; a muted line
+  under the total states how much more sits in the unchecked ones.
+- Checking or unchecking a rule after a scan no longer throws the measurements
+  away: the total, the gauge, the Clean label and the confirmation update on the
+  spot, and the results stand until the next Analyze.
+
 ## [0.3.0] - 2026-09-10
 
 ### Added

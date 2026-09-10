@@ -217,3 +217,26 @@ The only honest check is a real upgrade.
    show the `CHANGELOG.md` section of 0.3.0 as plain text — bullets as literal
    `- ` lines, no rendered links, no HTML.
 5. Close and relaunch: the toast must **not** come back.
+
+## VM-15 — Everything is measured, only the checked rules are cleaned — to be run by the user
+
+1. Cleanup screen, before any scan: leave the default checkboxes as they are
+   and unfold **Applications**. Analyze.
+2. The hero must read "Analyzing N rules…" where N is the number of rules that
+   are **not** greyed out as unavailable — not the number of checked ones.
+3. After the scan, unchecked rows (Winapp2 entries, Recycle Bin, Recent items,
+   Crash dumps) must show a size and a file count, exactly like the checked
+   ones. A rule greyed out as unavailable must still show no result.
+4. The "Reclaimable" total, the gauge and the size on the **Clean** button must
+   equal the sum of the **checked** rules only. Under the total, the line
+   "X more in unchecked rules" must state the rest; it is absent when
+   everything measured is checked.
+5. Check one rule that was measured but unchecked: the total, the gauge and the
+   Clean label must jump immediately, with **no** new scan (no spinner, no
+   "Analyzing…") and every row keeping the size it was measured at. Uncheck it:
+   everything must go back.
+6. Uncheck **every** rule: the Clean button must go disabled while the sizes
+   stay on screen.
+7. Click Clean with a mix of checked and unchecked measured rules: the
+   confirmation must name only checked rules under "No way back", and the
+   cleanup must free at most the checked total.
