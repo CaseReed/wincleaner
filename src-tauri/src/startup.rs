@@ -69,12 +69,16 @@ pub fn encode_startup_state(enabled: bool, filetime: u64) -> [u8; 12] {
 }
 
 /// Absence de valeur (slice vide) ou blob de moins de 12 octets : activé.
-/// Octet 0 égal à 0x03 : désactivé. Toute autre valeur : activé.
+///
+/// Windows code l'état dans le bit 0 de l'octet 0 : `0x02`, `0x06`, `0x0A`
+/// sont activés, `0x03`, `0x07`, `0x0B` désactivés. Les valeurs autres que
+/// `0x02`/`0x03` sont écrites par d'autres outils (Gestionnaire des tâches,
+/// Autoruns) et doivent être lues correctement.
 pub fn decode_startup_state(blob: &[u8]) -> bool {
     if blob.len() < 12 {
         return true;
     }
-    blob[0] != 0x03
+    blob[0] & 1 == 0
 }
 
 fn source_tag(source: StartupSource) -> &'static str {
@@ -337,10 +341,32 @@ mod tests {
     }
 
     #[test]
-    fn decode_toute_autre_valeur_vaut_active() {
+    fn decode_0x06_ecrit_par_un_autre_outil_vaut_active() {
         let mut blob = [0u8; 12];
         blob[0] = 0x06;
         assert!(decode_startup_state(&blob));
+    }
+
+    #[test]
+    fn decode_0x07_ecrit_par_un_autre_outil_vaut_desactive() {
+        // Windows et le Gestionnaire des tâches encodent l'état dans le bit 0 :
+        // 0x02/0x06/0x0A sont activés, 0x03/0x07/0x0B désactivés.
+        for premier in [0x03u8, 0x07, 0x0B] {
+            let mut blob = [0u8; 12];
+            blob[0] = premier;
+            assert!(
+                !decode_startup_state(&blob),
+                "0x{premier:02X} doit être lu comme désactivé"
+            );
+        }
+        for premier in [0x02u8, 0x06, 0x0A] {
+            let mut blob = [0u8; 12];
+            blob[0] = premier;
+            assert!(
+                decode_startup_state(&blob),
+                "0x{premier:02X} doit être lu comme activé"
+            );
+        }
     }
 
     #[test]
@@ -414,6 +440,10 @@ mod tests {
         assert!(matches!(err, StartupError::ReadOnlySource));
     }
 
+    /// Test couplé à l'environnement : il lit les vraies clés Run/RunOnce et
+    /// le vrai dossier Démarrage de l'utilisateur courant (lecture seule, rien
+    /// n'est modifié). La liste dépend donc du poste : les assertions ne
+    /// portent que sur des invariants de forme, jamais sur un contenu attendu.
     #[test]
     fn lister_le_demarrage_ne_panique_pas() {
         let entries = list_startup().unwrap();

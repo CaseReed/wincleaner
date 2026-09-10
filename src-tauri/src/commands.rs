@@ -1,4 +1,4 @@
-use crate::clean::{clean_rule, CleanMode, CleanReport};
+use crate::clean::{clean_rule, CleanMode, CleanReport, SkippedItem};
 use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::scan::{scan_rule, ScanResult};
 use crate::startup::StartupEntry;
@@ -67,14 +67,32 @@ pub fn scan(rule_ids: Vec<String>) -> Result<Vec<ScanResult>, String> {
         .collect()
 }
 
+/// Applique `run` à chaque règle et fusionne les rapports. L'échec d'une
+/// règle ne jette jamais ce qui a déjà été nettoyé : il devient une entrée
+/// `skipped` portant l'identifiant de la règle.
+fn clean_all(
+    rules: &[Rule],
+    mut run: impl FnMut(&Rule) -> Result<CleanReport, String>,
+) -> CleanReport {
+    let mut report = CleanReport::default();
+    for rule in rules {
+        match run(rule) {
+            Ok(partiel) => report.merge(partiel),
+            Err(reason) => report.skipped.push(SkippedItem {
+                path: rule.id.clone(),
+                reason,
+            }),
+        }
+    }
+    report
+}
+
 #[tauri::command]
 pub fn clean(rule_ids: Vec<String>, mode: CleanMode) -> Result<CleanReport, String> {
     let rules = find_rules(&rule_ids)?;
-    let mut report = CleanReport::default();
-    for rule in &rules {
-        report.merge(clean_rule(rule, mode).map_err(|e| e.to_string())?);
-    }
-    Ok(report)
+    Ok(clean_all(&rules, |rule| {
+        clean_rule(rule, mode).map_err(|e| e.to_string())
+    }))
 }
 
 #[tauri::command]
@@ -147,6 +165,39 @@ mod tests {
     fn scanner_un_identifiant_inconnu_est_une_erreur() {
         let err = scan(vec!["inexistant".to_string()]).unwrap_err();
         assert!(err.contains("inexistant"));
+    }
+
+    fn regle(id: &str) -> Rule {
+        Rule {
+            id: id.into(),
+            category: "Système".into(),
+            label: id.into(),
+            paths: vec![r"%TEMP%\*".into()],
+            exclude: vec![],
+            risk: Risk::Low,
+            kind: RuleKind::Files,
+        }
+    }
+
+    #[test]
+    fn lechec_dune_regle_ne_jette_pas_le_rapport_des_precedentes() {
+        let regles = [regle("a"), regle("b"), regle("c")];
+        let report = clean_all(&regles, |r| {
+            if r.id == "b" {
+                Err("accès refusé".to_string())
+            } else {
+                Ok(CleanReport {
+                    freed_bytes: 10,
+                    deleted: 1,
+                    skipped: Vec::new(),
+                })
+            }
+        });
+        assert_eq!(report.deleted, 2);
+        assert_eq!(report.freed_bytes, 20);
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].path, "b");
+        assert_eq!(report.skipped[0].reason, "accès refusé");
     }
 
     #[test]

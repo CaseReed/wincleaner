@@ -15,18 +15,6 @@ pub struct ScanResult {
     pub skipped: u32,
 }
 
-impl ScanResult {
-    pub fn empty(rule_id: &str) -> Self {
-        ScanResult {
-            rule_id: rule_id.to_string(),
-            file_count: 0,
-            total_bytes: 0,
-            paths: Vec::new(),
-            skipped: 0,
-        }
-    }
-}
-
 /// Interrogation de la corbeille, injectée pour rester testable.
 /// Renvoie `(file_count, total_bytes)`.
 pub type RecycleQuery<'a> = &'a dyn Fn() -> Result<(u64, u64), String>;
@@ -37,20 +25,55 @@ pub fn to_slash(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+/// Métacaractères que `rules::escape_glob_literal` neutralise en les
+/// enfermant dans une classe à un caractère.
+const ESCAPABLE: [char; 6] = ['?', '*', '[', ']', '{', '}'];
+
 /// Plus long préfixe du motif ne contenant aucun métacaractère de glob.
 /// C'est la racine à partir de laquelle `walkdir` descend.
+///
+/// Les séquences `[c]` produites par `rules::escape_glob_literal` sont des
+/// littéraux, pas des jokers : les traiter comme des jokers ferait remonter la
+/// racine (un profil nommé `a[b]c` ramènerait la marche à `C:/Users`, donc à
+/// tous les profils de la machine).
 pub fn glob_root(pattern_slash: &str) -> String {
-    let mut root = String::new();
-    for comp in pattern_slash.split('/') {
-        if comp.contains('*') || comp.contains('?') || comp.contains('[') {
-            break;
+    let mut literal = String::new();
+    let mut chars = pattern_slash.chars().peekable();
+    let mut coupe = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '[' => {
+                // `[c]` avec c métacaractère : littéral échappé. Tout le reste
+                // est une vraie classe de caractères, donc un joker.
+                let mut suite = chars.clone();
+                match (suite.next(), suite.next()) {
+                    (Some(lit), Some(']')) if ESCAPABLE.contains(&lit) => {
+                        literal.push(lit);
+                        chars.next();
+                        chars.next();
+                    }
+                    _ => {
+                        coupe = true;
+                        break;
+                    }
+                }
+            }
+            '*' | '?' | '{' => {
+                coupe = true;
+                break;
+            }
+            c => literal.push(c),
         }
-        if !root.is_empty() {
-            root.push('/');
-        }
-        root.push_str(comp);
     }
-    root
+
+    if coupe {
+        match literal.rfind('/') {
+            Some(i) => literal.truncate(i),
+            None => literal.clear(),
+        }
+    }
+    literal
 }
 
 fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
@@ -63,12 +86,16 @@ fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
         let glob = GlobBuilder::new(&to_slash(p))
             .literal_separator(true)
             .build()
-            .map_err(|e| RuleError::Toml(format!("glob « {p} » invalide : {e}")))?;
+            .map_err(|e| RuleError::Glob {
+                pattern: p.clone(),
+                cause: e.to_string(),
+            })?;
         builder.add(glob);
     }
-    builder
-        .build()
-        .map_err(|e| RuleError::Toml(format!("jeu de globs invalide : {e}")))
+    builder.build().map_err(|e| RuleError::Glob {
+        pattern: patterns.join(", "),
+        cause: e.to_string(),
+    })
 }
 
 /// Parcourt les motifs de la règle et renvoie, pour chaque fichier retenu,
@@ -246,6 +273,58 @@ mod tests {
     }
 
     #[test]
+    fn glob_root_traite_les_metacaracteres_echappes_comme_des_litteraux() {
+        // `a[[]b[]]c` est la forme échappée de `a[b]c` : la racine de marche
+        // doit être le répertoire réel, pas `C:/Users`.
+        assert_eq!(
+            glob_root("C:/Users/a[[]b[]]c/Temp/**/*"),
+            "C:/Users/a[b]c/Temp"
+        );
+        // Une vraie classe de caractères écrite par la règle reste un joker.
+        assert_eq!(glob_root("C:/Users/T/Temp/[ab]*.txt"), "C:/Users/T/Temp");
+    }
+
+    #[test]
+    fn un_profil_avec_des_crochets_ne_deborde_pas_sur_le_profil_voisin() {
+        // Deux profils frères : le nom du profil visé contient `[` et `]`,
+        // qui formeraient une classe de caractères matchant le voisin.
+        let base = TempDir::new().unwrap();
+        let vise = base.path().join("a[b]c");
+        let voisin = base.path().join("abc");
+        for profil in [&vise, &voisin] {
+            let temp = profil.join("AppData").join("Local").join("Temp");
+            fs::create_dir_all(&temp).unwrap();
+        }
+        fs::write(
+            vise.join("AppData").join("Local").join("Temp").join("a.txt"),
+            b"aaa",
+        )
+        .unwrap();
+        fs::write(
+            voisin
+                .join("AppData")
+                .join("Local")
+                .join("Temp")
+                .join("intrus.txt"),
+            b"bbbbb",
+        )
+        .unwrap();
+
+        let lookup = lookup_for(&vise);
+        let rule = regle_temp(vec![r"%TEMP%\**\*"], vec![]);
+        let res = scan_rule_with_api(&rule, &lookup, &recycle_absent).unwrap();
+
+        assert_eq!(res.file_count, 1, "paths = {:?}", res.paths);
+        assert_eq!(res.total_bytes, 3);
+        assert!(res.paths[0].ends_with("a.txt"));
+        assert!(
+            res.paths.iter().all(|p| !p.contains("intrus.txt")),
+            "la marche a débordé sur le profil voisin : {:?}",
+            res.paths
+        );
+    }
+
+    #[test]
     fn scan_compte_les_fichiers_et_les_octets() {
         let dir = faux_profil();
         let lookup = lookup_for(dir.path());
@@ -357,6 +436,10 @@ mod tests {
         assert_eq!(res.skipped, 1);
     }
 
+    /// Test couplé à l'environnement : il interroge la corbeille réelle de la
+    /// machine, donc son résultat dépend du poste et pas seulement du code.
+    /// Il ne vérifie qu'une chose : l'appel FFI ne panique pas et ne renvoie
+    /// pas d'erreur. Aucune assertion sur les valeurs, qui varient.
     #[test]
     fn query_recycle_bin_ne_panique_pas() {
         // Appel en lecture seule sur la vraie corbeille : n'efface rien.

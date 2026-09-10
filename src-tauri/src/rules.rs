@@ -66,6 +66,9 @@ pub enum RuleError {
     EmptyPaths(String),
     /// Erreur de syntaxe ou de typage TOML.
     Toml(String),
+    /// Un motif de chemin n'est pas un glob valide. Distinct de `Toml` :
+    /// le fichier peut être syntaxiquement correct et le motif fautif.
+    Glob { pattern: String, cause: String },
 }
 
 impl fmt::Display for RuleError {
@@ -94,6 +97,9 @@ impl fmt::Display for RuleError {
                 "la règle « {id} » est de type « files » mais ne déclare aucun chemin"
             ),
             RuleError::Toml(m) => write!(f, "rules.toml est invalide : {m}"),
+            RuleError::Glob { pattern, cause } => {
+                write!(f, "glob « {pattern} » invalide : {cause}")
+            }
         }
     }
 }
@@ -104,6 +110,18 @@ impl std::error::Error for RuleError {}
 /// le `%TEMP%` que Windows peut fournir quand le nom de compte contient un
 /// espace) vers sa forme longue. Si le chemin n'existe pas ou que l'appel
 /// échoue, l'entrée est renvoyée inchangée.
+/// Découpe le tampon rendu par `GetLongPathNameW`. `None` si l'appel a échoué
+/// (`written == 0`) ou si la longueur annoncée dépasse le tampon — le chemin a
+/// pu s'allonger entre les deux appels, et découper hors bornes paniquerait,
+/// ce qui avorte le processus (`panic = "abort"`).
+fn long_path_from_buffer(buf: &[u16], written: u32) -> Option<String> {
+    let written = written as usize;
+    if written == 0 || written > buf.len() {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buf[..written]))
+}
+
 fn long_path(value: &str) -> String {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::GetLongPathNameW;
@@ -116,10 +134,7 @@ fn long_path(value: &str) -> String {
     }
     let mut buf = vec![0u16; len as usize];
     let written = unsafe { GetLongPathNameW(src, Some(&mut buf)) };
-    if written == 0 {
-        return value.to_string();
-    }
-    String::from_utf16_lossy(&buf[..written as usize])
+    long_path_from_buffer(&buf, written).unwrap_or_else(|| value.to_string())
 }
 
 /// Résolution réelle, adossée à l'environnement du processus.
@@ -130,6 +145,27 @@ pub fn system_env(name: &str) -> Option<String> {
     } else {
         Some(value)
     }
+}
+
+/// Rend littérale, pour `globset`, une valeur qui n'est pas un motif : un
+/// profil nommé `C:\Users\a[b]c` ne doit pas devenir une classe de caractères
+/// qui matche `C:\Users\abc`. Tout passe par une classe à un caractère plutôt
+/// que par l'antislash de `globset::escape` : plus loin dans la chaîne de
+/// traitement, `\` est réécrit en `/` et un échappement par antislash serait
+/// détruit.
+pub fn escape_glob_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '?' | '*' | '[' | ']' | '{' | '}' => {
+                out.push('[');
+                out.push(c);
+                out.push(']');
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Remplace la variable `%VAR%` de tête. Une seule variable est acceptée,
@@ -152,7 +188,9 @@ pub fn expand_env_with(raw: &str, lookup: EnvLookup) -> Result<String, RuleError
         return Err(RuleError::NotVarPrefixed(raw.to_string()));
     }
     let value = lookup(name).ok_or_else(|| RuleError::MissingVar(name.to_string()))?;
-    let value = value.trim_end_matches(['\\', '/']).to_string();
+    // Seule la valeur de la variable est échappée : le suffixe est écrit par
+    // la règle et ses jokers doivent rester des jokers.
+    let value = escape_glob_literal(value.trim_end_matches(['\\', '/']));
     Ok(format!("{value}{rest}"))
 }
 
@@ -178,8 +216,9 @@ fn under_profile(path: &str, profile: &str) -> bool {
 fn resolve_one(raw: &str, lookup: EnvLookup) -> Result<String, RuleError> {
     let expanded = expand_env_with(raw, lookup)?;
     let normalized = normalize(&expanded)?;
-    let profile = lookup("USERPROFILE")
-        .ok_or_else(|| RuleError::MissingVar("USERPROFILE".to_string()))?;
+    // Le profil passe par `expand_env_with` pour subir exactement le même
+    // échappement que le chemin comparé.
+    let profile = expand_env_with("%USERPROFILE%", lookup)?;
     let profile = normalize(&profile)?;
     if !under_profile(&normalized, &profile) {
         return Err(RuleError::OutsideProfile(raw.to_string()));
@@ -244,6 +283,34 @@ mod tests {
     fn expand_remplace_la_variable_de_tete() {
         let got = expand_env_with(r"%TEMP%\a\b", &fake_env).unwrap();
         assert_eq!(got, r"C:\Users\Test\AppData\Local\Temp\a\b");
+    }
+
+    #[test]
+    fn expand_echappe_les_metacaracteres_de_la_valeur_mais_pas_le_suffixe() {
+        let profil_crochets = |name: &str| match name {
+            "USERPROFILE" | "TEMP" => Some(r"C:\Users\a[b]c".to_string()),
+            _ => None,
+        };
+        let got = expand_env_with(r"%TEMP%\**\*", &profil_crochets).unwrap();
+        // La valeur devient littérale, le `**\*` écrit par la règle reste un joker.
+        assert_eq!(got, r"C:\Users\a[[]b[]]c\**\*");
+    }
+
+    #[test]
+    fn une_regle_dont_le_profil_contient_des_crochets_se_charge() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%TEMP%\\**\\*"]
+exclude = []
+risk = "low""#,
+        );
+        let profil_crochets = |name: &str| match name {
+            "USERPROFILE" | "TEMP" => Some(r"C:\Users\a[b]c".to_string()),
+            _ => None,
+        };
+        assert!(load_rules_with(&src, &profil_crochets).is_ok());
     }
 
     #[test]
@@ -473,6 +540,18 @@ risk = "low""#,
             got_trim.eq_ignore_ascii_case(want_trim),
             "got={got_trim} want={want_trim}"
         );
+    }
+
+    #[test]
+    fn long_path_from_buffer_refuse_une_longueur_hors_bornes() {
+        // `GetLongPathNameW` peut rendre une longueur supérieure au tampon si
+        // le chemin s'est allongé entre les deux appels : découper le tampon
+        // paniquerait, et `panic = "abort"` tue le processus.
+        let buf = [0x41u16, 0x42];
+        assert_eq!(long_path_from_buffer(&buf, 5), None);
+        assert_eq!(long_path_from_buffer(&buf, 0), None);
+        assert_eq!(long_path_from_buffer(&buf, 2), Some("AB".to_string()));
+        assert_eq!(long_path_from_buffer(&buf, 1), Some("A".to_string()));
     }
 
     #[test]
