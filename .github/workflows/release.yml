@@ -52,6 +52,22 @@ jobs:
           fi
           echo "version=$tag_version" >> "$GITHUB_OUTPUT"
 
+      # The release body is the CHANGELOG.md section for this version, as
+      # written (markdown, not the plain-text conversion the app embeds),
+      # plus the unsigned-installers note and a link to the full changelog —
+      # see `scripts/release-notes.mjs`. Passed to tauri-action through a
+      # step output rather than inline, since the body spans multiple lines.
+      - name: Generate release notes
+        id: notes
+        shell: bash
+        run: |
+          node scripts/release-notes.mjs "${{ steps.version.outputs.version }}" release-notes.md
+          {
+            echo "body<<RELEASE_NOTES_EOF"
+            cat release-notes.md
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and create release
         id: tauri
         uses: tauri-apps/tauri-action@v0
@@ -60,13 +76,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "WinCleaner ${{ github.ref_name }}"
-          releaseBody: |
-            See the `[${{ steps.version.outputs.version }}]` section of
-            [CHANGELOG.md](https://github.com/CaseReed/wincleaner/blob/main/CHANGELOG.md)
-            for release notes.
-
-            Installers are unsigned until SignPath signing is configured in the
-            repository secrets — see `docs/code-signing.md`.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
