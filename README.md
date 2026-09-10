@@ -1,6 +1,6 @@
 # WinCleaner
 
-[![CI](https://github.com/OWNER/wincleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/wincleaner/actions/workflows/ci.yml)
+[![CI](https://github.com/CaseReed/wincleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/CaseReed/wincleaner/actions/workflows/ci.yml)
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
 Un nettoyeur Windows open source qui ne fait que ce qu'il dit : pas de
@@ -61,7 +61,7 @@ mode « Corbeille ».
 ## Installation
 
 Les binaires (MSI et NSIS) sont publiés sur la page
-[Releases](https://github.com/OWNER/wincleaner/releases) du dépôt.
+[Releases](https://github.com/CaseReed/wincleaner/releases) du dépôt.
 
 Ces installateurs ne sont **pas encore signés** : Windows Defender
 SmartScreen affichera un avertissement, et une machine avec Smart App
