@@ -363,6 +363,8 @@ What shipped instead:
 
 ### Phase 3
 
+**Product rule (fixed by the owner on 2026-09-10): WinCleaner never installs an update on its own.** The automatic check, when the user enables it, only notifies. Downloading and installing always require an explicit user action on a dedicated button with a confirmation, and the user may skip a version and stay on an older one. Nothing in phase 3 may call `downloadAndInstall` from the startup check.
+
 - **Phase 3 — download & install.** Add `tauri-plugin-updater` and
   `tauri-plugin-process`, progress, relaunch, post-install verification. Needs
   all four prerequisites, none of which is met yet.
