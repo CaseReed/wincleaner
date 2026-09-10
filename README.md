@@ -3,9 +3,10 @@
 Nettoyeur Windows open source, sans télémétrie et sans accès réseau. Il nettoie
 les fichiers inutiles du profil utilisateur et gère les programmes au démarrage
 de l'utilisateur courant. Aucun droit administrateur n'est requis : l'application
-n'agit que sous `%USERPROFILE%`.
+n'agit que sous `%USERPROFILE%`, à la seule exception de la règle « Corbeille »
+décrite ci-dessous.
 
-Une seule exception, explicite : la règle « Corbeille » passe par l'API Windows
+Cette exception : la règle « Corbeille » passe par l'API Windows
 `SHEmptyRecycleBinW`, qui vide la corbeille de **tous les volumes** du poste, y
 compris hors du profil utilisateur. Cette suppression est définitive, quel que
 soit le mode de suppression choisi. L'écran Nettoyage le signale sur la ligne

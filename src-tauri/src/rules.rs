@@ -147,27 +147,6 @@ pub fn system_env(name: &str) -> Option<String> {
     }
 }
 
-/// Rend littérale, pour `globset`, une valeur qui n'est pas un motif : un
-/// profil nommé `C:\Users\a[b]c` ne doit pas devenir une classe de caractères
-/// qui matche `C:\Users\abc`. Tout passe par une classe à un caractère plutôt
-/// que par l'antislash de `globset::escape` : plus loin dans la chaîne de
-/// traitement, `\` est réécrit en `/` et un échappement par antislash serait
-/// détruit.
-pub fn escape_glob_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '?' | '*' | '[' | ']' | '{' | '}' => {
-                out.push('[');
-                out.push(c);
-                out.push(']');
-            }
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Remplace la variable `%VAR%` de tête. Une seule variable est acceptée,
 /// et uniquement en tête : un chemin de règle est toujours de la forme
 /// `%VAR%\reste`.
@@ -189,13 +168,12 @@ pub fn expand_env_with(raw: &str, lookup: EnvLookup) -> Result<String, RuleError
     }
     let value = lookup(name).ok_or_else(|| RuleError::MissingVar(name.to_string()))?;
     // Seule la valeur de la variable est échappée : le suffixe est écrit par
-    // la règle et ses jokers doivent rester des jokers.
-    let value = escape_glob_literal(value.trim_end_matches(['\\', '/']));
+    // la règle et ses jokers doivent rester des jokers. `globset::escape`
+    // enferme chaque métacaractère dans une classe à un caractère (`[*]`),
+    // jamais derrière un antislash : l'échappement survit donc à la réécriture
+    // de `\` en `/` faite plus loin dans la chaîne de traitement.
+    let value = globset::escape(value.trim_end_matches(['\\', '/']));
     Ok(format!("{value}{rest}"))
-}
-
-pub fn expand_env(raw: &str) -> Result<String, RuleError> {
-    expand_env_with(raw, &system_env)
 }
 
 /// Met le chemin sous forme Windows (`\`) et refuse tout segment `..`.
@@ -294,6 +272,19 @@ mod tests {
         let got = expand_env_with(r"%TEMP%\**\*", &profil_crochets).unwrap();
         // La valeur devient littérale, le `**\*` écrit par la règle reste un joker.
         assert_eq!(got, r"C:\Users\a[[]b[]]c\**\*");
+    }
+
+    #[test]
+    fn expand_echappe_tous_les_metacaracteres_de_glob() {
+        // Les six métacaractères de globset, tous neutralisés par une classe à
+        // un caractère — jamais par un antislash, qui serait détruit par la
+        // réécriture `\` -> `/` faite au moment de la compilation du glob.
+        let profil_exotique = |name: &str| match name {
+            "USERPROFILE" | "TEMP" => Some(r"C:\Users\a?b*c[d]e{f}g".to_string()),
+            _ => None,
+        };
+        let got = expand_env_with(r"%TEMP%\*", &profil_exotique).unwrap();
+        assert_eq!(got, r"C:\Users\a[?]b[*]c[[]d[]]e[{]f[}]g\*");
     }
 
     #[test]

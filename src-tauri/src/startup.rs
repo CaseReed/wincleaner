@@ -1,4 +1,4 @@
-use crate::rules::{system_env, EnvLookup};
+use crate::rules::system_env;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_BINARY};
@@ -172,8 +172,8 @@ fn read_run_values(subkey: &str) -> Result<Vec<(String, String)>, StartupError> 
     Ok(out)
 }
 
-fn startup_folder(lookup: EnvLookup) -> Option<std::path::PathBuf> {
-    let appdata = lookup("APPDATA")?;
+fn startup_folder() -> Option<std::path::PathBuf> {
+    let appdata = system_env("APPDATA")?;
     Some(
         std::path::PathBuf::from(appdata)
             .join("Microsoft")
@@ -199,7 +199,7 @@ fn is_enabled(source: StartupSource, name: &str) -> Result<bool, StartupError> {
     })
 }
 
-pub fn list_startup_with(lookup: EnvLookup) -> Result<Vec<StartupEntry>, StartupError> {
+pub fn list_startup() -> Result<Vec<StartupEntry>, StartupError> {
     let mut entries: Vec<StartupEntry> = Vec::new();
 
     for (name, command) in read_run_values(RUN_KEY)? {
@@ -224,7 +224,7 @@ pub fn list_startup_with(lookup: EnvLookup) -> Result<Vec<StartupEntry>, Startup
         });
     }
 
-    if let Some(folder) = startup_folder(lookup) {
+    if let Some(folder) = startup_folder() {
         if let Ok(read_dir) = std::fs::read_dir(&folder) {
             for item in read_dir.flatten() {
                 let file_name = item.file_name().to_string_lossy().to_string();
@@ -248,10 +248,6 @@ pub fn list_startup_with(lookup: EnvLookup) -> Result<Vec<StartupEntry>, Startup
 
     entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(entries)
-}
-
-pub fn list_startup() -> Result<Vec<StartupEntry>, StartupError> {
-    list_startup_with(&system_env)
 }
 
 /// Active ou désactive une entrée en écrivant son blob StartupApproved.

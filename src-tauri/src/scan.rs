@@ -25,14 +25,14 @@ pub fn to_slash(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// Métacaractères que `rules::escape_glob_literal` neutralise en les
+/// Métacaractères que `globset::escape` neutralise en les
 /// enfermant dans une classe à un caractère.
 const ESCAPABLE: [char; 6] = ['?', '*', '[', ']', '{', '}'];
 
 /// Plus long préfixe du motif ne contenant aucun métacaractère de glob.
 /// C'est la racine à partir de laquelle `walkdir` descend.
 ///
-/// Les séquences `[c]` produites par `rules::escape_glob_literal` sont des
+/// Les séquences `[c]` produites par `globset::escape` sont des
 /// littéraux, pas des jokers : les traiter comme des jokers ferait remonter la
 /// racine (un profil nommé `a[b]c` ramènerait la marche à `C:/Users`, donc à
 /// tous les profils de la machine).
@@ -191,12 +191,8 @@ pub fn scan_rule_with_api(
     })
 }
 
-pub fn scan_rule_with(rule: &Rule, lookup: EnvLookup) -> Result<ScanResult, RuleError> {
-    scan_rule_with_api(rule, lookup, &query_recycle_bin)
-}
-
 pub fn scan_rule(rule: &Rule) -> Result<ScanResult, RuleError> {
-    scan_rule_with(rule, &system_env)
+    scan_rule_with_api(rule, &system_env, &query_recycle_bin)
 }
 
 /// Interroge la corbeille de tous les volumes. Lecture seule.

@@ -210,32 +210,32 @@ export function CleanPanel() {
       ))}
 
       <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-3">
-        <Button onClick={onScan} disabled={busy || selected.size === 0}>
-          Analyser
-        </Button>
-        <label htmlFor="clean-mode" className="text-sm">
-          Mode de suppression
-        </label>
-        <select
-          id="clean-mode"
-          aria-label="Mode de suppression"
-          className="rounded-md border bg-transparent px-2 py-1 text-sm"
-          value={mode}
-          onChange={(e) => setMode(e.target.value as CleanMode)}
-        >
-          <option value="auto">Auto</option>
-          <option value="trash">Corbeille</option>
-          <option value="permanent">Définitif</option>
-        </select>
-        <Button
-          variant="destructive"
-          onClick={onClean}
-          disabled={busy || !results || scannedIds.length === 0}
-        >
-          Nettoyer
-        </Button>
-      </div>
+        <div className="flex items-center gap-3">
+          <Button onClick={onScan} disabled={busy || selected.size === 0}>
+            Analyser
+          </Button>
+          <label htmlFor="clean-mode" className="text-sm">
+            Mode de suppression
+          </label>
+          <select
+            id="clean-mode"
+            aria-label="Mode de suppression"
+            className="rounded-md border bg-transparent px-2 py-1 text-sm"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as CleanMode)}
+          >
+            <option value="auto">Auto</option>
+            <option value="trash">Corbeille</option>
+            <option value="permanent">Définitif</option>
+          </select>
+          <Button
+            variant="destructive"
+            onClick={onClean}
+            disabled={busy || !results || scannedIds.length === 0}
+          >
+            Nettoyer
+          </Button>
+        </div>
         <p data-testid="mode-help" className="text-xs text-muted-foreground">
           Auto : suppression définitive pour les éléments à faible risque,
           corbeille pour les autres.

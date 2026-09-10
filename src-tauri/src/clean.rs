@@ -99,16 +99,14 @@ pub fn clean_rule_with_api(
     Ok(report)
 }
 
-pub fn clean_rule_with(
-    rule: &Rule,
-    mode: CleanMode,
-    lookup: EnvLookup,
-) -> Result<CleanReport, RuleError> {
-    clean_rule_with_api(rule, mode, lookup, &query_recycle_bin, &empty_recycle_bin)
-}
-
 pub fn clean_rule(rule: &Rule, mode: CleanMode) -> Result<CleanReport, RuleError> {
-    clean_rule_with(rule, mode, &system_env)
+    clean_rule_with_api(
+        rule,
+        mode,
+        &system_env,
+        &query_recycle_bin,
+        &empty_recycle_bin,
+    )
 }
 
 /// Vide la corbeille de tous les volumes, sans confirmation, sans barre de
