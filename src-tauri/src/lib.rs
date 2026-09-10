@@ -3,6 +3,7 @@ pub mod commands;
 pub mod rules;
 pub mod scan;
 pub mod startup;
+pub mod winapp2;
 
 /// Text shown when the embedded rules refuse to load. In release,
 /// `windows_subsystem = "windows"` means standard error is visible nowhere, so
