@@ -78,9 +78,34 @@ impl fmt::Display for UpdateError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseInfo {
     pub tag_name: String,
+    /// The canonical `semver::Version` form of `tag_name` (no leading `v`,
+    /// no surrounding whitespace): what is shown and compared against.
+    pub latest: String,
     pub body: Option<String>,
     pub html_url: Option<String>,
     pub published_at: Option<String>,
+}
+
+/// `html_url` is kept only when it points at this project's own GitHub pages:
+/// anything else — a homoglyph domain, a `javascript:` URL, a plain
+/// look-alike — is data the release body could have forged, and this is the
+/// one field the front end both displays and offers to copy. A byte-wise
+/// prefix match refuses homoglyphs: `wincIeaner` (capital I) is not
+/// `wincleaner` one byte at a time, no Unicode confusable table needed.
+const RELEASE_URL_PREFIX: &str = "https://github.com/CaseReed/wincleaner/";
+
+/// Release notes are shown verbatim (as plain text — see `lib/updates.ts`),
+/// so an unbounded body is still a nuisance, not an injection: this only
+/// keeps one malicious or broken release from making the Settings screen
+/// unusable.
+const NOTES_MAX_CHARS: usize = 20_000;
+
+fn truncate_chars(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        s
+    } else {
+        s.chars().take(max).collect()
+    }
 }
 
 #[derive(Deserialize)]
@@ -134,10 +159,24 @@ pub fn parse_release(json: &str) -> Result<ReleaseInfo, UpdateError> {
         .tag_name
         .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| UpdateError::Malformed("release has no tag_name".into()))?;
+    // A tag GitHub cannot be trusted to have kept as semver (a hand-pushed
+    // tag, a typo) must not reach `compare_versions`, which reads anything
+    // unparseable as "not newer" — silently hiding a real update is worse
+    // than refusing the release outright.
+    let version = semver::Version::parse(strip_v(tag_name.trim()))
+        .map_err(|e| UpdateError::Malformed(format!("tag_name is not semver: {e}")))?;
+    let html_url = raw
+        .html_url
+        .filter(|u| !u.trim().is_empty())
+        .filter(|u| u.starts_with(RELEASE_URL_PREFIX));
     Ok(ReleaseInfo {
         tag_name,
-        body: raw.body.filter(|b| !b.trim().is_empty()),
-        html_url: raw.html_url.filter(|u| !u.trim().is_empty()),
+        latest: version.to_string(),
+        body: raw
+            .body
+            .filter(|b| !b.trim().is_empty())
+            .map(|b| truncate_chars(b, NOTES_MAX_CHARS)),
+        html_url,
         published_at: raw.published_at.filter(|p| !p.trim().is_empty()),
     })
 }
@@ -159,6 +198,16 @@ pub fn fetch_latest_release(
         403 | 429 if response.body.to_lowercase().contains("rate limit") => {
             Err(UpdateError::RateLimited)
         }
+        // `max_redirects(0)` means a 3xx is handed back as an ordinary
+        // response instead of being followed: the documented endpoint has no
+        // legitimate reason to redirect, and following one would silently
+        // break "one request, one host". Read as malformed rather than
+        // offline: GitHub *did* answer, just not with something this
+        // application trusts.
+        300..=399 => Err(UpdateError::Malformed(format!(
+            "unexpected redirect (status {})",
+            response.status
+        ))),
         _ => Err(UpdateError::Offline),
     }
 }
@@ -172,13 +221,45 @@ pub fn check_with(
     let body = fetch_latest_release(fetch, url)?;
     let release = parse_release(&body)?;
     Ok(UpdateCheck {
-        is_newer: compare_versions(current, &release.tag_name) == Ordering::Less,
+        is_newer: compare_versions(current, &release.latest) == Ordering::Less,
         current: current.to_string(),
-        latest: Some(strip_v(release.tag_name.trim()).to_string()),
+        latest: Some(release.latest),
         notes: release.body,
         url: release.html_url,
         published_at: release.published_at,
     })
+}
+
+/// The largest response body this application will read. GitHub's release
+/// JSON, notes included, is a few kilobytes; 256 KiB is generous headroom
+/// against a compromised or misbehaving endpoint without ever letting a
+/// single request hold an unbounded amount of memory.
+const MAX_BODY_BYTES: u64 = 256 * 1024;
+
+/// The configuration of the one agent this application ever builds. Split out
+/// from `http_get` so the "one request, one host" invariant can be asserted
+/// on the `Config` itself, without opening a socket.
+///
+/// - `max_redirects(0)`: the documented endpoint never redirects a plain GET;
+///   following one would mean a second, unplanned request to an unplanned
+///   host. `fetch_latest_release` reads any 3xx handed back as `Malformed`.
+/// - `https_only(true)`: refuses to fall back to plaintext HTTP even if a
+///   redirect or a misconfigured URL ever pointed at one.
+/// - `proxy(None)`: ureq defaults to `Proxy::try_from_env()`, which would
+///   route the request through whatever `HTTPS_PROXY`/`https_proxy` is set in
+///   the environment — a second, user-invisible hop this application never
+///   promised. Disabling it keeps the connection direct to `api.github.com`.
+fn agent_config() -> ureq::config::Config {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(TIMEOUT))
+        .user_agent(concat!("wincleaner/", env!("CARGO_PKG_VERSION")))
+        // An HTTP error status is an answer, not a transport failure: we need
+        // the status and the body back to tell 404 from a rate limit.
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .https_only(true)
+        .proxy(None)
+        .build()
 }
 
 /// The one place in the application that opens a socket.
@@ -186,17 +267,10 @@ pub fn check_with(
 /// Exactly two headers are set: the `User-Agent` GitHub requires from REST
 /// clients, carrying nothing but the application version, and the `Accept`
 /// that selects the documented media type. No authorization, no cookie, no
-/// query string. Redirects and the response body are capped by ureq's
-/// defaults; the body we expect is a few kilobytes of JSON.
+/// query string, no redirect, no proxy (see `agent_config`). The body is
+/// capped at `MAX_BODY_BYTES`.
 pub fn http_get(url: &str) -> Result<HttpResponse, String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .user_agent(concat!("wincleaner/", env!("CARGO_PKG_VERSION")))
-        // An HTTP error status is an answer, not a transport failure: we need
-        // the status and the body back to tell 404 from a rate limit.
-        .http_status_as_error(false)
-        .build()
-        .new_agent();
+    let agent = agent_config().new_agent();
     let mut response = agent
         .get(url)
         .header("Accept", "application/vnd.github+json")
@@ -205,6 +279,8 @@ pub fn http_get(url: &str) -> Result<HttpResponse, String> {
     let status = response.status().as_u16();
     let body = response
         .body_mut()
+        .with_config()
+        .limit(MAX_BODY_BYTES)
         .read_to_string()
         .map_err(|e| e.to_string())?;
     Ok(HttpResponse { status, body })
@@ -267,6 +343,7 @@ mod tests {
     fn a_release_yields_its_tag_notes_url_and_date() {
         let release = parse_release(RELEASE).unwrap();
         assert_eq!(release.tag_name, "v0.3.0");
+        assert_eq!(release.latest, "0.3.0");
         assert_eq!(
             release.body.as_deref(),
             Some("Release notes\n\n### Added\n- A thing")
@@ -324,6 +401,57 @@ mod tests {
         assert_eq!(release.published_at, None);
     }
 
+    /// A homoglyph host (capital `I` standing in for a lowercase `l`) is not
+    /// this project's GitHub page byte-for-byte, and a byte-wise prefix
+    /// match is exactly what refuses it — no confusable table needed.
+    #[test]
+    fn a_homoglyph_url_is_dropped() {
+        let json = RELEASE.replace(
+            "https://github.com/CaseReed/wincleaner/",
+            "https://github.com/CaseReed/wincIeaner/",
+        );
+        let release = parse_release(&json).unwrap();
+        assert_eq!(release.html_url, None);
+    }
+
+    #[test]
+    fn a_javascript_url_is_dropped() {
+        let json = RELEASE.replace(
+            "https://github.com/CaseReed/wincleaner/releases/tag/v0.3.0",
+            "javascript:alert(1)",
+        );
+        let release = parse_release(&json).unwrap();
+        assert_eq!(release.html_url, None);
+    }
+
+    #[test]
+    fn a_url_under_the_project_page_is_kept() {
+        let release = parse_release(RELEASE).unwrap();
+        assert_eq!(
+            release.html_url.as_deref(),
+            Some("https://github.com/CaseReed/wincleaner/releases/tag/v0.3.0")
+        );
+    }
+
+    #[test]
+    fn a_non_semver_tag_is_malformed() {
+        let json = RELEASE.replace("\"v0.3.0\"", "\"latest-nightly\"");
+        assert!(matches!(
+            parse_release(&json),
+            Err(UpdateError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn notes_are_truncated_to_twenty_thousand_characters() {
+        let json = format!(
+            r#"{{"tag_name": "v0.3.0", "body": "{}", "draft": false, "prerelease": false}}"#,
+            "a".repeat(30_000)
+        );
+        let release = parse_release(&json).unwrap();
+        assert_eq!(release.body.unwrap().chars().count(), NOTES_MAX_CHARS);
+    }
+
     #[test]
     fn a_transport_failure_reads_as_offline() {
         let fetch = |_: &str| Err("dns error".to_string());
@@ -361,6 +489,17 @@ mod tests {
             fetch_latest_release(answer(403, "{\"message\":\"Forbidden\"}"), LATEST_RELEASE_URL),
             Err(UpdateError::Offline)
         );
+    }
+
+    /// `max_redirects(0)` hands a 3xx back as an ordinary response instead of
+    /// an error (see `agent_config`); this is the mapping that turns it into
+    /// a user-facing outcome instead of being read as a 2xx body.
+    #[test]
+    fn a_redirect_reads_as_malformed() {
+        assert!(matches!(
+            fetch_latest_release(answer(302, ""), LATEST_RELEASE_URL),
+            Err(UpdateError::Malformed(_))
+        ));
     }
 
     #[test]
@@ -442,5 +581,16 @@ mod tests {
         );
         assert!(LATEST_RELEASE_URL.starts_with("https://"));
         assert!(!LATEST_RELEASE_URL.contains('@'));
+    }
+
+    /// Locks down the three settings that keep this to one request, one
+    /// host, without opening a socket: built straight from `agent_config`,
+    /// not re-derived by hand.
+    #[test]
+    fn the_agent_follows_no_redirect_uses_no_proxy_and_is_https_only() {
+        let config = agent_config();
+        assert_eq!(config.max_redirects(), 0);
+        assert!(config.https_only());
+        assert!(config.proxy().is_none());
     }
 }

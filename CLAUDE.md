@@ -51,10 +51,26 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, from
   **Rust**, never from the webview. Ten-second timeout, `User-Agent:
   wincleaner/<version>`, `Accept: application/vnd.github+json`, nothing else —
-  no credential, no query string, no second request. It fires on a click, or
-  once at startup when the user has armed the Settings switch (off by default,
-  `wincleaner.autoCheckUpdates`). Everything but `http_get` is pure and the
-  transport is injected: tests never open a socket.
+  no credential, no query string, no second request. Enforced on the agent
+  itself, not just by convention (`update.rs::agent_config`):
+  `.max_redirects(0)` (a 3xx from the endpoint is read as `Malformed`, never
+  followed to a second host), `.https_only(true)`, `.proxy(None)` (ureq
+  otherwise honours `HTTPS_PROXY`/`https_proxy` from the environment, which
+  would silently add a hop). A second `check_for_updates` call within ten
+  seconds returns the previous result instead of opening another connection
+  (`commands.rs::check_for_updates_with`) — see VM-8b for why this matters in
+  `tauri dev`. It fires on a click, or once at startup when the user has armed
+  the Settings switch (off by default, `wincleaner.autoCheckUpdates`).
+  Everything but `http_get` is pure and the transport is injected: tests never
+  open a socket.
+- A GitHub release answer is validated, not trusted verbatim
+  (`update.rs::parse_release`): `tag_name` must re-parse as `semver::Version`
+  (a non-semver tag is `Malformed`, not silently accepted), and `html_url` is
+  kept only when it starts with
+  `https://github.com/CaseReed/wincleaner/` byte-for-byte — a homoglyph host
+  or a `javascript:` URL becomes `None` instead of reaching the Copy-link
+  button. The response body is capped at 256 KiB and `notes` truncated to
+  20,000 characters before they ever reach the front end.
 - Network-free CSP: `default-src 'self'; connect-src 'self' ipc:
   http://ipc.localhost; style-src 'self'; style-src-attr 'unsafe-inline';
   object-src/base-uri/frame-ancestors/form-action 'none'`. A distinct `devCsp`
