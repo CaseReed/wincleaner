@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Safety harness.** An end-to-end test (`src-tauri/tests/safety_harness.rs`)
+  runs the real scan and clean code against a synthetic Windows profile built
+  under a temporary directory — decoy documents, private keys, browser
+  credential stores, lookalike cache directories and two junctions pointing
+  outside the profile — and fails the build if anything that should have
+  survived did not, if any junk survived, or if the walk ever crossed a
+  junction. Nothing real is touched: the environment, both recycle-bin calls
+  and the move-to-recycle-bin call are injected. See
+  [`docs/safety-harness.md`](docs/safety-harness.md).
+
 ## [0.4.0] - 2026-09-10
 
 ### Added

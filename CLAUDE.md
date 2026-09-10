@@ -46,6 +46,9 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   (bit 0 = disabled), never a deletion, RunOnce is read-only.
 - Tests: never against the real profile, the real recycle bin or the real Run
   keys. `TempDir` and `HKCU\Software\wincleaner-test` only.
+- The safety harness (`src-tauri/tests/safety_harness.rs`) must pass; a new
+  rule needs a junk fixture in `tests/support/fake_profile.rs`, or the harness
+  fails with "rule <id> matched no junk". See `docs/safety-harness.md`.
 - One network call and one only: `check_for_updates` (`src-tauri/src/update.rs`)
   does a single unauthenticated `GET` on
   `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, from

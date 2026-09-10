@@ -78,6 +78,10 @@ apps.
 - **Confirmation before cleaning.** The Clean button always goes through a
   confirmation that announces the mode and names what the operation will
   destroy with no way back.
+- **Proven on every push.** An automated harness runs the real scan and clean
+  code against a synthetic profile full of decoy user data and junctions, and
+  fails the build if a single file that should have survived does not — see
+  [`docs/safety-harness.md`](docs/safety-harness.md).
 
 One exception deserves its own paragraph: the **Recycle Bin** rule goes through
 the Windows `SHEmptyRecycleBinW` API, which empties the recycle bin of **every
