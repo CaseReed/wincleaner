@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "version:check": "node scripts/check-version.mjs"
+    "version:check": "node scripts/check-version.mjs",
+    "winapp2:update": "node scripts/update-winapp2.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

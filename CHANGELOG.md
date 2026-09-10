@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Embedded the [Winapp2](https://github.com/MoscaDotTo/Winapp2) community rule
+  base (`Non-CCleaner/Winapp2.ini`, snapshot 2026-09-10, CC-BY-SA-4.0) under
+  `src-tauri/third_party/winapp2/`, refreshed with `npm run winapp2:update`.
+
 ## [0.1.0] - 2026-09-10
 
 Initial MVP release.

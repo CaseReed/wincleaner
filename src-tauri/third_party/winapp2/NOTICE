@@ -1,0 +1,11 @@
+Winapp2.ini — community-maintained cleaning rule base
+
+Source: https://github.com/MoscaDotTo/Winapp2 (Non-CCleaner/Winapp2.ini)
+Downloaded: 2026-09-10
+License: Creative Commons Attribution-ShareAlike 4.0 International (CC-BY-SA-4.0)
+         Full text in the LICENSE file next to this notice, also at
+         https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt
+
+WinCleaner converts these entries into its own cleaning rules at startup. The
+converted rules are data under CC-BY-SA-4.0; the WinCleaner application code
+stays MIT.

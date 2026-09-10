@@ -130,3 +130,6 @@ time.
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
+
+The bundled [Winapp2](https://github.com/MoscaDotTo/Winapp2) rule base is
+CC-BY-SA-4.0; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
