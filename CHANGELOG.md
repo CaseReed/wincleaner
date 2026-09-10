@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache is not duplicated: Winapp2's `[Python *]` section already covers
   `%LOCALAPPDATA%\Pip\cache`, so the candidate pip rule was dropped instead of
   added.
+- User-data folders are refused by segment, not only by variable: a converted
+  key whose first segment under `%USERPROFILE%` is `Documents`, `Desktop`,
+  `Pictures`, `Videos`, `Music`, `Downloads`, `OneDrive`, `Favorites`, `Links`,
+  `Contacts`, `Saved Games` or `Searches` is dropped, since the allow-list lets
+  `%UserProfile%\Documents\...` through where it refuses `%Documents%\...`. The
+  entry is dropped when nothing else remains (`dropped_user_data`); the refused
+  keys are counted apart (`user_data_keys`).
+- The spelled-out form of a variable is normalised onto the variable itself
+  (`%UserProfile%\AppData\Local\` → `%LOCALAPPDATA%\`, `\AppData\Roaming\` →
+  `%APPDATA%\`, `%LocalAppData%\Temp\` → `%TEMP%\`), so a community rule can no
+  longer shadow a native one just by spelling its path differently.
 - A search field filtering rules by label across every category, a summary line
   reporting how many rules were detected, converted and dropped, and a
   "Sort by size" toggle that puts the biggest wins first and is remembered

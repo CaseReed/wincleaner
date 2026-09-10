@@ -94,42 +94,118 @@ const VARIABLES: [(&str, &str); 4] = [
     ("%TEMP%", "%TEMP%"),
 ];
 
+/// Directories directly under `%USERPROFILE%` that hold user data, never
+/// caches. `VARIABLES` already refuses `%Documents%` and friends, but the very
+/// same folders are also reachable spelled out
+/// (`%UserProfile%\Documents\Foo\Screenshots`), and that form passes the
+/// variable allow-list: the first segment after the profile is therefore
+/// denied by name. `OneDrive` covers the redirected shape of all of them.
+const USER_DATA_SEGMENTS: [&str; 12] = [
+    "Documents",
+    "Desktop",
+    "Pictures",
+    "Videos",
+    "Music",
+    "Downloads",
+    "OneDrive",
+    "Favorites",
+    "Links",
+    "Contacts",
+    "Saved Games",
+    "Searches",
+];
+
+/// Why a path could not be mapped. `UserData` is kept apart because it is the
+/// one refusal that says "we could clean this, and deliberately will not".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathDrop {
+    /// The first segment under `%USERPROFILE%` is a user-data folder.
+    UserData,
+    /// Anything else: a variable outside the allow-list, a `..` segment, a
+    /// metacharacter we cannot keep literal.
+    Other,
+}
+
+/// The same directory written two ways is one directory: `%USERPROFILE%\AppData
+/// \Local\X` and `%LOCALAPPDATA%\X` name the same bytes. Overlap detection
+/// compares *unexpanded* glob strings, so it only sees a duplicate when both
+/// sides spell it the same way — normalising here makes that detection
+/// alias-proof by construction rather than by a list of special cases.
+///
+/// Applied in order, so `%USERPROFILE%\AppData\Local\Temp\X` reaches `%TEMP%\X`
+/// in two steps.
+fn normalize_alias(path: String) -> String {
+    const ALIASES: [(&str, &str); 3] = [
+        (r"%USERPROFILE%\AppData\Local\", r"%LOCALAPPDATA%\"),
+        (r"%USERPROFILE%\AppData\Roaming\", r"%APPDATA%\"),
+        (r"%LOCALAPPDATA%\Temp\", r"%TEMP%\"),
+    ];
+    let mut path = path;
+    for (from, to) in ALIASES {
+        let matched = path
+            .get(..from.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(from));
+        if matched {
+            path = format!("{to}{}", &path[from.len()..]);
+        }
+    }
+    path
+}
+
 /// Rewrites a Winapp2 path onto a rules.toml path.
 ///
 /// `None` when the leading variable is not one of the four allowed ones, when
-/// the path carries a `..` segment, or when it carries a glob metacharacter we
-/// cannot keep literal. `*` is kept — Winapp2 uses it for profile directories,
-/// and `rules.toml` uses it the same way — but `[`, `]`, `{`, `}` and `?` in a
+/// the path carries a `..` segment, when it carries a glob metacharacter we
+/// cannot keep literal, or when it reaches a user-data folder under the
+/// profile. `*` is kept — Winapp2 uses it for profile directories, and
+/// `rules.toml` uses it the same way — but `[`, `]`, `{`, `}` and `?` in a
 /// directory name would silently change what the glob matches, so the key is
 /// dropped instead of guessed at.
 pub fn map_path(raw: &str) -> Option<String> {
+    map_path_with_reason(raw).ok()
+}
+
+fn map_path_with_reason(raw: &str) -> Result<String, PathDrop> {
     let raw = raw.trim().trim_matches('"').trim_end_matches('\\');
     if !raw.starts_with('%') {
-        return None;
+        return Err(PathDrop::Other);
     }
-    let end = raw[1..].find('%')? + 1;
+    let end = raw[1..].find('%').ok_or(PathDrop::Other)? + 1;
     let var = raw[..=end].to_ascii_uppercase();
     let mapped = VARIABLES
         .iter()
         .find(|(from, _)| *from == var)
-        .map(|(_, to)| *to)?;
+        .map(|(_, to)| *to)
+        .ok_or(PathDrop::Other)?;
     let rest = &raw[end + 1..];
     if !(rest.is_empty() || rest.starts_with('\\')) {
-        return None;
+        return Err(PathDrop::Other);
     }
     if rest.contains(['[', ']', '{', '}', '?']) {
-        return None;
+        return Err(PathDrop::Other);
     }
     // A second variable further down the path (`%USERPROFILE%\AppData%\...`,
     // `...\%UserName%`: upstream typos) would stay literal, and an inert
     // literal directory silently matches nothing.
     if rest.contains('%') {
-        return None;
+        return Err(PathDrop::Other);
     }
     if rest.split('\\').any(|seg| seg == "..") {
-        return None;
+        return Err(PathDrop::Other);
     }
-    Some(format!("{mapped}{rest}"))
+    // Aliases first: `%USERPROFILE%\AppData\Local\X` is not a user-data path,
+    // it is `%LOCALAPPDATA%\X`, and must be judged as such.
+    let path = normalize_alias(format!("{mapped}{rest}"));
+    if let Some(tail) = path.strip_prefix(r"%USERPROFILE%\") {
+        let first = tail.split('\\').next().unwrap_or_default();
+        if USER_DATA_SEGMENTS
+            .iter()
+            .any(|folder| folder.eq_ignore_ascii_case(first))
+        {
+            return Err(PathDrop::UserData);
+        }
+    }
+    Ok(path)
 }
 
 /// A spec we can keep literal in a glob. `[`, `]`, `{` and `}` would silently
@@ -170,16 +246,16 @@ fn exclude_specs(field: &str) -> Option<Vec<String>> {
 ///
 /// `REMOVESELF` needs nothing extra: `clean.rs` already removes a directory a
 /// rule has emptied. Only `RECURSE` changes the shape of the glob.
-fn file_key_globs(value: &str) -> Option<Vec<String>> {
+fn file_key_globs(value: &str) -> Result<Vec<String>, PathDrop> {
     let mut parts = value.split('|');
-    let base = map_path(parts.next()?)?;
+    let base = map_path_with_reason(parts.next().ok_or(PathDrop::Other)?)?;
     let spec_field = parts.next().unwrap_or("*.*");
     let recurse = parts.any(|flag| flag.trim().eq_ignore_ascii_case("RECURSE"));
     let specs = specs(spec_field);
     if specs.is_empty() {
-        return None;
+        return Err(PathDrop::Other);
     }
-    Some(
+    Ok(
         specs
             .into_iter()
             .map(|spec| {
@@ -199,7 +275,8 @@ fn file_key_globs(value: &str) -> Option<Vec<String>> {
 /// we clean" and the other "we cannot express this pattern".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExcludeDrop {
-    /// The path does not start with one of the four variables we map.
+    /// The path is outside what we clean: a variable we do not map, or a
+    /// user-data folder under the profile.
     Variable,
     /// Unknown exclude kind, or a spec we cannot keep literal in a glob.
     Unrepresentable,
@@ -225,7 +302,14 @@ fn exclude_key_globs(value: &str) -> Result<Vec<String>, ExcludeDrop> {
         return Err(ExcludeDrop::Unrepresentable);
     }
     let raw = parts.next().ok_or(ExcludeDrop::Unrepresentable)?;
-    let base = map_path(raw).ok_or(ExcludeDrop::Variable)?;
+    // A metacharacter we cannot keep literal is a limit of our pattern
+    // language (`dropped_exclude`), not of the paths we accept to clean
+    // (`dropped_variable`): the same refusal from `map_path`, split by cause.
+    let base = map_path(raw).ok_or(if raw.contains(['[', ']', '{', '}', '?']) {
+        ExcludeDrop::Unrepresentable
+    } else {
+        ExcludeDrop::Variable
+    })?;
     match parts.next().map(str::trim).filter(|s| !s.is_empty()) {
         Some(field) => {
             let specs = exclude_specs(field).ok_or(ExcludeDrop::Unrepresentable)?;
@@ -301,6 +385,16 @@ pub struct ConversionReport {
     pub retained: u32,
     /// No `FileKey` survived the variable allow-list, or the entry had none.
     pub dropped_no_file_key: u32,
+    /// Every `FileKey` was refused and at least one of them pointed at a
+    /// user-data folder under `%USERPROFILE%` (`Documents`, `Desktop`,
+    /// `OneDrive`, …). Counted apart from `dropped_no_file_key`: those entries
+    /// are not "unsupported", they are ones we deliberately refuse to clean.
+    pub dropped_user_data: u32,
+    /// User-data `FileKey`s refused, counted one per KEY, not per entry: an
+    /// entry keeping another usable `FileKey` is retained and still shows up
+    /// here. Deliberately outside `dropped()`, which counts entries only —
+    /// mixing the two would break `retained + dropped() == entries`.
+    pub user_data_keys: u32,
     /// An `ExcludeKey` path used a variable outside the four we map.
     pub dropped_variable: u32,
     /// An `ExcludeKey` we cannot express as a glob (unknown kind, or a spec
@@ -321,6 +415,7 @@ pub struct ConversionReport {
 impl ConversionReport {
     pub fn dropped(&self) -> u32 {
         self.dropped_no_file_key
+            + self.dropped_user_data
             + self.dropped_variable
             + self.dropped_exclude
             + self.dropped_invalid
@@ -468,13 +563,25 @@ pub fn convert_with(
         }
 
         let mut paths: Vec<String> = Vec::new();
+        let mut refused_user_data = false;
         for raw in &entry.file_keys {
-            if let Some(globs) = file_key_globs(raw) {
-                paths.extend(globs);
+            match file_key_globs(raw) {
+                Ok(globs) => paths.extend(globs),
+                Err(PathDrop::UserData) => {
+                    refused_user_data = true;
+                    report.user_data_keys += 1;
+                }
+                Err(PathDrop::Other) => {}
             }
         }
         if paths.is_empty() {
-            report.dropped_no_file_key += 1;
+            // The entry is dropped either way; the counter says whether we
+            // could not map it or refused to touch what it points at.
+            if refused_user_data {
+                report.dropped_user_data += 1;
+            } else {
+                report.dropped_no_file_key += 1;
+            }
             continue;
         }
 
@@ -830,9 +937,10 @@ FileKey1=%AppData%\\Cafe|*.*\r
             Some(r"%LOCALAPPDATA%\TestApp\Cache")
         );
         assert_eq!(map_path(r"%appdata%\X").as_deref(), Some(r"%APPDATA%\X"));
+        // The spelled-out form is normalised onto the variable it aliases.
         assert_eq!(
             map_path(r"%UserProfile%\AppData\Local\X").as_deref(),
-            Some(r"%USERPROFILE%\AppData\Local\X")
+            Some(r"%LOCALAPPDATA%\X")
         );
         assert_eq!(map_path(r"%Temp%\X\").as_deref(), Some(r"%TEMP%\X"));
         // Elevation, user data, and anything we cannot keep literal in a glob.
@@ -842,6 +950,77 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(map_path(r"%LocalAppData%\A[1]\X"), None);
         assert_eq!(map_path(r"%LocalAppData%\..\X"), None);
         assert_eq!(map_path(r"C:\Windows\Temp"), None);
+    }
+
+    /// `%Documents%` is refused by the variable allow-list, but the very same
+    /// folder spelled out under `%UserProfile%` used to walk straight through
+    /// it: a screenshots folder is user data, whatever upstream calls it.
+    #[test]
+    fn a_user_data_folder_under_the_profile_is_refused() {
+        assert_eq!(map_path(r"%UserProfile%\Documents\Foo\Screenshots"), None);
+        assert_eq!(map_path(r"%UserProfile%\desktop\Foo"), None);
+        assert_eq!(map_path(r"%UserProfile%\OneDrive\Pictures\X"), None);
+        assert_eq!(map_path(r"%UserProfile%\Saved Games\Foo"), None);
+        // Only the FIRST segment is denied: an application cache that happens
+        // to hold a directory called `Documents` is still cleanable.
+        assert_eq!(
+            map_path(r"%LocalAppData%\Foo\Documents").as_deref(),
+            Some(r"%LOCALAPPDATA%\Foo\Documents")
+        );
+        assert_eq!(
+            map_path(r"%UserProfile%\AppData\Local\Foo").as_deref(),
+            Some(r"%LOCALAPPDATA%\Foo")
+        );
+    }
+
+    /// The whole key goes, and the entry with it when nothing else survives.
+    #[test]
+    fn a_user_data_file_key_is_dropped_and_counted_apart() {
+        let src = "[Shots]\nFileKey1=%UserProfile%\\Documents\\Foo\\Screenshots|*|RECURSE\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_user_data, 1);
+        assert_eq!(report.dropped_no_file_key, 0);
+        assert_eq!(report.user_data_keys, 1);
+        assert_eq!(report.dropped(), 1);
+
+        // An entry keeping another usable FileKey survives: the key is counted,
+        // the entry is not dropped.
+        let src = "[Mixed]\nFileKey1=%UserProfile%\\Pictures\\A|*.*\nFileKey2=%LocalAppData%\\A\\Cache|*.*\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert_eq!(report.retained, 1);
+        assert_eq!(report.dropped_user_data, 0);
+        assert_eq!(report.user_data_keys, 1);
+        assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\A\Cache\*"]);
+    }
+
+    /// One directory, one spelling. `overlaps` compares unexpanded strings, so
+    /// two spellings of the same directory would slip past it.
+    #[test]
+    fn the_spelled_out_form_of_a_variable_is_normalised_onto_it() {
+        assert_eq!(
+            map_path(r"%UserProfile%\AppData\Local\Foo\Cache").as_deref(),
+            Some(r"%LOCALAPPDATA%\Foo\Cache")
+        );
+        assert_eq!(
+            map_path(r"%userprofile%\appdata\roaming\Foo").as_deref(),
+            Some(r"%APPDATA%\Foo")
+        );
+        assert_eq!(
+            map_path(r"%LocalAppData%\Temp\Foo").as_deref(),
+            Some(r"%TEMP%\Foo")
+        );
+        // Chained: profile -> local appdata -> temp.
+        assert_eq!(
+            map_path(r"%UserProfile%\AppData\Local\Temp\Foo").as_deref(),
+            Some(r"%TEMP%\Foo")
+        );
+        // The bare directory, with nothing under it, is left alone: there is
+        // no tail to rewrite.
+        assert_eq!(
+            map_path(r"%UserProfile%\AppData\Local").as_deref(),
+            Some(r"%USERPROFILE%\AppData\Local")
+        );
     }
 
     #[test]
@@ -910,6 +1089,19 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert!(converted.is_empty());
         assert_eq!(report.dropped_exclude, 1);
         assert_eq!(report.dropped(), 1);
+    }
+
+    /// A metacharacter in the exclude PATH is the same limit as one in its
+    /// spec: our pattern language, not the folders we accept to clean. It must
+    /// not be filed under `dropped_variable`, which means "outside the profile
+    /// paths we map".
+    #[test]
+    fn an_unrepresentable_exclude_path_is_counted_as_an_exclude_drop() {
+        let src = "[A]\nFileKey1=%LocalAppData%\\A|*.*\nExcludeKey1=FILE|%LocalAppData%\\A[1]\\keep|x.dat\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_exclude, 1);
+        assert_eq!(report.dropped_variable, 0);
     }
 
     /// A `FileKey` spec we cannot represent only narrows what the rule
@@ -1041,14 +1233,26 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(
             report.retained + report.dropped(),
             parse_ini(WINAPP2_INI).len() as u32,
-            "retained={} dropped={} (no_file_key={} variable={} exclude={} invalid={})",
+            "retained={} dropped={} (no_file_key={} user_data={} variable={} exclude={} \
+             invalid={} overlap={}), user_data_keys={}",
             report.retained,
             report.dropped(),
             report.dropped_no_file_key,
+            report.dropped_user_data,
             report.dropped_variable,
             report.dropped_exclude,
-            report.dropped_invalid
+            report.dropped_invalid,
+            report.dropped_overlap,
+            report.user_data_keys
         );
+        // The real file does reach into `%UserProfile%\Documents` and friends:
+        // if this ever hits zero, the segment deny-list stopped working.
+        assert!(
+            report.dropped_user_data > 0,
+            "no entry dropped for pointing at user data (user_data_keys={})",
+            report.user_data_keys
+        );
+        assert!(report.user_data_keys >= report.dropped_user_data);
         let mut ids = std::collections::HashSet::new();
         // The same real values as `system_env`, asked for once instead of once
         // per path: the check below is unchanged, it just stops paying a
@@ -1292,5 +1496,96 @@ FileKey1=%AppData%\\Cafe|*.*\r
             "convert_with retained Winapp2 rule(s) overlapping a native rule \
              (native id, winapp2 id, native glob): {leftovers:#?}"
         );
+    }
+
+    /// A path the pattern is guaranteed to match, built exactly like
+    /// `rules.rs::example_from`.
+    fn example_from(pattern: &str) -> String {
+        pattern.replace(r"**\*", r"x\y").replace('*', "x")
+    }
+
+    fn resolved_with_ids<'a>(rules: impl Iterator<Item = &'a Rule>) -> Vec<(String, String)> {
+        rules
+            .filter(|r| r.kind == RuleKind::Files)
+            .flat_map(|r| {
+                crate::rules::resolved_paths_with(r, &fake_env)
+                    .unwrap()
+                    .into_iter()
+                    .map(|p| (r.id.clone(), p))
+            })
+            .collect()
+    }
+
+    /// Thousands of globs do not fit in one `GlobSet` ("error building NFA"),
+    /// so they are compiled in chunks; the offset keeps the reported index
+    /// pointing at the right pattern.
+    fn sets_of(patterns: &[(String, String)]) -> Vec<(usize, globset::GlobSet)> {
+        const CHUNK: usize = 400;
+        patterns
+            .chunks(CHUNK)
+            .enumerate()
+            .map(|(n, chunk)| {
+                let globs: Vec<String> = chunk.iter().map(|(_, p)| p.clone()).collect();
+                (n * CHUNK, crate::scan::build_set(&globs).unwrap())
+            })
+            .collect()
+    }
+
+    /// Ids of the patterns matching `example`, across every chunk.
+    fn matching_ids<'a>(
+        sets: &[(usize, globset::GlobSet)],
+        patterns: &'a [(String, String)],
+        example: &str,
+    ) -> Vec<&'a str> {
+        sets.iter()
+            .flat_map(|(offset, set)| {
+                set.matches(example)
+                    .into_iter()
+                    .map(move |i| patterns[offset + i].0.as_str())
+            })
+            .collect()
+    }
+
+    /// The same guarantee as `no_native_rule_overlaps_a_converted_winapp2_rule`,
+    /// proved WITHOUT `overlaps`: resolve both catalogues, build a path each
+    /// pattern is guaranteed to match, and ask a real `GlobSet` — the very one
+    /// the scan uses — whether the other side claims it. Modelled on
+    /// `rules.rs::no_embedded_rule_overlaps_another`.
+    ///
+    /// `overlaps` is the enforcement AND, in the other test, the oracle: an
+    /// error in it would hide itself. Here the oracle is globset, so a
+    /// `map_path` alias slipping past the string comparison (`%USERPROFILE%\
+    /// AppData\Local\X` vs `%LOCALAPPDATA%\X`) surfaces as a real match on a
+    /// real path.
+    #[test]
+    fn no_retained_converted_rule_resolves_onto_a_native_path() {
+        use crate::rules::{load_rules_with, RULES_TOML};
+
+        let native = load_rules_with(RULES_TOML, &fake_env).unwrap();
+        let (converted, report) = convert_with(WINAPP2_INI, &native, &fake_env);
+        assert!(report.retained >= 500, "retained={}", report.retained);
+
+        let native_patterns = resolved_with_ids(native.iter());
+        let converted_patterns = resolved_with_ids(converted.iter().map(|c| &c.rule));
+        let native_sets = sets_of(&native_patterns);
+        let converted_sets = sets_of(&converted_patterns);
+
+        for (id, pattern) in &converted_patterns {
+            let example = crate::scan::to_slash(&example_from(pattern));
+            let hit = matching_ids(&native_sets, &native_patterns, &example);
+            assert!(
+                hit.is_empty(),
+                "\"{id}\" walks \"{example}\", which native rule(s) {hit:?} already clean"
+            );
+        }
+        for (id, pattern) in &native_patterns {
+            let example = crate::scan::to_slash(&example_from(pattern));
+            let hit = matching_ids(&converted_sets, &converted_patterns, &example);
+            assert!(
+                hit.is_empty(),
+                "native \"{id}\" walks \"{example}\", which converted rule(s) {hit:?} \
+                 also claim"
+            );
+        }
     }
 }

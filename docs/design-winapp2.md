@@ -41,8 +41,30 @@ Per entry `[Name *]`:
   `%Public%` (user data). `RECURSE` → `\**\`, `*.*` → `*`, `;`-separated specs →
   one glob each. `REMOVESELF` needs nothing extra (emptied directories are
   already removed).
+- User data is denied **by segment**, not only by variable: the allow-list lets
+  `%UserProfile%` through, and the very folders `%Documents%` names are also
+  reachable spelled out (`%UserProfile%\Documents\Foo\Screenshots`). The first
+  segment under the profile is therefore matched, case-insensitively, against
+  `Documents, Desktop, Pictures, Videos, Music, Downloads, OneDrive, Favorites,
+  Links, Contacts, Saved Games, Searches` and the key is dropped. Only the first
+  segment: an application cache holding a `Documents` subfolder stays cleanable.
+  The key alone goes; the entry goes only when no `FileKey` is left, counted as
+  `dropped_user_data` (entries) — the refused keys themselves are counted by
+  `user_data_keys`, which is deliberately outside `dropped()` so that
+  `retained + dropped() == entries` keeps holding.
+- Before that check, the spelled-out form of a variable is normalised onto the
+  variable: `%UserProfile%\AppData\Local\` → `%LOCALAPPDATA%\`,
+  `%UserProfile%\AppData\Roaming\` → `%APPDATA%\`, `%LocalAppData%\Temp\` →
+  `%TEMP%\`. Overlap detection compares unexpanded strings, so one directory
+  must have one spelling; this makes it alias-proof by construction instead of
+  by a list of special cases.
 - `ExcludeKeyN=FILE|path|spec` / `PATH|path|spec` → exclude globs, same variable
-  rules.
+  rules. `ExcludeKeyN=REG|key` is accepted and ignored: WinCleaner never cleans
+  the registry, so skipping it changes nothing about which files are deleted.
+  An exclude carrying a metacharacter we cannot keep literal (`[`, `]`, `{`,
+  `}`, `?`), in its path or in its spec, is counted as `dropped_exclude` — a
+  limit of our pattern language — while a path outside the folders we map is
+  counted as `dropped_variable`.
 - `RegKeyN` ignored. An entry with no retained FileKey is dropped.
 - `Warning=` becomes the rule note shown inline. `Default=` is ignored.
 - Rule id `winapp2.<slug>` (ASCII, lowercase, hyphens), category `Applications`,
@@ -99,6 +121,13 @@ Only what Winapp2 does not already cover after checking the embedded file
   detection on a `TempDir` and on `HKCU\Software\wincleaner-test`, and a test
   converting the real embedded file that asserts every produced rule passes
   validation and that the retained count is above a floor (e.g. 500).
+- Precedence is proved twice, once by each side: `no_native_rule_overlaps_a_
+  converted_winapp2_rule` checks that `convert_with` enforced `overlaps`, and
+  `no_retained_converted_rule_resolves_onto_a_native_path` re-proves the same
+  guarantee without calling `overlaps` at all — it resolves both catalogues,
+  builds a path each pattern is guaranteed to match, and asks a real `GlobSet`
+  (built in chunks: thousands of globs do not fit one NFA). Using `overlaps` as
+  both the enforcement and the oracle would let an error in it hide itself.
 - Front: search filter, sort toggle, collapsed category, summary line.
 - Existing invariants keep their tests; `cargo clippy --all-targets -D warnings`
   stays clean.

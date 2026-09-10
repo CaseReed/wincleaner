@@ -59,6 +59,13 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   through the same `check_rule_with` validation and the same containment and
   deletion guards as native rules — there is no separate Winapp2 deletion
   path.
+- A converted Winapp2 path is denied by segment, not only by variable: the
+  first segment under `%USERPROFILE%` may not be `Documents`, `Desktop`,
+  `Pictures`, `Videos`, `Music`, `Downloads`, `OneDrive`, `Favorites`, `Links`,
+  `Contacts`, `Saved Games` or `Searches`. `%UserProfile%\AppData\Local\`,
+  `\AppData\Roaming\` and `%LOCALAPPDATA%\Temp\` are first normalised onto
+  `%LOCALAPPDATA%`, `%APPDATA%` and `%TEMP%`, so one directory has one spelling
+  and overlap detection cannot be fooled by an alias.
 - The nine curated native rules take precedence: a converted Winapp2 rule
   whose paths overlap a native rule is dropped at conversion time
   (`dropped_overlap`), never counted or deleted twice.
