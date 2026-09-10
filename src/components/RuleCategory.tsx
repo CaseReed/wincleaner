@@ -48,23 +48,27 @@ export function RuleCategory({
 }) {
   return (
     <section className="flex flex-col gap-1.5">
-      <button
-        type="button"
-        data-testid={`toggle-category-${category}`}
-        aria-expanded={open}
+      <div
+        className="flex cursor-pointer items-center justify-between gap-6 rounded px-1 py-1 outline-none hover:bg-accent"
         onClick={onToggleCategory}
-        className="flex cursor-pointer items-center justify-between gap-6 rounded px-1 py-1 text-left outline-none hover:bg-accent focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        <span className="flex min-w-0 items-center gap-1.5">
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
-              open && "rotate-90"
-            )}
-          />
-          <h2 className="eyebrow truncate text-muted-foreground">{category}</h2>
-        </span>
+        <h2 className="contents">
+          <button
+            type="button"
+            data-testid={`toggle-category-${category}`}
+            aria-expanded={open}
+            className="flex min-w-0 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+                open && "rotate-90"
+              )}
+            />
+            <span className="eyebrow truncate text-muted-foreground">{category}</span>
+          </button>
+        </h2>
         <p className="shrink-0 text-xs text-muted-foreground">
           {RULE_COUNT.format(catRules.length)} rules
           {results && (
@@ -74,7 +78,7 @@ export function RuleCategory({
             </>
           )}
         </p>
-      </button>
+      </div>
       {open && (
         <>
           <ul className="overflow-hidden rounded-lg border bg-card">
