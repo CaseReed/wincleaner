@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { extractSection } from "./extract-whats-new.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { extractSection, toPlainText } from "./extract-whats-new.mjs";
 
 const CHANGELOG = `# Changelog
 
@@ -95,5 +98,46 @@ describe("extractSection", () => {
   it("does not treat the version as a regular expression", () => {
     expect(() => extractSection(CHANGELOG, "0.2.0|0.1.0")).toThrow();
     expect(() => extractSection(CHANGELOG, "0x2x0")).toThrow();
+  });
+});
+
+describe("toPlainText", () => {
+  it("upper-cases a heading and adds a blank line before it unless it opens the text", () => {
+    expect(toPlainText("### Added")).toBe("ADDED");
+    expect(toPlainText("#### Added")).toBe("ADDED");
+    expect(toPlainText("- one\n### Changed")).toBe("• one\n\nCHANGED");
+  });
+
+  it("drops the URL from a markdown link but keeps a bare URL untouched", () => {
+    expect(toPlainText("[Winapp2](https://example.invalid/x)")).toBe("Winapp2");
+    expect(toPlainText("See https://example.invalid/x directly.")).toBe(
+      "See https://example.invalid/x directly.",
+    );
+  });
+
+  it("removes inline code backticks, keeping the content", () => {
+    expect(toPlainText("Reads `rules.toml` at startup.")).toBe("Reads rules.toml at startup.");
+  });
+
+  it("removes bold and italic markers, keeping the text", () => {
+    expect(toPlainText("A **bold** and *italic* word.")).toBe("A bold and italic word.");
+  });
+
+  it("turns list markers into a bullet and preserves continuation indentation", () => {
+    expect(toPlainText("- one\n  wraps here\n* two")).toBe("• one\n  wraps here\n• two");
+  });
+
+  it("collapses 3+ consecutive blank lines to 2", () => {
+    expect(toPlainText("one\n\n\n\ntwo")).toBe("one\n\ntwo");
+  });
+
+  it("renders the real [0.2.0] section as clean plain text", () => {
+    const changelog = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "CHANGELOG.md"), "utf8");
+    const section = extractSection(changelog, "0.2.0");
+    const body = toPlainText(section.body);
+    expect(body).not.toContain("###");
+    expect(body).not.toContain("](");
+    expect(body).not.toContain("`");
+    expect(body).toContain("ADDED");
   });
 });

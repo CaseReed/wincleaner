@@ -54,6 +54,44 @@ export function extractSection(changelog, version) {
   return { version, date: match[1] ?? "", body };
 }
 
+/// Strips inline markdown syntax from a fragment of text: `[text](url)` links
+/// (the URL is dropped — bare URLs are left untouched), inline code
+/// backticks, and `**bold**`/`*italic*` markers. Bold is stripped before
+/// italic so `**x**` never gets mistaken for a leftover `*x*`.
+function stripInlineMarkdown(text) {
+  return text
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1");
+}
+
+/// Renders a CHANGELOG section body as plain text, for display with no
+/// markdown renderer and no HTML: `### `/`#### ` headings become an
+/// upper-case line (blank line before, unless it opens the text), `- `/`* `
+/// list markers become `• ` while keeping a continuation line's own
+/// indentation untouched, inline markdown syntax is stripped per
+/// `stripInlineMarkdown`, and runs of 3+ blank lines collapse to 2. Nothing
+/// else — numbers and punctuation are left exactly as written.
+export function toPlainText(markdown) {
+  const out = [];
+  for (const rawLine of markdown.split("\n")) {
+    const heading = rawLine.match(/^#{3,4}[ \t]+(.*)$/);
+    if (heading) {
+      if (out.length > 0) out.push("");
+      out.push(stripInlineMarkdown(heading[1]).toUpperCase());
+      continue;
+    }
+    const listItem = rawLine.match(/^(\s*)[-*][ \t]+(.*)$/);
+    out.push(
+      listItem
+        ? `${listItem[1]}• ${stripInlineMarkdown(listItem[2])}`
+        : stripInlineMarkdown(rawLine),
+    );
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function main() {
   const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
   const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
@@ -68,7 +106,8 @@ function main() {
 
   const out = join(root, "src", "generated", "whats-new.json");
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, `${JSON.stringify(section, null, 2)}\n`, "utf8");
+  const payload = { ...section, body: toPlainText(section.body) };
+  writeFileSync(out, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   console.log(`What's new written for ${version}: src/generated/whats-new.json`);
 }
 
