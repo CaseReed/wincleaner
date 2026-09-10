@@ -39,6 +39,22 @@ impl CleanReport {
 /// Emptying of the recycle bin, injected to stay testable.
 pub type RecycleEmpty<'a> = &'a dyn Fn() -> Result<(), String>;
 
+/// Moving ONE file to the recycle bin, injected to stay testable.
+///
+/// `trash::delete` is the only deletion path that reaches outside the tree it
+/// is given: it hands the file to the shell, which files it in the real
+/// recycle bin of the volume. A test exercising `CleanMode::Trash` for real
+/// would therefore litter the recycle bin of whoever runs the suite. This
+/// injection point exists so the safety harness can run the whole `Trash`
+/// path — re-scan, `deletable_path` guard, emptied-directory sweep — while
+/// recording the paths instead of handing them to the shell.
+pub type TrashDelete<'a> = &'a dyn Fn(&Path) -> Result<(), String>;
+
+/// The real one. Separate function so `clean_rule_with_api` can name it.
+fn trash_delete(path: &Path) -> Result<(), String> {
+    trash::delete(path).map_err(|e| e.to_string())
+}
+
 /// Resolves `Auto` from the rule risk. Never returns `Auto`.
 pub fn effective_mode(mode: CleanMode, risk: Risk) -> CleanMode {
     match mode {
@@ -132,6 +148,26 @@ pub fn clean_rule_with_api(
     recycle_query: RecycleQuery,
     recycle_empty: RecycleEmpty,
 ) -> Result<CleanReport, RuleError> {
+    clean_rule_with_trash(
+        rule,
+        mode,
+        lookup,
+        recycle_query,
+        recycle_empty,
+        &trash_delete,
+    )
+}
+
+/// Same as `clean_rule_with_api`, with the move-to-recycle-bin call injected
+/// too. Only the safety harness passes anything but `trash_delete`.
+pub fn clean_rule_with_trash(
+    rule: &Rule,
+    mode: CleanMode,
+    lookup: EnvLookup,
+    recycle_query: RecycleQuery,
+    recycle_empty: RecycleEmpty,
+    trash: TrashDelete,
+) -> Result<CleanReport, RuleError> {
     // Internal re-scan just before deleting: the front end never sent a path,
     // and the state of the disk may have changed since the scan.
     let scan = scan_rule_with_api(rule, lookup, recycle_query)?;
@@ -173,7 +209,7 @@ pub fn clean_rule_with_api(
         };
         let outcome = match target {
             CleanMode::Permanent => std::fs::remove_file(&real).map_err(|e| e.to_string()),
-            CleanMode::Trash => trash::delete(&real).map_err(|e| e.to_string()),
+            CleanMode::Trash => trash(&real),
             CleanMode::Auto => unreachable!("effective_mode never returns Auto"),
         };
         match outcome {

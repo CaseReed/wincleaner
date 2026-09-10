@@ -180,7 +180,7 @@ where
 /// measured in catalogue order and `progress` is called once per rule,
 /// unavailable ones included — they cost nothing to "measure", but dropping
 /// them from the count would leave the bar short of its end.
-fn scan_rules_with(
+pub fn scan_rules_with(
     rules: &[Rule],
     mut run: impl FnMut(&Rule) -> Result<ScanResult, String>,
     progress: &mut dyn FnMut(ScanProgress),
@@ -257,7 +257,7 @@ fn cleaning_order(mut rules: Vec<Rule>) -> Vec<Rule> {
 ///
 /// `run` is injected so that the test exercises this order and this refusal
 /// right here: a test replaying the sequence by hand would lock nothing down.
-fn clean_rules_with(
+pub fn clean_rules_with(
     rules: Vec<Rule>,
     mode: CleanMode,
     mut run: impl FnMut(&Rule, CleanMode) -> Result<CleanReport, String>,
