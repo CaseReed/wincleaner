@@ -1,27 +1,27 @@
 ---
-name: Rapport de bug
-about: Signaler un comportement inattendu de WinCleaner
+name: Bug report
+about: Report unexpected behaviour in WinCleaner
 title: ""
 labels: bug
 assignees: ""
 ---
 
-## Version de Windows
+## Windows version
 
-<!-- Ex. Windows 11 24H2, build 26100.xxxx (Paramètres > Système > Système > À propos) -->
+<!-- e.g. Windows 11 24H2, build 26100.xxxx (Settings > System > About) -->
 
-## Étapes pour reproduire
+## Steps to reproduce
 
 1.
 2.
 3.
 
-## Comportement attendu
+## Expected behaviour
 
-## Comportement observé
+## Observed behaviour
 
-## Un navigateur était-il ouvert ?
+## Was a browser open?
 
-<!-- Oui/Non, et lequel (Edge, Chrome, Firefox...). Certaines règles de
-cache de navigateur ignorent les fichiers verrouillés par un navigateur
-ouvert ; c'est utile pour distinguer un bug d'un comportement attendu. -->
+<!-- Yes/No, and which one (Edge, Chrome, Firefox...). Some browser cache
+rules skip files locked by an open browser; knowing this helps tell a bug
+apart from expected behaviour. -->

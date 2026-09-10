@@ -1,15 +1,15 @@
-## Quoi
+## What
 
-<!-- Ce que ce changement modifie, en une ou deux phrases. -->
+<!-- What this change modifies, in one or two sentences. -->
 
-## Pourquoi
+## Why
 
-<!-- Le problème ou le besoin qui motive ce changement. -->
+<!-- The problem or the need that motivates this change. -->
 
-## Vérifications lancées
+## Checks run
 
 - [ ] `npm test`
 - [ ] `npm run build`
 - [ ] `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 - [ ] `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
-- [ ] Vérification manuelle concernée dans `docs/verification-manuelle.md` (si applicable)
+- [ ] The relevant manual check in `docs/manual-verification.md` (if applicable)

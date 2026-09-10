@@ -36,9 +36,9 @@ jobs:
       - name: Front-end build
         run: npm run build
 
-      # Les tests registre partagent HKCU\Software\wincleaner-test : single-thread
-      # obligatoire, et ils doivent rester confinés à l'utilisateur du runner
-      # (jamais de clés HKLM ni d'un autre profil).
+      # The registry tests share HKCU\Software\wincleaner-test: single-threaded
+      # is mandatory, and they must stay confined to the runner user (never
+      # HKLM keys nor another profile).
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 

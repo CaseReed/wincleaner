@@ -40,30 +40,30 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: WinCleaner ${{ github.ref_name }}
           releaseBody: |
-            Notes de version générées à partir du tag ${{ github.ref_name }}.
+            Release notes generated from tag ${{ github.ref_name }}.
 
-            Installateurs non signés tant que la signature SignPath n'est pas
-            configurée dans les secrets du dépôt — voir `docs/signature.md`.
+            Installers are unsigned until SignPath signing is configured in the
+            repository secrets — see `docs/code-signing.md`.
           releaseDraft: true
           prerelease: false
 
-      # --- Squelette de signature SignPath (gratuit pour l'OSS) ---------------
+      # --- SignPath signing skeleton (free for OSS) --------------------------
       #
-      # Ce job ne s'exécute que si les quatre secrets SignPath sont renseignés
-      # dans les paramètres du dépôt (Settings > Secrets and variables >
-      # Actions). Tant qu'ils sont absents, cette étape est simplement ignorée
-      # et la release publiée par tauri-action ci-dessus reste non signée —
-      # voir `docs/signature.md` pour la procédure d'inscription au programme
-      # OSS de SignPath et le détail des quatre secrets à renseigner :
+      # This job only runs when the four SignPath secrets are set in the
+      # repository settings (Settings > Secrets and variables > Actions). While
+      # they are missing, this step is simply skipped and the release published
+      # by tauri-action above stays unsigned — see `docs/code-signing.md` for
+      # the SignPath OSS programme sign-up procedure and the details of the
+      # four secrets to set:
       #   SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
       #   SIGNPATH_SIGNING_POLICY_SLUG.
       #
-      # Inputs vérifiés le 2026-09-10 dans action.yml de
-      # signpath/github-action-submit-signing-request (branche main) :
+      # Inputs checked on 2026-09-10 in the action.yml of
+      # signpath/github-action-submit-signing-request (main branch):
       # api-token, organization-id, project-slug, signing-policy-slug,
-      # github-artifact-id (requis) ; artifact-configuration-slug, parameters,
-      # output-artifact-directory (optionnels) ; wait-for-completion (bool,
-      # défaut true). Sortie utile : signed-artifact-download-url.
+      # github-artifact-id (required); artifact-configuration-slug, parameters,
+      # output-artifact-directory (optional); wait-for-completion (bool,
+      # default true). Useful output: signed-artifact-download-url.
       - name: Check SignPath secrets
         id: signpath-check
         shell: bash
@@ -100,8 +100,8 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-installers
 
-      # TODO (post-inscription SignPath) : téléverser le contenu de
-      # `signed-installers/` sur la release créée par tauri-action ci-dessus
-      # (par exemple avec `gh release upload` ou softprops/action-gh-release),
-      # une fois le premier essai de signature validé sur un vrai projet
-      # SignPath.
+      # TODO (once signed up with SignPath): upload the contents of
+      # `signed-installers/` to the release created by tauri-action above (for
+      # example with `gh release upload` or softprops/action-gh-release), once
+      # the first signing attempt has been validated on a real SignPath
+      # project.
