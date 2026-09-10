@@ -42,14 +42,8 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 
-      # continue-on-error : au moment d'écrire ce workflow, clippy signale deux
-      # avertissements préexistants dans src-tauri/src (manual_contains dans
-      # scan.rs, unnecessary_sort_by dans startup.rs) que ce changement ne doit
-      # pas corriger silencieusement. Retirer continue-on-error une fois ces
-      # deux points traités séparément.
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-        continue-on-error: true
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Tauri build
         run: npm run tauri build

@@ -136,7 +136,7 @@ fn racines_du_motif(motif: &str) -> Vec<RacineMarche> {
         i += 1;
     }
 
-    let profondeur = if segs[i..].iter().any(|s| *s == "**") {
+    let profondeur = if segs[i..].contains(&"**") {
         None
     } else {
         Some(segs.len() - i)
