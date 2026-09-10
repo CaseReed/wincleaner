@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell, type Screen } from "@/components/AppShell";
 import { CleanPanel } from "@/components/CleanPanel";
@@ -21,12 +22,25 @@ function initialDark(): boolean {
   );
 }
 
+/// La barre de titre est dessinée par Windows, pas par la WebView : la classe
+/// `dark` ne l'atteint pas, seul le thème de la fenêtre Tauri la fait basculer.
+function syncWindowTheme(dark: boolean) {
+  try {
+    void getCurrentWindow()
+      .setTheme(dark ? "dark" : "light")
+      .catch(() => {});
+  } catch {
+    // Hors Tauri (tests, navigateur) : la classe CSS suffit.
+  }
+}
+
 export default function App() {
   const [screen, setScreen] = useState<Screen>("clean");
   const [dark, setDark] = useState(initialDark);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
+    syncWindowTheme(dark);
     try {
       localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
     } catch {

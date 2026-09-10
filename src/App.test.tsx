@@ -12,6 +12,13 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
+const { setTheme } = vi.hoisted(() => ({
+  setTheme: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ setTheme }),
+}));
+
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
   Toaster: () => null,
@@ -34,6 +41,7 @@ function stubPrefersDark(dark: boolean) {
 
 beforeEach(() => {
   localStorage.clear();
+  setTheme.mockClear();
   document.documentElement.classList.remove("dark");
 });
 
@@ -62,5 +70,14 @@ describe("thème", () => {
     await user.click(screen.getByTestId("theme-toggle"));
     expect(document.documentElement).toHaveClass("dark");
     expect(localStorage.getItem("wincleaner.theme")).toBe("dark");
+  });
+
+  it("bascule aussi le thème de la fenêtre (barre de titre Windows)", async () => {
+    const user = userEvent.setup();
+    stubPrefersDark(false);
+    render(<App />);
+    expect(setTheme).toHaveBeenLastCalledWith("light");
+    await user.click(screen.getByTestId("theme-toggle"));
+    expect(setTheme).toHaveBeenLastCalledWith("dark");
   });
 });
