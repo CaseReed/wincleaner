@@ -78,7 +78,7 @@ pub fn glob_root(pattern_slash: &str) -> String {
     literal
 }
 
-fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
+pub(crate) fn build_set(patterns: &[String]) -> Result<GlobSet, RuleError> {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
         // `literal_separator` : un `*` isolé ne doit pas franchir de `/`
@@ -441,6 +441,55 @@ mod tests {
         assert_eq!(res.file_count, 0, "paths = {:?}", res.paths);
         assert_eq!(res.skipped, 1);
         assert!(ailleurs.join("a.txt").exists());
+    }
+
+    #[test]
+    fn la_regle_elements_recents_epargne_les_destinations_personnalisees() {
+        // CustomDestinations porte les éléments que l'utilisateur a épinglés
+        // au clic droit sur une icône de la barre des tâches : des données
+        // curées à la main, pas des déchets.
+        let dir = TempDir::new().unwrap();
+        let recent = dir
+            .path()
+            .join("AppData")
+            .join("Roaming")
+            .join("Microsoft")
+            .join("Windows")
+            .join("Recent");
+        fs::create_dir_all(recent.join("AutomaticDestinations")).unwrap();
+        fs::create_dir_all(recent.join("CustomDestinations")).unwrap();
+        fs::write(recent.join("doc.lnk"), b"aaa").unwrap();
+        fs::write(
+            recent
+                .join("AutomaticDestinations")
+                .join("a.automaticDestinations-ms"),
+            b"bbbbb",
+        )
+        .unwrap();
+        fs::write(
+            recent
+                .join("CustomDestinations")
+                .join("epingle.customDestinations-ms"),
+            b"ccccccc",
+        )
+        .unwrap();
+
+        // La vraie règle embarquée, pas une copie : c'est elle qu'il s'agit
+        // d'empêcher de redescendre dans CustomDestinations.
+        let lookup = lookup_for(dir.path());
+        let regles = crate::rules::load_rules_with(crate::rules::RULES_TOML, &lookup).unwrap();
+        let regle = regles
+            .iter()
+            .find(|r| r.id == "windows.explorer-recent")
+            .unwrap();
+        let res = scan_rule_with_api(regle, &lookup, &recycle_absent).unwrap();
+
+        assert_eq!(res.file_count, 2, "paths = {:?}", res.paths);
+        assert!(
+            res.paths.iter().all(|p| !p.contains("CustomDestinations")),
+            "les éléments épinglés doivent rester hors de portée : {:?}",
+            res.paths
+        );
     }
 
     #[test]

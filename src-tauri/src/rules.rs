@@ -533,7 +533,11 @@ default_checked = false"#,
             .collect();
         assert_eq!(
             decochees,
-            vec!["windows.recycle-bin", "windows.explorer-recent"]
+            vec![
+                "windows.recycle-bin",
+                "windows.explorer-recent",
+                "windows.crash-dumps"
+            ]
         );
     }
 
@@ -541,20 +545,54 @@ default_checked = false"#,
     fn le_rules_toml_embarque_est_valide() {
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
         assert_eq!(rules.len(), 8);
-        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        // Risque déclaré compris : tout changement de risque change le mode de
+        // suppression en Auto, donc doit être un changement de test délibéré.
+        let vus: Vec<(&str, Risk)> = rules.iter().map(|r| (r.id.as_str(), r.risk)).collect();
         assert_eq!(
-            ids,
+            vus,
             vec![
-                "windows.temp",
-                "windows.recycle-bin",
-                "windows.thumbnails",
-                "windows.explorer-recent",
-                "windows.user-logs",
-                "edge.cache",
-                "chrome.cache",
-                "firefox.cache",
+                ("windows.temp", Risk::Low),
+                ("windows.recycle-bin", Risk::Low),
+                ("windows.thumbnails", Risk::Low),
+                ("windows.explorer-recent", Risk::Medium),
+                ("windows.crash-dumps", Risk::Medium),
+                ("edge.cache", Risk::Low),
+                ("chrome.cache", Risk::Low),
+                ("firefox.cache", Risk::Low),
             ]
         );
+    }
+
+    /// Un chemin que ce motif retient à coup sûr.
+    fn exemple_depuis(motif: &str) -> String {
+        motif.replace(r"**\*", r"x\y").replace('*', "x")
+    }
+
+    #[test]
+    fn aucune_regle_embarquee_nen_recouvre_une_autre() {
+        // Deux règles qui se recouvrent comptent deux fois les mêmes octets
+        // dans le total « Récupérable », et la seconde échoue à supprimer ce
+        // que la première a déjà supprimé : le rapport affiche de faux
+        // « Ignorés » pour des fichiers correctement traités.
+        let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
+        let fichiers: Vec<&Rule> = rules.iter().filter(|r| r.kind == RuleKind::Files).collect();
+        for a in &fichiers {
+            let set = crate::scan::build_set(&resolved_paths_with(a, &fake_env).unwrap()).unwrap();
+            for b in &fichiers {
+                if a.id == b.id {
+                    continue;
+                }
+                for motif in resolved_paths_with(b, &fake_env).unwrap() {
+                    let exemple = crate::scan::to_slash(&exemple_depuis(&motif));
+                    assert!(
+                        !set.is_match(&exemple),
+                        "« {} » retient « {exemple} », qui appartient à « {} »",
+                        a.id,
+                        b.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]

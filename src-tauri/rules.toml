@@ -20,30 +20,47 @@ default_checked = false
 id = "windows.thumbnails"
 category = "Système"
 label = "Cache des miniatures"
-paths = ["%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db"]
-exclude = []
-risk = "low"
-
-[[rule]]
-id = "windows.explorer-recent"
-category = "Système"
-label = "Éléments récents"
-paths = ["%APPDATA%\\Microsoft\\Windows\\Recent\\**\\*"]
-exclude = []
-risk = "medium"
-default_checked = false
-
-[[rule]]
-id = "windows.user-logs"
-category = "Système"
-label = "Journaux utilisateur"
 paths = [
-  "%LOCALAPPDATA%\\Temp\\*.log",
-  "%LOCALAPPDATA%\\CrashDumps\\*.dmp",
+  "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db",
+  "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\iconcache_*.db",
 ]
 exclude = []
 risk = "low"
 
+# `Recent\**\*` descendait dans CustomDestinations, qui porte les éléments que
+# l'utilisateur a explicitement épinglés au clic droit sur la barre des tâches.
+# Ce ne sont pas des déchets : ce sont des données curées à la main. Le motif
+# `*.lnk` n'est pas récursif (literal_separator), il ne redescend pas.
+[[rule]]
+id = "windows.explorer-recent"
+category = "Système"
+label = "Éléments récents"
+paths = [
+  "%APPDATA%\\Microsoft\\Windows\\Recent\\*.lnk",
+  "%APPDATA%\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\*",
+]
+exclude = []
+risk = "medium"
+default_checked = false
+
+# Anciennement « windows.user-logs », qui listait aussi `%LOCALAPPDATA%\Temp\*.log`
+# — un sous-ensemble strict de windows.temp sur une installation standard, donc
+# des octets comptés deux fois et de faux « Ignorés » au rapport. Risque moyen :
+# un vidage sur incident est exactement ce qu'un utilisateur en train de
+# diagnostiquer un plantage ne veut pas voir disparaître sans retour possible.
+[[rule]]
+id = "windows.crash-dumps"
+category = "Système"
+label = "Vidages sur incident"
+paths = ["%LOCALAPPDATA%\\CrashDumps\\*"]
+exclude = []
+risk = "medium"
+default_checked = false
+
+# `Service Worker\Database` est délibérément absent : il porte les
+# enregistrements de service workers, pas leur cache — le vider casse le mode
+# hors ligne des applications web installées. Même raison pour ne pas toucher
+# `Local Storage`, `IndexedDB`, `Session Storage` : données d'application.
 [[rule]]
 id = "edge.cache"
 category = "Navigateurs"
@@ -51,6 +68,12 @@ label = "Cache Microsoft Edge"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\GPUCache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\DawnGraphiteCache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\DawnWebGPUCache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Service Worker\\CacheStorage\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Service Worker\\ScriptCache\\**\\*",
+  "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\ShaderCache\\**\\*",
 ]
 exclude = []
 risk = "low"
@@ -62,6 +85,12 @@ label = "Cache Google Chrome"
 paths = [
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\GPUCache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\DawnGraphiteCache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\DawnWebGPUCache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Service Worker\\CacheStorage\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Service Worker\\ScriptCache\\**\\*",
+  "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\ShaderCache\\**\\*",
 ]
 exclude = []
 risk = "low"
@@ -70,6 +99,9 @@ risk = "low"
 id = "firefox.cache"
 category = "Navigateurs"
 label = "Cache Mozilla Firefox"
-paths = ["%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2\\**\\*"]
+paths = [
+  "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2\\**\\*",
+  "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache\\**\\*",
+]
 exclude = []
 risk = "low"
