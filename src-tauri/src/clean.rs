@@ -1,7 +1,11 @@
 use crate::rules::{profile_canon_with, system_env, EnvLookup, Risk, Rule, RuleError, RuleKind};
-use crate::scan::{est_point_danalyse, query_recycle_bin, scan_rule_with_api, RecycleQuery};
+use crate::scan::{
+    build_set, est_point_danalyse, query_recycle_bin, racine_confinee, scan_rule_with_api, to_slash,
+    walk_roots, Confinement, RecycleQuery,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,6 +82,53 @@ fn chemin_supprimable(path: &str, profile_canon: &Path) -> Result<(PathBuf, u64)
     Ok((sans_prefixe_verbatim(&reel), md.len()))
 }
 
+/// Supprime les répertoires que la règle vient de vider.
+///
+/// Un répertoire n'est candidat que si les motifs de la règle le
+/// retiendraient : le périmètre du balayage est exactement celui de la règle,
+/// jamais plus large — la racine de marche elle-même n'est jamais supprimée
+/// (`min_depth(1)`). `remove_dir`, et non `remove_dir_all`, rend l'opération
+/// sûre par construction : un répertoire non vide fait échouer l'appel, qui
+/// est ignoré. Un répertoire vide ne porte aucune donnée, la passe est donc
+/// faite dans les deux modes de suppression.
+fn supprimer_les_repertoires_vides(
+    patterns: &[String],
+    excludes: &[String],
+    profile_canon: &Path,
+) -> Result<(), RuleError> {
+    let include = build_set(patterns)?;
+    let exclude = build_set(excludes)?;
+    for racine in walk_roots(patterns) {
+        let win_root = racine.chemin.replace('/', "\\");
+        if racine_confinee(&win_root, profile_canon) != Confinement::Marchable {
+            continue;
+        }
+        let mut marche = WalkDir::new(&win_root)
+            .follow_links(false)
+            .min_depth(1)
+            .contents_first(true);
+        if let Some(profondeur) = racine.profondeur {
+            marche = marche.max_depth(profondeur);
+        }
+        for entree in marche.into_iter().filter_map(|e| e.ok()) {
+            if !entree.file_type().is_dir() {
+                continue;
+            }
+            // Un point d'analyse n'est pas un répertoire vide : `remove_dir`
+            // en effacerait le lien, pas son contenu.
+            if entree.metadata().map(|m| est_point_danalyse(&m)).unwrap_or(true) {
+                continue;
+            }
+            let slash = to_slash(&entree.path().to_string_lossy());
+            if !include.is_match(&slash) || exclude.is_match(&slash) {
+                continue;
+            }
+            let _ = std::fs::remove_dir(entree.path());
+        }
+    }
+    Ok(())
+}
+
 pub fn clean_rule_with_api(
     rule: &Rule,
     mode: CleanMode,
@@ -109,6 +160,8 @@ pub fn clean_rule_with_api(
 
     let target = effective_mode(mode, rule.risk);
     let profile_canon = profile_canon_with(lookup)?;
+    let patterns = crate::rules::resolved_paths_with(rule, lookup)?;
+    let excludes = crate::rules::resolved_excludes_with(rule, lookup)?;
     let mut report = CleanReport::default();
 
     for path in &scan.paths {
@@ -139,6 +192,7 @@ pub fn clean_rule_with_api(
         }
     }
 
+    supprimer_les_repertoires_vides(&patterns, &excludes, &profile_canon)?;
     Ok(report)
 }
 
@@ -410,6 +464,42 @@ mod tests {
         assert!(report.skipped[0].path.ends_with("a.txt"));
         assert!(!report.skipped[0].reason.is_empty());
         assert!(verrou.exists());
+    }
+
+    #[test]
+    fn le_nettoyage_supprime_les_repertoires_devenus_vides_mais_pas_la_racine() {
+        // Sans cette passe, %TEMP% garde des dizaines de milliers de
+        // répertoires vides : chaque analyse doit les reparcourir pour ne
+        // rien y trouver, et l'utilisateur voit son dossier toujours plein.
+        let dir = faux_profil();
+        let lookup = lookup_for(dir.path());
+        let temp = dir.path().join("AppData").join("Local").join("Temp");
+        fs::create_dir_all(temp.join("garde").join("profond")).unwrap();
+        fs::write(temp.join("garde").join("c.keep"), b"c").unwrap();
+
+        let rule = Rule {
+            exclude: vec![r"%TEMP%\**\*.keep".into()],
+            ..regle_temp(Risk::Low)
+        };
+        clean_rule_with_api(
+            &rule,
+            CleanMode::Permanent,
+            &lookup,
+            &recycle_interdit_query,
+            &recycle_interdit_empty,
+        )
+        .unwrap();
+
+        assert!(temp.exists(), "la racine de la règle n'est jamais supprimée");
+        assert!(!temp.join("sub").exists(), "sub, vidé, doit disparaître");
+        assert!(
+            !temp.join("garde").join("profond").exists(),
+            "profond, vide, doit disparaître"
+        );
+        assert!(
+            temp.join("garde").exists(),
+            "garde contient encore c.keep : remove_dir doit échouer et être ignoré"
+        );
     }
 
     #[test]
