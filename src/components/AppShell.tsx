@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
-import { Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
+import { FlaskConical, Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { SandboxSummary } from "@/lib/api";
 
 export type Screen = "clean" | "startup" | "settings";
 
@@ -45,12 +47,19 @@ export function AppShell({
   onScreenChange,
   dark,
   onToggleTheme,
+  sandbox = null,
+  onLeaveSandbox,
   children,
 }: {
   screen: Screen;
   onScreenChange: (screen: Screen) => void;
   dark: boolean;
   onToggleTheme: () => void;
+  /// The active sandbox, or null when the engine runs against the real
+  /// profile. Non-null is a state the user must never be able to forget they
+  /// are in: the banner below sits above every screen.
+  sandbox?: SandboxSummary | null;
+  onLeaveSandbox?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -85,6 +94,26 @@ export function AppShell({
           `position: absolute` descendants (the `.sr-only` nodes), otherwise
           they escape every `overflow` and stretch the document. */}
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {sandbox && (
+          <div
+            data-testid="sandbox-banner"
+            className="flex shrink-0 items-center gap-2.5 border-b border-warning/40 bg-warning/12 px-8 py-2.5 text-sm text-warning-foreground"
+          >
+            <FlaskConical className="size-4 shrink-0 text-warning" />
+            <p className="min-w-0 flex-1">
+              Sandbox mode — cleaning affects only the test profile at{" "}
+              <span className="font-mono text-xs break-all">{sandbox.root}</span>
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={onLeaveSandbox}
+            >
+              Leave
+            </Button>
+          </div>
+        )}
         {children}
       </main>
     </div>

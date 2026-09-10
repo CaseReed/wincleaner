@@ -7,7 +7,13 @@ import { CleanPanel } from "@/components/CleanPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { StartupPanel } from "@/components/StartupPanel";
 import whatsNew from "@/generated/whats-new.json";
-import { checkForUpdates } from "@/lib/api";
+import {
+  checkForUpdates,
+  sandboxEnter,
+  sandboxLeave,
+  sandboxStatus,
+  type SandboxSummary,
+} from "@/lib/api";
 import { markSeen, readLastSeen, shouldAnnounce } from "@/lib/whats-new";
 import { markNotified, readAutoCheck, readLastNotified, shouldNotify } from "@/lib/updates";
 
@@ -43,6 +49,39 @@ function syncWindowTheme(dark: boolean) {
 export default function App() {
   const [screen, setScreen] = useState<Screen>("clean");
   const [dark, setDark] = useState(initialDark);
+  /// The active sandbox, or null when the engine runs against the real
+  /// profile. Owned here because three screens read it: the banner, Settings
+  /// and Startup — and the Cleanup screen has to remount when it changes,
+  /// because the whole rule catalogue changes with it.
+  const [sandbox, setSandbox] = useState<SandboxSummary | null>(null);
+
+  /// The backend is the authority: a reload of the webview must not lose a
+  /// sandbox that is still open on the Rust side.
+  useEffect(() => {
+    void sandboxStatus()
+      .then(setSandbox)
+      .catch(() => {});
+  }, []);
+
+  async function onEnterSandbox() {
+    try {
+      const summary = await sandboxEnter();
+      setSandbox(summary);
+      toast.success("Sandbox profile created");
+    } catch (err) {
+      toast.error(String(err));
+    }
+  }
+
+  async function onLeaveSandbox() {
+    try {
+      await sandboxLeave();
+      setSandbox(null);
+      toast.success("Sandbox removed");
+    } catch (err) {
+      toast.error(String(err));
+    }
+  }
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -90,10 +129,23 @@ export default function App() {
       onScreenChange={setScreen}
       dark={dark}
       onToggleTheme={() => setDark((v) => !v)}
+      sandbox={sandbox}
+      onLeaveSandbox={() => void onLeaveSandbox()}
     >
-      {screen === "clean" && <CleanPanel />}
-      {screen === "startup" && <StartupPanel />}
-      {screen === "settings" && <SettingsPanel />}
+      {/* Keyed on the sandbox: entering or leaving swaps the whole catalogue,
+          so the panel starts over rather than showing the previous profile's
+          rules and measurements. */}
+      {screen === "clean" && (
+        <CleanPanel key={sandbox ? sandbox.root : "real"} sandbox={sandbox} />
+      )}
+      {screen === "startup" && <StartupPanel sandbox={sandbox} />}
+      {screen === "settings" && (
+        <SettingsPanel
+          sandbox={sandbox}
+          onEnterSandbox={() => void onEnterSandbox()}
+          onLeaveSandbox={() => void onLeaveSandbox()}
+        />
+      )}
       <Toaster theme={dark ? "dark" : "light"} />
     </AppShell>
   );

@@ -121,4 +121,24 @@ describe("StartupPanel", () => {
       /HKCU.*Startup folder.*elevation/s
     );
   });
+
+  /// The startup keys are the real registry, which no sandbox can stand in
+  /// for: the backend refuses both commands while one is active, so the screen
+  /// must not even ask.
+  it("shows a notice instead of the table while a sandbox is active", async () => {
+    render(
+      <StartupPanel
+        sandbox={{
+          root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
+          sentinels: 52,
+          junk: 119,
+          winapp2_rules: 14,
+        }}
+      />
+    );
+    const notice = await screen.findByTestId("startup-sandbox-notice");
+    expect(notice).toHaveTextContent(/registry/i);
+    expect(screen.queryByText("OneDrive")).not.toBeInTheDocument();
+    expect(api.listStartup).not.toHaveBeenCalled();
+  });
 });

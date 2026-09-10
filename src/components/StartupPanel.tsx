@@ -13,6 +13,7 @@ import {
 import {
   listStartup,
   setStartupEnabled,
+  type SandboxSummary,
   type StartupEntry,
   type StartupSource,
 } from "@/lib/api";
@@ -49,10 +50,18 @@ function Screen({
   );
 }
 
-export function StartupPanel() {
+export function StartupPanel({
+  sandbox = null,
+}: {
+  /// Non-null while a sandbox is active. The backend refuses both startup
+  /// commands then — they read and write the real registry, which no sandbox
+  /// can stand in for — so the screen states that instead of asking.
+  sandbox?: SandboxSummary | null;
+} = {}) {
   const [entries, setEntries] = useState<StartupEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const inSandbox = sandbox !== null;
 
   const refresh = useCallback(async () => {
     try {
@@ -64,8 +73,27 @@ export function StartupPanel() {
   }, []);
 
   useEffect(() => {
+    if (inSandbox) return;
     void refresh();
-  }, [refresh]);
+  }, [refresh, inSandbox]);
+
+  if (inSandbox) {
+    return (
+      <Screen subtitle="Decide what starts with your session.">
+        <div
+          data-testid="startup-sandbox-notice"
+          className="flex max-w-xl flex-col gap-2 rounded-lg border bg-card p-5"
+        >
+          <p className="font-medium">Unavailable while the sandbox is active.</p>
+          <p className="text-sm text-muted-foreground">
+            Startup programs live in the real Windows registry and in your real
+            Startup folder. The sandbox never touches either, so there is
+            nothing here to show you. Leave the sandbox to manage them.
+          </p>
+        </div>
+      </Screen>
+    );
+  }
 
   async function onToggle(entry: StartupEntry, next: boolean) {
     setPending(entry.id);

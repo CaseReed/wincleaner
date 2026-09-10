@@ -14,6 +14,13 @@ import { checkForUpdates } from "@/lib/api";
 
 const mockedCheck = vi.mocked(checkForUpdates);
 
+const SANDBOX = {
+  root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
+  sentinels: 52,
+  junk: 119,
+  winapp2_rules: 14,
+};
+
 /// A check that answered, with only the fields a given state needs.
 function answer(over: Partial<Awaited<ReturnType<typeof checkForUpdates>>> = {}) {
   return {
@@ -209,5 +216,39 @@ describe("SettingsPanel — updates", () => {
     expect(screen.getByTestId("auto-check-privacy")).toHaveTextContent(
       "When enabled, WinCleaner sends one request to api.github.com at startup with no identifiers other than the app version in the User-Agent.",
     );
+  });
+
+  describe("Sandbox", () => {
+    it("explains what a sandbox is and offers to create one", async () => {
+      const user = userEvent.setup();
+      const onEnterSandbox = vi.fn();
+      render(<SettingsPanel onEnterSandbox={onEnterSandbox} />);
+
+      const section = screen.getByTestId("sandbox");
+      expect(section).toHaveTextContent(/synthetic Windows profile/);
+      expect(section).toHaveTextContent(/nothing in your real profile is touched/i);
+      expect(screen.queryByRole("button", { name: "Leave the sandbox" })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Create a sandbox profile" }));
+      expect(onEnterSandbox).toHaveBeenCalled();
+    });
+
+    it("shows what the active sandbox holds, and the way out", async () => {
+      const user = userEvent.setup();
+      const onLeaveSandbox = vi.fn();
+      render(<SettingsPanel sandbox={SANDBOX} onLeaveSandbox={onLeaveSandbox} />);
+
+      const section = screen.getByTestId("sandbox");
+      expect(section).toHaveTextContent(SANDBOX.root);
+      expect(section).toHaveTextContent("52");
+      expect(section).toHaveTextContent("119");
+      expect(section).toHaveTextContent("14");
+      expect(
+        screen.queryByRole("button", { name: "Create a sandbox profile" }),
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Leave the sandbox" }));
+      expect(onLeaveSandbox).toHaveBeenCalled();
+    });
   });
 });

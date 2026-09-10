@@ -72,6 +72,30 @@ export interface UpdateCheck {
   published_at: string | null;
 }
 
+/// Mirrors `src-tauri/src/sandbox.rs::SandboxSummary`. What the synthetic
+/// profile holds, and where it lives: the whole engine points at `root` while
+/// a sandbox is active.
+export interface SandboxSummary {
+  root: string;
+  sentinels: number;
+  junk: number;
+  winapp2_rules: number;
+}
+
+/// Mirrors `src-tauri/src/sandbox.rs::SandboxVerdict`: the disk read back
+/// against the manifest the sandbox promised, after a real clean.
+export interface SandboxVerdict {
+  sentinels_total: number;
+  sentinels_intact: number;
+  sentinels_damaged: string[];
+  junk_total: number;
+  junk_removed: number;
+  junk_remaining: string[];
+  outside_total: number;
+  outside_intact: number;
+  junctions_refused: boolean;
+}
+
 export interface StartupEntry {
   id: string;
   name: string;
@@ -125,6 +149,28 @@ export function setStartupEnabled(id: string, enabled: boolean): Promise<void> {
 /// `updateErrorMessage` in `src/lib/updates.ts`.
 export function checkForUpdates(): Promise<UpdateCheck> {
   return invoke<UpdateCheck>("check_for_updates");
+}
+
+/// Builds the synthetic profile under `%TEMP%` and switches the whole engine
+/// onto it: `listRules`, `scan` and `clean` then work against it and nothing
+/// else. Rejects when a sandbox is already active.
+export function sandboxEnter(): Promise<SandboxSummary> {
+  return invoke<SandboxSummary>("sandbox_enter");
+}
+
+/// Removes the synthetic profile and hands the real catalogue back.
+export function sandboxLeave(): Promise<void> {
+  return invoke<void>("sandbox_leave");
+}
+
+/// The active sandbox, or null when the engine runs against the real profile.
+export function sandboxStatus(): Promise<SandboxSummary | null> {
+  return invoke<SandboxSummary | null>("sandbox_status");
+}
+
+/// Reads the sandbox back off the disk and compares it with what it promised.
+export function sandboxVerify(): Promise<SandboxVerdict> {
+  return invoke<SandboxVerdict>("sandbox_verify");
 }
 
 /// Groups rules by category, preserving the order of rules.toml.

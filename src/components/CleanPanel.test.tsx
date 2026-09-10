@@ -9,6 +9,7 @@ const api = {
   clean: vi.fn(),
   runningBrowsers: vi.fn(),
   onScanProgress: vi.fn(),
+  sandboxVerify: vi.fn(),
 };
 
 vi.mock("@/lib/api", async () => {
@@ -21,6 +22,7 @@ vi.mock("@/lib/api", async () => {
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
     onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
+    sandboxVerify: () => api.sandboxVerify(),
   };
 });
 
@@ -65,6 +67,7 @@ describe("CleanPanel", () => {
     api.scan.mockReset().mockResolvedValue([]);
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     api.runningBrowsers.mockReset().mockResolvedValue([]);
+    api.sandboxVerify.mockReset();
     api.rulesSummary.mockReset().mockResolvedValue({
       native: 10,
       winapp2_retained: 1200,
@@ -781,5 +784,87 @@ describe("CleanPanel", () => {
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
     expect(screen.queryByTestId("first-launch-hint")).toBeNull();
+  });
+
+  describe("sandbox verdict", () => {
+    const SANDBOX = {
+      root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
+      sentinels: 52,
+      junk: 119,
+      winapp2_rules: 14,
+    };
+
+    const PASS = {
+      sentinels_total: 52,
+      sentinels_intact: 52,
+      sentinels_damaged: [],
+      junk_total: 119,
+      junk_removed: 119,
+      junk_remaining: [],
+      outside_total: 4,
+      outside_intact: 4,
+      junctions_refused: true,
+    };
+
+    beforeEach(() => {
+      api.scan.mockResolvedValue([
+        { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      ]);
+    });
+
+    async function cleanOnce() {
+      const user = userEvent.setup();
+      render(<CleanPanel sandbox={SANDBOX} />);
+      await screen.findByLabelText("Temporary files");
+      await user.click(screen.getByRole("button", { name: /Analyze/ }));
+      await screen.findByTestId("total-bytes");
+      await user.click(screen.getByRole("button", { name: /^Clean/ }));
+      await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+    }
+
+    it("is not asked for outside the sandbox", async () => {
+      const user = userEvent.setup();
+      render(<CleanPanel />);
+      await screen.findByLabelText("Temporary files");
+      await user.click(screen.getByRole("button", { name: /Analyze/ }));
+      await screen.findByTestId("total-bytes");
+      await user.click(screen.getByRole("button", { name: /^Clean/ }));
+      await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+      await screen.findByTestId("clean-report");
+      expect(api.sandboxVerify).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("sandbox-verdict")).toBeNull();
+    });
+
+    it("reads the disk back after a sandbox clean and passes", async () => {
+      api.sandboxVerify.mockResolvedValue(PASS);
+      await cleanOnce();
+
+      const verdict = await screen.findByTestId("sandbox-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "pass");
+      expect(verdict).toHaveTextContent("Sentinels intact 52 / 52");
+      expect(verdict).toHaveTextContent("Junk removed 119 / 119");
+      expect(verdict).toHaveTextContent("Files outside the profile untouched 4 / 4");
+      expect(verdict).toHaveTextContent("Junctions refused: yes");
+    });
+
+    it("names what was damaged or survived when it fails", async () => {
+      api.sandboxVerify.mockResolvedValue({
+        ...PASS,
+        sentinels_intact: 51,
+        sentinels_damaged: [String.raw`C:\sandbox\profile\Documents\thesis.docx`],
+        junk_removed: 118,
+        junk_remaining: [String.raw`C:\sandbox\profile\AppData\Local\Temp\stray.tmp`],
+        outside_intact: 3,
+        junctions_refused: false,
+      });
+      await cleanOnce();
+
+      const verdict = await screen.findByTestId("sandbox-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "fail");
+      expect(verdict).toHaveTextContent("Sentinels intact 51 / 52");
+      expect(verdict).toHaveTextContent("thesis.docx");
+      expect(verdict).toHaveTextContent("stray.tmp");
+      expect(verdict).toHaveTextContent("Junctions refused: no");
+    });
   });
 });

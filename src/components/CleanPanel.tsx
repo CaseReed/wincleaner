@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Info, Loader2, TriangleAlert } from "lucide-react";
+import { Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,15 @@ import {
   onScanProgress,
   rulesSummary,
   runningBrowsers,
+  sandboxVerify,
   scan,
   sortGrouped,
   type CleanMode,
   type CleanReport,
   type RuleSummary,
   type RulesSummary,
+  type SandboxSummary,
+  type SandboxVerdict,
   type ScanProgress,
   type ScanResult,
 } from "@/lib/api";
@@ -82,12 +85,116 @@ function Screen({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function CleanPanel() {
+/// Whether the sandbox came through untouched on every count. One `false`
+/// here is the only interesting outcome: it means a guard let something past.
+export function verdictPasses(v: SandboxVerdict): boolean {
+  return (
+    v.sentinels_damaged.length === 0 &&
+    v.junk_remaining.length === 0 &&
+    v.outside_intact === v.outside_total &&
+    v.junctions_refused
+  );
+}
+
+/// One line of the verdict: a claim and the count that backs it.
+function VerdictLine({ label, got, of }: { label: string; got: number; of: number }) {
+  return (
+    <li>
+      {label}{" "}
+      <span className="font-mono tnum">
+        {formatCount(got)} / {formatCount(of)}
+      </span>
+    </li>
+  );
+}
+
+/// What the sandbox looked like after the clean, read back off the disk. Shown
+/// only in sandbox mode: outside it there is no manifest to compare against.
+function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
+  const passed = verdictPasses(verdict);
+  return (
+    <section
+      data-testid="sandbox-verdict"
+      data-verdict={passed ? "pass" : "fail"}
+      className={cn(
+        "rounded-lg border p-5",
+        passed
+          ? "border-success/40 bg-success/8"
+          : "border-destructive/40 bg-destructive/8"
+      )}
+    >
+      <h2 className="eyebrow flex items-center gap-2 text-muted-foreground">
+        {passed ? (
+          <ShieldCheck className="size-4 text-success" />
+        ) : (
+          <ShieldX className="size-4 text-destructive" />
+        )}
+        Sandbox verdict
+      </h2>
+      <ul className="mt-2.5 flex flex-col gap-1 text-sm">
+        <VerdictLine
+          label="Sentinels intact"
+          got={verdict.sentinels_intact}
+          of={verdict.sentinels_total}
+        />
+        <VerdictLine
+          label="Junk removed"
+          got={verdict.junk_removed}
+          of={verdict.junk_total}
+        />
+        <VerdictLine
+          label="Files outside the profile untouched"
+          got={verdict.outside_intact}
+          of={verdict.outside_total}
+        />
+        <li>Junctions refused: {verdict.junctions_refused ? "yes" : "no"}</li>
+      </ul>
+      {verdict.sentinels_damaged.length > 0 && (
+        <>
+          <h3 className="mt-4 text-xs font-medium text-muted-foreground">
+            Deleted or rewritten, and should not have been
+          </h3>
+          <ul className="mt-1.5 max-h-40 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
+            {verdict.sentinels_damaged.map((p) => (
+              <li key={p} className="truncate">
+                {p}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {verdict.junk_remaining.length > 0 && (
+        <>
+          <h3 className="mt-4 text-xs font-medium text-muted-foreground">
+            Junk still on disk
+          </h3>
+          <ul className="mt-1.5 max-h-40 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
+            {verdict.junk_remaining.map((p) => (
+              <li key={p} className="truncate">
+                {p}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+export function CleanPanel({
+  sandbox = null,
+}: {
+  /// Non-null while a sandbox is active: every rule below then describes the
+  /// synthetic profile, and a Clean is followed by a verdict read back off its
+  /// disk.
+  sandbox?: SandboxSummary | null;
+} = {}) {
   const [rules, setRules] = useState<RuleSummary[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [results, setResults] = useState<ScanResult[] | null>(null);
   const [report, setReport] = useState<CleanReport | null>(null);
+  const [verdict, setVerdict] = useState<SandboxVerdict | null>(null);
   const [mode, setMode] = useState<CleanMode>("auto");
   const [browsers, setBrowsers] = useState<string[]>([]);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
@@ -251,6 +358,7 @@ export function CleanPanel() {
   async function onScan() {
     setBusyAction("scan");
     setReport(null);
+    setVerdict(null);
     setConfirming(false);
     setProgress(null);
     scanPending.current = true;
@@ -270,11 +378,15 @@ export function CleanPanel() {
   async function onClean() {
     setConfirming(false);
     setBusyAction("clean");
+    setVerdict(null);
     try {
       const done = await clean(cleanIds, mode);
       setReport(done);
       setResults(null);
       toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
+      // The whole point of the sandbox: read the disk back against what it
+      // promised, instead of trusting the report the cleaner just wrote.
+      if (sandbox) setVerdict(await sandboxVerify());
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -519,6 +631,8 @@ export function CleanPanel() {
           );
         })}
         </div>
+
+        {verdict && <SandboxVerdictCard verdict={verdict} />}
 
         {report && (
           <section

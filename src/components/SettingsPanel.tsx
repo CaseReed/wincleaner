@@ -3,7 +3,7 @@ import { Check, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { checkForUpdates, type UpdateCheck } from "@/lib/api";
+import { checkForUpdates, type SandboxSummary, type UpdateCheck } from "@/lib/api";
 import {
   readAutoCheck,
   toPlainText,
@@ -172,7 +172,79 @@ function UpdatesSection() {
   );
 }
 
-export function SettingsPanel() {
+const RULE_COUNT = new Intl.NumberFormat("en-US");
+
+/// The one screen that can switch the whole engine off the user's own profile.
+/// Fully controlled: entering and leaving are the parent's business, because
+/// the sandbox is application state — the banner and the Startup screen read
+/// it too.
+function SandboxSection({
+  sandbox,
+  onEnterSandbox,
+  onLeaveSandbox,
+}: {
+  sandbox: SandboxSummary | null;
+  onEnterSandbox?: () => void;
+  onLeaveSandbox?: () => void;
+}) {
+  return (
+    <>
+      <p className="text-muted-foreground">
+        A sandbox is a synthetic Windows profile WinCleaner builds under your
+        temporary directory: junk files every rule is meant to remove, plus
+        decoy documents, keys and caches that must survive.
+      </p>
+      <p className="text-muted-foreground">
+        While it is active, Analyze and Clean run for real against that profile
+        and nothing else — nothing in your real profile is touched, and the
+        Recycle Bin and the startup registry keys stay out of reach.
+      </p>
+
+      {sandbox ? (
+        <>
+          <p data-testid="sandbox-root" className="font-mono text-xs break-all">
+            {sandbox.root}
+          </p>
+          <p className="text-muted-foreground">
+            <span className="font-mono tnum">
+              {RULE_COUNT.format(sandbox.junk)}
+            </span>{" "}
+            junk files ·{" "}
+            <span className="font-mono tnum">
+              {RULE_COUNT.format(sandbox.sentinels)}
+            </span>{" "}
+            files that must survive ·{" "}
+            <span className="font-mono tnum">
+              {RULE_COUNT.format(sandbox.winapp2_rules)}
+            </span>{" "}
+            Winapp2 rules detected
+          </p>
+          <div className="mt-1 flex items-center gap-3">
+            <Button variant="outline" onClick={onLeaveSandbox}>
+              Leave the sandbox
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="mt-1 flex items-center gap-3">
+          <Button data-testid="create-sandbox" onClick={onEnterSandbox}>
+            Create a sandbox profile
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function SettingsPanel({
+  sandbox = null,
+  onEnterSandbox,
+  onLeaveSandbox,
+}: {
+  sandbox?: SandboxSummary | null;
+  onEnterSandbox?: () => void;
+  onLeaveSandbox?: () => void;
+} = {}) {
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
@@ -209,6 +281,14 @@ export function SettingsPanel() {
 
           <Section title="Updates">
             <UpdatesSection />
+          </Section>
+
+          <Section title="Sandbox" testId="sandbox">
+            <SandboxSection
+              sandbox={sandbox}
+              onEnterSandbox={onEnterSandbox}
+              onLeaveSandbox={onLeaveSandbox}
+            />
           </Section>
 
           <Section title="Notices" testId="notices">

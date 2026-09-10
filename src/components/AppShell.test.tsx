@@ -3,6 +3,13 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "./AppShell";
 
+const SANDBOX = {
+  root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
+  sentinels: 52,
+  junk: 119,
+  winapp2_rules: 14,
+};
+
 function renderShell(props: Partial<Parameters<typeof AppShell>[0]> = {}) {
   const onScreenChange = vi.fn();
   render(
@@ -46,5 +53,25 @@ describe("AppShell", () => {
   it("keeps the theme toggle", () => {
     renderShell();
     expect(screen.getByTestId("theme-toggle")).toHaveAccessibleName("Switch to dark theme");
+  });
+
+  it("shows no sandbox banner while the engine runs against the real profile", () => {
+    renderShell();
+    expect(screen.queryByTestId("sandbox-banner")).not.toBeInTheDocument();
+  });
+
+  it("names the sandbox root in a banner, on every screen, while one is active", () => {
+    renderShell({ sandbox: SANDBOX, screen: "startup" });
+    const banner = screen.getByTestId("sandbox-banner");
+    expect(banner).toHaveTextContent("Sandbox mode");
+    expect(banner).toHaveTextContent(SANDBOX.root);
+  });
+
+  it("leaves the sandbox from the banner", async () => {
+    const user = userEvent.setup();
+    const onLeaveSandbox = vi.fn();
+    renderShell({ sandbox: SANDBOX, onLeaveSandbox });
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(onLeaveSandbox).toHaveBeenCalled();
   });
 });
