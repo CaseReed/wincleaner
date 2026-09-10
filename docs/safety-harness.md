@@ -109,12 +109,18 @@ one builder, one catalogue, one set of guards.
    every screen naming the root, so you can never forget which profile you are
    looking at.
 2. **Cleanup → Analyze**, then **Clean**. The rule list is the sandbox's own:
-   the nine native rules plus the Winapp2 entries the fixture makes detected.
-   Both run the real code, on the real disk.
+   the nine native rules plus the Winapp2 entries the fixture makes detected,
+   and in the sandbox they all start checked — the profile is there to be
+   exercised, not spared. Both run the real code, on the real disk.
 3. **Read the verdict.** After the clean, a "Sandbox verdict" card reads the
    disk back against the manifest the sandbox promised: sentinels intact, junk
-   removed, files outside the profile untouched, junctions refused. Green means
+   removed **for the rules you cleaned**, junction baits untouched. Green means
    every count added up; red names the files that were damaged or survived.
+
+   The junk count is scoped on purpose. Every junk file records the rule it was
+   written for, so unticking half the catalogue narrows what the verdict holds
+   you to instead of painting a correct run red. The sentinels and the two
+   junction baits are never scoped: no selection can license damaging a file.
 4. **Settings → Leave the sandbox** (or the banner's *Leave*) removes the
    directory and hands the real catalogue back.
 

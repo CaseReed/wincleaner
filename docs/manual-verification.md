@@ -278,21 +278,29 @@ but only your own eyes can confirm that.
    still be there at the end, byte for byte.
 5. **Startup** screen: it must show the notice, not the table. Nothing in Task
    Manager > Startup apps may have changed.
-6. **Cleanup** screen: the rule list is the sandbox's own. Click **Analyze**.
-   The reclaimable total must be non-zero and every native rule must report
-   something.
+6. **Cleanup** screen: the rule list is the sandbox's own, and **every rule
+   that applies starts checked** — the sandbox exists to exercise the whole
+   catalogue. Click **Analyze**. The reclaimable total must be non-zero and
+   every native rule must report something.
 7. Choose **Permanent** in the bottom bar, click **Clean**, then **Confirm
    cleanup**.
 8. A **Sandbox verdict** card must appear, green, reading "Sentinels intact
-   N / N", "Junk removed M / M", "Files outside the profile untouched K / K"
-   and "Junctions refused: yes". If it is red, read the paths it lists and stop
-   — that is a real containment failure.
+   N / N", "Junk removed M / M for the R rules cleaned" and "Junction baits
+   untouched 2 / 2". If it is red, read the paths it lists and stop — that is a
+   real containment failure.
+8b. Uncheck most of the rules, **Analyze** and **Clean** again on a fresh
+   sandbox: the verdict must still be green, and "Junk removed" must name the
+   smaller number of rules you cleaned. A partial selection is not a failure.
 9. Check Explorer again: `profile\Documents\thesis.docx`, `profile\.ssh\`,
    `outside\secret.txt` and `control\untouched.dat` must all still be there;
    `profile\AppData\Local\Temp` must be empty of the junk.
 10. Repeat steps 6–8 with **Recycle Bin** mode on a fresh sandbox: the removed
     files must land in `<root>\recycle-bin`, and your **real** Recycle Bin must
     still hold exactly what it held at step 1 — nothing added, nothing emptied.
+10b. While the sandbox is active, open one of its files in an editor that
+    keeps a lock on it and click **Leave**: the leave must fail with a message
+    naming the directory, **and the banner must stay**. Close the file and
+    leave again.
 11. Click **Leave** in the banner. The banner disappears, the rule list goes
     back to the machine's own catalogue, the Startup screen lists your real
     entries again, and `%TEMP%\wincleaner-sandbox-<id>` is gone from Explorer.
