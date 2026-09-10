@@ -23,9 +23,18 @@ vi.mock("@/lib/api", async () => {
 import { CleanPanel } from "./CleanPanel";
 
 const REGLES = [
-  { id: "windows.temp", category: "Système", label: "Fichiers temporaires", risk: "low", kind: "files" },
-  { id: "edge.cache", category: "Navigateurs", label: "Cache Microsoft Edge", risk: "low", kind: "files" },
+  { id: "windows.temp", category: "Système", label: "Fichiers temporaires", risk: "low", kind: "files", default_checked: true },
+  { id: "edge.cache", category: "Navigateurs", label: "Cache Microsoft Edge", risk: "low", kind: "files", default_checked: true },
 ];
+
+const CORBEILLE = {
+  id: "windows.recycle-bin",
+  category: "Système",
+  label: "Corbeille",
+  risk: "low",
+  kind: "recycle-bin",
+  default_checked: false,
+};
 
 describe("CleanPanel", () => {
   beforeEach(() => {
@@ -83,7 +92,7 @@ describe("CleanPanel", () => {
   it("le bouton Nettoyer est désactivé avant toute analyse", async () => {
     render(<CleanPanel />);
     await screen.findByLabelText("Fichiers temporaires");
-    expect(screen.getByRole("button", { name: /Nettoyer/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Nettoyer/ })).toBeDisabled();
   });
 
   it("nettoie avec le mode choisi et affiche le rapport", async () => {
@@ -103,7 +112,8 @@ describe("CleanPanel", () => {
     await screen.findByTestId("total-bytes");
 
     await user.selectOptions(screen.getByLabelText("Mode de suppression"), "permanent");
-    await user.click(screen.getByRole("button", { name: /Nettoyer/ }));
+    await user.click(screen.getByRole("button", { name: /^Nettoyer/ }));
+    await user.click(await screen.findByRole("button", { name: /Confirmer le nettoyage/ }));
 
     await waitFor(() =>
       expect(api.clean).toHaveBeenCalledWith(["windows.temp", "edge.cache"], "permanent")
@@ -160,16 +170,7 @@ describe("CleanPanel", () => {
   });
 
   it("signale que la règle Corbeille agit sur tous les volumes", async () => {
-    api.listRules.mockResolvedValue([
-      ...REGLES,
-      {
-        id: "windows.recycle-bin",
-        category: "Système",
-        label: "Corbeille",
-        risk: "low",
-        kind: "recycle-bin",
-      },
-    ]);
+    api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
     render(<CleanPanel />);
     expect(await screen.findByTestId("note-windows.recycle-bin")).toHaveTextContent(
       "tous les volumes"
@@ -177,5 +178,83 @@ describe("CleanPanel", () => {
     expect(screen.getByText(/Vide la corbeille de tous les volumes/)).toBeInTheDocument();
     // Les règles « files » ne portent pas cette note.
     expect(screen.queryByTestId("note-windows.temp")).toBeNull();
+  });
+
+  it("ne coche pas la règle Corbeille par défaut", async () => {
+    api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
+    render(<CleanPanel />);
+    expect(await screen.findByLabelText("Corbeille")).not.toBeChecked();
+    expect(screen.getByLabelText("Fichiers temporaires")).toBeChecked();
+  });
+
+  it("n'analyse pas les règles décochées par défaut", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Corbeille");
+    await user.click(screen.getByRole("button", { name: /Analyser/ }));
+    await waitFor(() =>
+      expect(api.scan).toHaveBeenCalledWith(["windows.temp", "edge.cache"])
+    );
+  });
+
+  it("demande confirmation avant de nettoyer", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Fichiers temporaires");
+    await user.click(screen.getByRole("button", { name: /Analyser/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Nettoyer/ }));
+
+    // Rien n'est parti tant que la confirmation n'est pas donnée.
+    expect(api.clean).not.toHaveBeenCalled();
+    const confirmation = await screen.findByTestId("confirm-clean");
+    expect(confirmation).toHaveTextContent("2 Ko");
+    expect(confirmation).toHaveTextContent(/Auto/);
+    expect(confirmation).toHaveTextContent(/Fichiers temporaires/);
+
+    await user.click(screen.getByRole("button", { name: /Confirmer le nettoyage/ }));
+    await waitFor(() => expect(api.clean).toHaveBeenCalled());
+  });
+
+  it("annuler la confirmation ne nettoie rien", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Fichiers temporaires");
+    await user.click(screen.getByRole("button", { name: /Analyser/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Nettoyer/ }));
+    await user.click(await screen.findByRole("button", { name: /Annuler/ }));
+
+    expect(api.clean).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-clean")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Nettoyer/ })).toBeInTheDocument();
+  });
+
+  it("la confirmation énumère la corbeille comme irréversible même en mode Corbeille", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "windows.recycle-bin", file_count: 1, total_bytes: 10, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await user.click(await screen.findByLabelText("Corbeille"));
+    await user.selectOptions(screen.getByLabelText("Mode de suppression"), "trash");
+    await user.click(screen.getByRole("button", { name: /Analyser/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Nettoyer/ }));
+
+    const confirmation = await screen.findByTestId("confirm-clean");
+    expect(confirmation).toHaveTextContent(/sans retour possible/i);
+    expect(confirmation).toHaveTextContent("Corbeille");
+    // En mode Corbeille, les fichiers temporaires sont récupérables.
+    expect(confirmation).not.toHaveTextContent("Fichiers temporaires");
   });
 });

@@ -11,6 +11,9 @@ export interface RuleSummary {
   label: string;
   risk: Risk;
   kind: RuleKind;
+  /// Case cochée au premier lancement. Faux pour ce qu'on ne nettoie pas
+  /// sans l'avoir voulu explicitement (cf. src-tauri/rules.toml).
+  default_checked: boolean;
 }
 
 export interface ScanResult {

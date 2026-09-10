@@ -4,10 +4,10 @@ import { ReclaimGauge } from "./ReclaimGauge";
 import type { RuleSummary, ScanResult } from "@/lib/api";
 
 const REGLES: RuleSummary[] = [
-  { id: "windows.temp", category: "Système", label: "Fichiers temporaires", risk: "low", kind: "files" },
-  { id: "windows.recycle-bin", category: "Système", label: "Corbeille", risk: "low", kind: "recycle-bin" },
-  { id: "edge.cache", category: "Navigateurs", label: "Cache Microsoft Edge", risk: "low", kind: "files" },
-  { id: "chrome.cache", category: "Navigateurs", label: "Cache Google Chrome", risk: "low", kind: "files" },
+  { id: "windows.temp", category: "Système", label: "Fichiers temporaires", risk: "low", kind: "files", default_checked: true },
+  { id: "windows.recycle-bin", category: "Système", label: "Corbeille", risk: "low", kind: "recycle-bin", default_checked: true },
+  { id: "edge.cache", category: "Navigateurs", label: "Cache Microsoft Edge", risk: "low", kind: "files", default_checked: true },
+  { id: "chrome.cache", category: "Navigateurs", label: "Cache Google Chrome", risk: "low", kind: "files", default_checked: true },
 ];
 
 function result(rule_id: string, total_bytes: number): ScanResult {

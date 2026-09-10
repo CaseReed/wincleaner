@@ -349,6 +349,7 @@ mod tests {
             exclude: exclude.into_iter().map(String::from).collect(),
             risk: Risk::Low,
             kind: RuleKind::Files,
+            default_checked: true,
         }
     }
 
@@ -584,6 +585,7 @@ mod tests {
             exclude: vec![],
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
+            default_checked: false,
         };
         let query = || Ok((7u64, 700u64));
         let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();
@@ -605,6 +607,7 @@ mod tests {
             exclude: vec![],
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
+            default_checked: false,
         };
         let query = || Err("échec".to_string());
         let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();

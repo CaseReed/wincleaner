@@ -204,6 +204,7 @@ mod tests {
             exclude: vec![],
             risk,
             kind: RuleKind::Files,
+            default_checked: true,
         }
     }
 
@@ -216,6 +217,7 @@ mod tests {
             exclude: vec![],
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
+            default_checked: false,
         }
     }
 

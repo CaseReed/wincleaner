@@ -23,6 +23,20 @@ import {
   type ScanResult,
 } from "@/lib/api";
 
+const LIBELLE_MODE: Record<CleanMode, string> = {
+  auto: "Auto",
+  trash: "Corbeille",
+  permanent: "Définitif",
+};
+
+/// Ce que ce mode détruira sans retour possible pour cette règle. La règle
+/// Corbeille l'est toujours : le mode de suppression ne s'y applique pas.
+export function estIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
+  if (rule.kind === "recycle-bin") return true;
+  if (mode === "permanent") return true;
+  return mode === "auto" && rule.risk === "low";
+}
+
 function Screen({ children }: { children: React.ReactNode }) {
   return (
     <>
@@ -44,6 +58,7 @@ export function CleanPanel() {
   const [browsers, setBrowsers] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -52,7 +67,7 @@ export function CleanPanel() {
     listRules()
       .then((loaded) => {
         setRules(loaded);
-        setSelected(new Set(loaded.map((r) => r.id)));
+        setSelected(new Set(loaded.filter((r) => r.default_checked).map((r) => r.id)));
       })
       .catch((err) => setRulesError(String(err)));
     runningBrowsers()
@@ -66,6 +81,12 @@ export function CleanPanel() {
     [results]
   );
   const scannedIds = useMemo(() => (results ?? []).map((r) => r.rule_id), [results]);
+  /// Les règles analysées que le mode courant détruira sans retour possible.
+  const irreversibles = useMemo(
+    () =>
+      rules.filter((r) => scannedIds.includes(r.id) && estIrreversible(r, mode)),
+    [rules, scannedIds, mode]
+  );
 
   function toggleRule(id: string) {
     setSelected((prev) => {
@@ -76,6 +97,7 @@ export function CleanPanel() {
     });
     setResults(null);
     setReport(null);
+    setConfirming(false);
   }
 
   function togglePaths(id: string) {
@@ -90,6 +112,7 @@ export function CleanPanel() {
   async function onScan() {
     setBusy(true);
     setReport(null);
+    setConfirming(false);
     try {
       setResults(await scan(rules.filter((r) => selected.has(r.id)).map((r) => r.id)));
     } catch (err) {
@@ -100,6 +123,7 @@ export function CleanPanel() {
   }
 
   async function onClean() {
+    setConfirming(false);
     setBusy(true);
     try {
       const done = await clean(scannedIds, mode);
@@ -331,34 +355,64 @@ export function CleanPanel() {
       </div>
 
       <footer className="flex shrink-0 items-center gap-4 border-t bg-background px-8 py-3.5">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <select
-            id="clean-mode"
-            aria-label="Mode de suppression"
-            className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            value={mode}
-            onChange={(e) => setMode(e.target.value as CleanMode)}
-          >
-            <option value="auto">Auto</option>
-            <option value="trash">Corbeille</option>
-            <option value="permanent">Définitif</option>
-          </select>
-          <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
-            Auto : suppression définitive pour les éléments à faible risque,
-            corbeille pour les autres.
-          </p>
-        </div>
-        <Button
-          size="lg"
-          variant="destructive"
-          onClick={onClean}
-          disabled={busy || !results || scannedIds.length === 0}
-        >
-          Nettoyer
-          {results && total > 0 && (
-            <span className="font-mono tnum">{formatBytes(total)}</span>
-          )}
-        </Button>
+        {confirming ? (
+          <>
+            <div data-testid="confirm-clean" className="min-w-0 flex-1">
+              <p className="text-sm font-medium">
+                Nettoyer{" "}
+                <span className="font-mono tnum">{formatBytes(total)}</span> en
+                mode {LIBELLE_MODE[mode]} ?
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {irreversibles.length > 0 ? (
+                  <>
+                    Sans retour possible :{" "}
+                    {irreversibles.map((r) => r.label).join(", ")}.
+                  </>
+                ) : (
+                  <>Tout part à la corbeille et reste récupérable.</>
+                )}
+              </p>
+            </div>
+            <Button variant="outline" onClick={() => setConfirming(false)}>
+              Annuler
+            </Button>
+            <Button size="lg" variant="destructive" onClick={onClean} disabled={busy}>
+              Confirmer le nettoyage
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <select
+                id="clean-mode"
+                aria-label="Mode de suppression"
+                className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as CleanMode)}
+              >
+                <option value="auto">Auto</option>
+                <option value="trash">Corbeille</option>
+                <option value="permanent">Définitif</option>
+              </select>
+              <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
+                Auto : suppression définitive pour les éléments à faible risque,
+                corbeille pour les autres.
+              </p>
+            </div>
+            <Button
+              size="lg"
+              variant="destructive"
+              onClick={() => setConfirming(true)}
+              disabled={busy || !results || scannedIds.length === 0}
+            >
+              Nettoyer
+              {results && total > 0 && (
+                <span className="font-mono tnum">{formatBytes(total)}</span>
+              )}
+            </Button>
+          </>
+        )}
       </footer>
     </Screen>
   );

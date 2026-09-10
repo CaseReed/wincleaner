@@ -14,6 +14,7 @@ kind = "recycle-bin"
 paths = []
 exclude = []
 risk = "low"
+default_checked = false
 
 [[rule]]
 id = "windows.thumbnails"
@@ -30,6 +31,7 @@ label = "Éléments récents"
 paths = ["%APPDATA%\\Microsoft\\Windows\\Recent\\**\\*"]
 exclude = []
 risk = "medium"
+default_checked = false
 
 [[rule]]
 id = "windows.user-logs"

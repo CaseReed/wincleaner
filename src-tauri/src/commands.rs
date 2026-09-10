@@ -17,6 +17,8 @@ pub struct RuleSummary {
     pub label: String,
     pub risk: Risk,
     pub kind: RuleKind,
+    /// Case cochée au premier lancement (cf. `rules.toml`).
+    pub default_checked: bool,
 }
 
 fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
@@ -54,6 +56,7 @@ pub fn list_rules() -> Result<Vec<RuleSummary>, String> {
             label: r.label,
             risk: r.risk,
             kind: r.kind,
+            default_checked: r.default_checked,
         })
         .collect())
 }
@@ -184,6 +187,20 @@ mod tests {
         assert_eq!(resumes[1].kind, crate::rules::RuleKind::RecycleBin);
     }
 
+    /// Le front construit ses cases à partir de ce champ : s'il ne traverse
+    /// pas l'IPC, tout redevient coché par défaut.
+    #[test]
+    fn le_resume_transmet_la_case_par_defaut() {
+        let resumes = list_rules().unwrap();
+        let corbeille = resumes
+            .iter()
+            .find(|r| r.id == "windows.recycle-bin")
+            .unwrap();
+        assert!(!corbeille.default_checked);
+        let temp = resumes.iter().find(|r| r.id == "windows.temp").unwrap();
+        assert!(temp.default_checked);
+    }
+
     /// Le point de l'item : une commande synchrone s'exécuterait sur le fil
     /// appelant — le fil principal en production, celui qui pompe les
     /// évènements de la fenêtre. `blocking` doit déporter le travail ailleurs.
@@ -212,6 +229,7 @@ mod tests {
             exclude: vec![],
             risk: Risk::Low,
             kind: RuleKind::Files,
+            default_checked: true,
         }
     }
 

@@ -40,6 +40,15 @@ pub struct Rule {
     pub risk: Risk,
     #[serde(default)]
     pub kind: RuleKind,
+    /// Case cochée au premier lancement. Faux pour ce qu'un utilisateur ne
+    /// doit jamais nettoyer sans l'avoir voulu explicitement : irréversible,
+    /// hors du profil, ou données curées à la main.
+    #[serde(default = "coche_par_defaut")]
+    pub default_checked: bool,
+}
+
+fn coche_par_defaut() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -488,6 +497,47 @@ risk = "low""#,
     }
 
     #[test]
+    fn une_regle_est_cochee_par_defaut_sauf_mention_contraire() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%TEMP%\\*"]
+exclude = []
+risk = "low""#,
+        );
+        assert!(load_rules_with(&src, &fake_env).unwrap()[0].default_checked);
+
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%TEMP%\\*"]
+exclude = []
+risk = "low"
+default_checked = false"#,
+        );
+        assert!(!load_rules_with(&src, &fake_env).unwrap()[0].default_checked);
+    }
+
+    #[test]
+    fn les_regles_irreversibles_ne_sont_pas_cochees_par_defaut() {
+        // Le parcours minimal jusqu'à la perte de données était : ouvrir,
+        // Analyser, Nettoyer. Deux clics, et la corbeille d'une clé USB
+        // branchée était vidée.
+        let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
+        let decochees: Vec<&str> = rules
+            .iter()
+            .filter(|r| !r.default_checked)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            decochees,
+            vec!["windows.recycle-bin", "windows.explorer-recent"]
+        );
+    }
+
+    #[test]
     fn le_rules_toml_embarque_est_valide() {
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
         assert_eq!(rules.len(), 8);
@@ -585,6 +635,7 @@ risk = "low""#,
             exclude: vec![],
             risk: Risk::Low,
             kind: RuleKind::Files,
+            default_checked: true,
         };
         let got = resolved_paths_with(&rule, &fake_env).unwrap();
         assert_eq!(got, vec![r"C:\Users\Test\AppData\Local\Temp\**\*"]);
