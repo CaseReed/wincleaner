@@ -93,6 +93,18 @@ describe("SettingsPanel — updates", () => {
     expect(screen.getByTestId("check-updates")).toBeEnabled();
   });
 
+  it("reports the local version, not the release tag, when not newer", async () => {
+    // A local build ahead of the last published tag (or a hand-pushed old
+    // tag) must still read as "you're up to date" against the version that
+    // is actually installed, never the older tag GitHub happened to answer.
+    mockedCheck.mockResolvedValue(answer({ current: "0.2.0", latest: "0.1.0", is_newer: false }));
+    render(<SettingsPanel />);
+    await userEvent.click(screen.getByTestId("check-updates"));
+    await waitFor(() =>
+      expect(screen.getByTestId("update-status")).toHaveTextContent("You’re up to date (0.2.0)"),
+    );
+  });
+
   it("announces a newer version with its date, notes and link", async () => {
     mockedCheck.mockResolvedValue(
       answer({

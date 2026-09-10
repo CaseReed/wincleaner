@@ -143,6 +143,13 @@ version of the same invariant lives in `scan.rs`
 
 ## VM-8b — The update check, and nothing else
 
+Run step 3 (the "exactly one connection" check) against a **release build**
+(`npm run tauri build`, then the installed exe), not `npm run tauri dev`:
+React StrictMode double-invokes effects in development, so the same startup
+check can appear to fire twice there even though the 10-second cooldown in
+`commands.rs::check_for_updates` collapses the second call into the first
+result without a second connection.
+
 1. Launch the application, open Windows Resource Monitor, Network tab.
 2. Settings screen. Confirm "Check automatically at startup" is **off** on a
    fresh profile and that nothing has been sent yet.

@@ -109,7 +109,7 @@ function UpdatesSection() {
 
       {state.kind === "result" && !state.check.is_newer && (
         <p data-testid="update-status" className="text-muted-foreground">
-          You&rsquo;re up to date ({state.check.latest ?? state.check.current})
+          You&rsquo;re up to date ({state.check.current})
         </p>
       )}
 

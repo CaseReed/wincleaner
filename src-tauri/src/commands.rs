@@ -5,7 +5,8 @@ use crate::startup::StartupEntry;
 use crate::update::{check_with, http_get, UpdateCheck, LATEST_RELEASE_URL};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use sysinfo::System;
 
 /// Processes considered "an open browser" for the warning banner.
@@ -251,15 +252,53 @@ pub fn running_browsers() -> Vec<String> {
     running_browsers_from(&names)
 }
 
+/// The minimum spacing between two GitHub requests this process will make: a
+/// user mashing the button, or a StrictMode double-invoke, must not turn "one
+/// request" into two.
+const CHECK_COOLDOWN: Duration = Duration::from_secs(10);
+
+/// The last time `check_for_updates` actually reached the network, and what
+/// it got back. `None` until the first call.
+static LAST_CHECK: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+
+/// Refuses to run `check` again within `cooldown` of the last time it ran:
+/// the previous result is handed back instead, rather than opening a second
+/// connection. `now` and `check` are injected so the cooldown itself is
+/// tested without a real clock or a real socket.
+fn check_for_updates_with(
+    state: &Mutex<Option<(Instant, Result<UpdateCheck, String>)>>,
+    cooldown: Duration,
+    now: Instant,
+    check: impl FnOnce() -> Result<UpdateCheck, String>,
+) -> Result<UpdateCheck, String> {
+    {
+        let guard = state.lock().unwrap();
+        if let Some((at, result)) = guard.as_ref() {
+            if now.saturating_duration_since(*at) < cooldown {
+                return result.clone();
+            }
+        }
+    }
+    let result = check();
+    *state.lock().unwrap() = Some((now, result.clone()));
+    result
+}
+
 /// The single network-touching command: one GET on the GitHub REST API, run
 /// off the main thread like every other blocking call here. The error crossing
 /// the IPC boundary is a stable code (`offline`, `not-available`,
-/// `rate-limited`, `malformed`); the wording lives in the front end.
+/// `rate-limited`, `malformed`); the wording lives in the front end. A call
+/// within `CHECK_COOLDOWN` of the last one returns that last result again
+/// instead of opening a second connection — the front end needs no special
+/// handling for this, the button is already disabled while a check is
+/// pending.
 #[tauri::command]
 pub async fn check_for_updates() -> Result<UpdateCheck, String> {
     blocking(|| {
-        check_with(env!("CARGO_PKG_VERSION"), http_get, LATEST_RELEASE_URL)
-            .map_err(|e| e.code().to_string())
+        check_for_updates_with(&LAST_CHECK, CHECK_COOLDOWN, Instant::now(), || {
+            check_with(env!("CARGO_PKG_VERSION"), http_get, LATEST_RELEASE_URL)
+                .map_err(|e| e.code().to_string())
+        })
     })
     .await
 }
@@ -534,6 +573,68 @@ mod tests {
         let rules = cleaning_order(vec![rule("a"), rule("b"), rule("c")]);
         let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    fn fake_check(n: u32) -> Result<UpdateCheck, String> {
+        Ok(UpdateCheck {
+            current: n.to_string(),
+            latest: None,
+            is_newer: false,
+            notes: None,
+            url: None,
+            published_at: None,
+        })
+    }
+
+    /// Two calls inside the cooldown must not run `check` twice: the second
+    /// gets the first result back, verbatim.
+    #[test]
+    fn a_second_check_within_the_cooldown_reuses_the_first_result() {
+        let state: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+        let calls = std::cell::Cell::new(0u32);
+        let t0 = Instant::now();
+
+        let first = check_for_updates_with(&state, Duration::from_secs(10), t0, || {
+            calls.set(calls.get() + 1);
+            fake_check(1)
+        });
+        let second = check_for_updates_with(
+            &state,
+            Duration::from_secs(10),
+            t0 + Duration::from_secs(1),
+            || {
+                calls.set(calls.get() + 1);
+                fake_check(2)
+            },
+        );
+
+        assert_eq!(first, second);
+        assert_eq!(calls.get(), 1);
+    }
+
+    /// Once the cooldown has elapsed, the next call runs `check` again.
+    #[test]
+    fn a_check_after_the_cooldown_runs_again() {
+        let state: Mutex<Option<(Instant, Result<UpdateCheck, String>)>> = Mutex::new(None);
+        let calls = std::cell::Cell::new(0u32);
+        let t0 = Instant::now();
+
+        let first = check_for_updates_with(&state, Duration::from_secs(10), t0, || {
+            calls.set(calls.get() + 1);
+            fake_check(1)
+        });
+        let second = check_for_updates_with(
+            &state,
+            Duration::from_secs(10),
+            t0 + Duration::from_secs(11),
+            || {
+                calls.set(calls.get() + 1);
+                fake_check(2)
+            },
+        );
+
+        assert_ne!(first, second);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
