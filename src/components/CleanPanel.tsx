@@ -311,6 +311,11 @@ export function CleanPanel() {
                           irréversible : le mode de suppression ne s'y applique pas.
                         </p>
                       )}
+                      {rule.id === "windows.temp" && (
+                        <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
+                          Fermez les installateurs en cours avant de nettoyer.
+                        </p>
+                      )}
                       {result && result.paths.length > 0 && (
                         <Collapsible
                           open={openPaths.has(rule.id)}
@@ -424,7 +429,11 @@ export function CleanPanel() {
                     Auto : suppression définitive pour les éléments à faible
                     risque, corbeille pour les autres.
                   </>
-                )}
+                )}{" "}
+                <span data-testid="empty-dirs-note">
+                  Les répertoires qu'une règle vide sont supprimés quel que soit
+                  le mode : un répertoire vide ne porte aucune donnée.
+                </span>
               </p>
             </div>
             <Button

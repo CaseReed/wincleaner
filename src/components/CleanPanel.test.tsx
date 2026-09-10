@@ -169,6 +169,22 @@ describe("CleanPanel", () => {
     );
   });
 
+  it("prévient que les répertoires vidés partent dans tous les modes", async () => {
+    render(<CleanPanel />);
+    await screen.findByLabelText("Fichiers temporaires");
+    expect(screen.getByTestId("empty-dirs-note")).toHaveTextContent(
+      /quel que soit le mode/
+    );
+  });
+
+  it("invite à fermer les installateurs avant de nettoyer le dossier temporaire", async () => {
+    render(<CleanPanel />);
+    await screen.findByLabelText("Fichiers temporaires");
+    expect(
+      screen.getByText(/Fermez les installateurs en cours avant de nettoyer/)
+    ).toBeInTheDocument();
+  });
+
   it("signale que la règle Corbeille agit sur tous les volumes", async () => {
     api.listRules.mockResolvedValue([...REGLES, CORBEILLE]);
     render(<CleanPanel />);
