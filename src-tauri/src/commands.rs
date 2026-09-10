@@ -458,13 +458,24 @@ fn lock(state: &SandboxState) -> std::sync::MutexGuard<'_, Option<ActiveSandbox>
 }
 
 /// Enough entropy to keep two runs apart, with no new dependency: the process
-/// id and the nanoseconds since the epoch.
+/// id, the nanoseconds since the epoch, and a counter so two sandboxes created
+/// inside the same clock tick cannot land on the same name.
 fn sandbox_token() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{:x}-{:x}", std::process::id(), nanos)
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{:x}-{:x}-{:x}", std::process::id(), nanos, n)
+}
+
+/// `FILE_ATTRIBUTE_REPARSE_POINT` on the directory itself, never followed.
+fn is_reparse_point(path: &std::path::Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .map(|md| md.file_attributes() & 0x0000_0400 != 0)
+        .unwrap_or(false)
 }
 
 fn build_sandbox(root: &std::path::Path) -> Result<ActiveSandbox, String> {
@@ -511,7 +522,18 @@ pub fn enter_sandbox(state: &SandboxState) -> Result<SandboxSummary, String> {
         return Err("A sandbox is already active. Leave it before creating another.".to_string());
     }
     let root = std::env::temp_dir().join(format!("wincleaner-sandbox-{}", sandbox_token()));
-    std::fs::create_dir_all(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    // `create_dir`, not `create_dir_all`: the name carries a random suffix, so
+    // the directory must not exist yet. `create_dir_all` on a name someone
+    // else planted — a junction to somewhere else, say — would succeed
+    // silently and the whole fixture would be built on the other side of it.
+    std::fs::create_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    if is_reparse_point(&root) {
+        let _ = std::fs::remove_dir(&root);
+        return Err(format!(
+            "The sandbox root is a reparse point and was refused: {}",
+            root.display()
+        ));
+    }
     match build_sandbox(&root) {
         Ok(active) => {
             let summary = active.summary.clone();
@@ -531,23 +553,49 @@ pub fn enter_sandbox(state: &SandboxState) -> Result<SandboxSummary, String> {
 /// The junctions are unlinked with `remove_dir` **before** the tree goes:
 /// `remove_dir_all` on a junction is free to descend into it, which would
 /// delete what lives on the other side.
+///
+/// The tree goes first and the state is cleared **only on success**. Clearing
+/// it first would leave a failed leave — a file still open somewhere under the
+/// root — with the back end already back on the real catalogue while the
+/// directory is still there and the front end still shows the banner: the next
+/// Clean would then run against the user's own profile with a sandbox banner
+/// on screen.
 pub fn leave_sandbox(state: &SandboxState) -> Result<(), String> {
     let mut guard = lock(state);
-    let active = guard.take().ok_or("No sandbox is active.")?;
-    for link in &active.manifest.junctions {
+    let (root, junctions) = {
+        let active = guard.as_ref().ok_or("No sandbox is active.")?;
+        (
+            active.manifest.root.clone(),
+            active.manifest.junctions.clone(),
+        )
+    };
+    for link in &junctions {
         let _ = std::fs::remove_dir(link);
     }
-    std::fs::remove_dir_all(&active.manifest.root).map_err(|e| e.to_string())
+    std::fs::remove_dir_all(&root).map_err(|e| {
+        format!(
+            "The sandbox is still active: its directory could not be removed ({e}) at {}",
+            root.display()
+        )
+    })?;
+    *guard = None;
+    Ok(())
 }
 
 pub fn sandbox_status_of(state: &SandboxState) -> Option<SandboxSummary> {
     lock(state).as_ref().map(|a| a.summary.clone())
 }
 
-pub fn verify_sandbox(state: &SandboxState) -> Result<SandboxVerdict, String> {
+/// `rule_ids` are the rules the user just cleaned: the junk counts are scoped
+/// to them, so a partial selection reads correctly instead of red. The
+/// sentinels and the junction baits are checked whatever the selection.
+pub fn verify_sandbox(
+    state: &SandboxState,
+    rule_ids: &[String],
+) -> Result<SandboxVerdict, String> {
     let guard = lock(state);
     let active = guard.as_ref().ok_or("No sandbox is active.")?;
-    Ok(verify(&active.manifest))
+    Ok(verify(&active.manifest, rule_ids))
 }
 
 /// Why the Startup screen steps aside while a sandbox is active. It reads and
@@ -666,9 +714,10 @@ pub async fn sandbox_status(
 #[tauri::command]
 pub async fn sandbox_verify(
     state: tauri::State<'_, SandboxState>,
+    rule_ids: Vec<String>,
 ) -> Result<SandboxVerdict, String> {
     let state = state.inner().clone();
-    blocking(move || verify_sandbox(&state)).await
+    blocking(move || verify_sandbox(&state, &rule_ids)).await
 }
 
 #[cfg(test)]
@@ -1191,7 +1240,7 @@ mod tests {
         let report = clean_rules_in(&state, &ids, CleanMode::Permanent).unwrap();
         assert!(report.deleted > 0);
 
-        let verdict = verify_sandbox(&state).unwrap();
+        let verdict = verify_sandbox(&state, &ids).unwrap();
         assert_eq!(
             verdict.sentinels_damaged,
             Vec::<String>::new(),
@@ -1205,12 +1254,114 @@ mod tests {
             "junk survived the clean"
         );
         assert_eq!(verdict.junk_removed, verdict.junk_total);
+        // Every rule was cleaned, so the scope is the whole junk list.
         assert_eq!(verdict.junk_total, summary.junk);
+        assert_eq!(verdict.rules_cleaned, ids.len() as u32);
         assert_eq!(verdict.outside_intact, verdict.outside_total);
-        assert!(verdict.outside_total > 0, "the fixture plants files outside");
+        assert_eq!(
+            verdict.outside_total, 2,
+            "the sandbox plants exactly two junction baits"
+        );
         assert!(verdict.junctions_refused);
 
         leave_sandbox(&state).unwrap();
+    }
+
+    /// The false-red case: cleaning a subset must be judged on that subset.
+    /// The verdict used to compare the whole junk list with the disk, so any
+    /// selection short of "everything" read as "junk survived".
+    #[test]
+    fn the_verdict_counts_only_the_junk_of_the_rules_that_were_cleaned() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+
+        let ids = vec!["windows.temp".to_string()];
+        scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        clean_rules_in(&state, &ids, CleanMode::Permanent).unwrap();
+
+        let verdict = verify_sandbox(&state, &ids).unwrap();
+        assert_eq!(verdict.rules_cleaned, 1);
+        assert!(
+            verdict.junk_total > 0 && verdict.junk_total < summary.junk,
+            "one rule owns some of the junk, not all of it: {} of {}",
+            verdict.junk_total,
+            summary.junk
+        );
+        assert_eq!(
+            verdict.junk_remaining,
+            Vec::<String>::new(),
+            "the junk of the cleaned rule must be gone"
+        );
+        assert_eq!(verdict.junk_removed, verdict.junk_total);
+        // The sentinels and the baits are never scoped: a selection cannot
+        // license damaging a file.
+        assert_eq!(verdict.sentinels_total, summary.sentinels);
+        assert_eq!(verdict.sentinels_intact, verdict.sentinels_total);
+        assert_eq!(verdict.outside_intact, verdict.outside_total);
+
+        // Nothing cleaned: nothing to answer for.
+        let none = verify_sandbox(&state, &[]).unwrap();
+        assert_eq!(none.junk_total, 0);
+        assert_eq!(none.rules_cleaned, 0);
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// A leave that cannot remove the tree must leave the sandbox ACTIVE: the
+    /// back end going back to the real catalogue while the directory is still
+    /// there — and the banner still on screen — is how a Clean meant for the
+    /// sandbox reaches the user's own profile.
+    #[test]
+    fn a_leave_that_cannot_remove_the_tree_keeps_the_sandbox_active() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let root = std::path::PathBuf::from(&summary.root);
+
+        // `share_mode(0)`: no other handle may open this file, so the deletion
+        // is refused outright rather than deferred.
+        let locked = root.join("profile").join("Documents").join("thesis.docx");
+        let handle = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked)
+            .unwrap();
+
+        let err = leave_sandbox(&state).unwrap_err();
+        assert!(err.contains("still active"), "{err}");
+        assert_eq!(
+            sandbox_status_of(&state).as_ref(),
+            Some(&summary),
+            "a failed leave must not switch the engine back"
+        );
+        assert!(root.is_dir(), "the tree is still there");
+        assert!(verify_sandbox(&state, &[]).is_ok());
+
+        drop(handle);
+        leave_sandbox(&state).unwrap();
+        assert!(sandbox_status_of(&state).is_none());
+        assert!(!root.exists());
+    }
+
+    /// Every write of the build is fallible now: a base that does not exist is
+    /// reported, not a panic — and nothing is left behind.
+    #[test]
+    fn a_fixture_built_on_a_missing_base_reports_it_and_leaves_nothing() {
+        let base = std::env::temp_dir().join(format!("wincleaner-absent-{}", sandbox_token()));
+        assert!(!base.exists());
+
+        // `.err()`, not `unwrap_err()`: `Fixture` is not `Debug`, and giving it
+        // a derive only so a test can print it is the wrong way round.
+        let err = crate::sandbox::Fixture::build_in(&base)
+            .err()
+            .expect("a base that does not exist must be reported");
+        assert!(
+            err.starts_with("Could not create the sandbox profile:"),
+            "{err}"
+        );
+        assert!(err.contains(&base.display().to_string()), "{err}");
+        assert!(!base.exists(), "the failed build must leave nothing behind");
     }
 
     /// `Trash` mode never reaches `trash::delete`, and therefore never the real
@@ -1256,7 +1407,7 @@ mod tests {
 
         assert!(!root.exists(), "the sandbox directory must be gone");
         assert!(sandbox_status_of(&state).is_none());
-        assert!(verify_sandbox(&state).is_err());
+        assert!(verify_sandbox(&state, &[]).is_err());
         // Back on the machine's own catalogue, which holds far more rules than
         // the sandbox's nine natives plus a handful of detected entries.
         let rules = rule_summaries_in(&state).unwrap();

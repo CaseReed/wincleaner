@@ -277,9 +277,9 @@ fn the_nine_native_rules_delete_their_junk_and_spare_every_sentinel() {
     // aborts the test instead of being caught afterwards by a count.
     let report = clean_all_permanent(&fx, &rules);
 
-    assert_junk_gone(&fx.junk, "native permanent");
+    assert_junk_gone(&fx.junk_paths(), "native permanent");
     assert_sentinels_intact(&fx, "native permanent");
-    assert_only_junk_disappeared(&before, &fx.snapshot(), &fx.junk);
+    assert_only_junk_disappeared(&before, &fx.snapshot(), &fx.junk_paths());
 
     assert_eq!(
         report.deleted,
@@ -345,9 +345,11 @@ fn the_whole_catalogue_spares_user_data_and_never_crosses_a_junction() {
     // One concrete file per converted glob, so the Winapp2 rules actually
     // delete something instead of walking empty trees.
     let lookup = |n: &str| fx.lookup(n);
-    let mut w2_patterns: Vec<String> = Vec::new();
+    let mut w2_patterns: Vec<(String, String)> = Vec::new();
     for rule in &winapp2 {
-        w2_patterns.extend(resolved_paths_with(rule, &lookup).expect("converted rule resolves"));
+        for pattern in resolved_paths_with(rule, &lookup).expect("converted rule resolves") {
+            w2_patterns.push((rule.id.clone(), pattern));
+        }
     }
     // Every `continue` inside `add_winapp2_junk` is silent: without a floor on
     // what it actually created, a change that made them all fire would leave
@@ -377,9 +379,9 @@ fn the_whole_catalogue_spares_user_data_and_never_crosses_a_junction() {
 
     let report = clean_all_permanent(&fx, &rules);
 
-    assert_junk_gone(&fx.junk, "full catalogue");
+    assert_junk_gone(&fx.junk_paths(), "full catalogue");
     assert_sentinels_intact(&fx, "full catalogue");
-    assert_only_junk_disappeared(&before, &fx.snapshot(), &fx.junk);
+    assert_only_junk_disappeared(&before, &fx.snapshot(), &fx.junk_paths());
 
     assert!(fx.outside.join("secret.txt").exists(), "junction target");
     assert!(fx.outside2.join("also-secret.txt").exists(), "junction target");
@@ -416,12 +418,12 @@ fn trash_mode_hands_the_recycle_bin_exactly_the_junk() {
 
     // The injected trash function deletes nothing: everything must still be there.
     assert_sentinels_intact(&fx, "trash");
-    for p in &fx.junk {
+    for p in &fx.junk_paths() {
         assert!(p.exists(), "the injected trash must not delete: {}", p.display());
     }
 
     let handed: BTreeSet<String> = trashed.iter().map(|p| key(p)).collect();
-    let expected: BTreeSet<String> = fx.junk.iter().map(|p| key(p)).collect();
+    let expected: BTreeSet<String> = fx.junk_paths().iter().map(|p| key(p)).collect();
     assert_eq!(
         handed, expected,
         "Trash mode must hand the recycle bin exactly the junk list"

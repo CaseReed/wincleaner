@@ -57,6 +57,16 @@ pub struct Sentinel {
     pub why: &'static str,
 }
 
+/// One junk file, and the rule that is expected to remove it. The attribution
+/// is what lets the verdict scope its counts to the rules a user actually
+/// cleaned instead of holding them to the whole catalogue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JunkFile {
+    pub path: PathBuf,
+    /// Id of the rule whose pattern this file was written for.
+    pub rule: String,
+}
+
 pub struct Fixture {
     pub base: PathBuf,
     pub profile: PathBuf,
@@ -64,11 +74,24 @@ pub struct Fixture {
     pub outside2: PathBuf,
     pub outside3: PathBuf,
     pub outside4: PathBuf,
-    pub junk: Vec<PathBuf>,
+    pub junk: Vec<JunkFile>,
     pub sentinels: Vec<Sentinel>,
     /// The junction links themselves (not their targets).
     pub junctions: Vec<PathBuf>,
+    /// The sentinels that are reachable ONLY by crossing a junction this
+    /// fixture plants. They are what "the walk refused the indirection" is
+    /// measured on; the other files outside the profile (`control`, the
+    /// junction targets' own `secret.txt`) are ordinary sentinels.
+    pub junction_baits: Vec<PathBuf>,
     vars: HashMap<String, String>,
+}
+
+/// Every failure of the build reads the same way, and names the path.
+fn build_err(path: &Path, e: std::io::Error) -> String {
+    format!(
+        "Could not create the sandbox profile: {e} at {}",
+        path.display()
+    )
 }
 
 /// Windows hands `canonicalize` back a `\\?\` verbatim path. Rule patterns are
@@ -88,6 +111,11 @@ fn is_reparse(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// `CREATE_NO_WINDOW`. Without it every `mklink` call flashes a console window
+/// over the application: the fixture plants two junctions on enter, and the
+/// harness a third and a fourth.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Creates a directory junction. `mklink /J` needs no privilege, unlike
 /// `mklink /D`: the harness — and the sandbox — run unelevated.
 ///
@@ -96,17 +124,24 @@ fn is_reparse(path: &Path) -> bool {
 /// with no reparse-point support), and `sandbox_enter` has to report that as
 /// an error instead of aborting the process.
 fn junction(link: &Path, target: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     let out = std::process::Command::new("cmd")
         .arg("/C")
         .arg("mklink")
         .arg("/J")
         .arg(link)
         .arg(target)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("mklink could not be started: {e}"))?;
     if !out.status.success() {
+        // `mklink` reports its refusals on stdout, not on stderr: dropping it
+        // left the error message empty for the most common failure of all.
         return Err(format!(
-            "mklink /J failed: {}",
+            "mklink /J failed for {} -> {}: {} {}",
+            link.display(),
+            target.display(),
+            String::from_utf8_lossy(&out.stdout).trim(),
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
@@ -124,25 +159,48 @@ impl Fixture {
         strip_verbatim_str(path)
     }
 
-    fn write(path: &Path) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, Fixture::sentinel_content(path)).unwrap();
+    /// Fallible, like every write of the build: `enter_sandbox` runs on a user
+    /// machine, where a full or read-only volume is a condition to report, not
+    /// a reason to abort the process (release builds are `panic = "abort"`).
+    fn write(path: &Path) -> Result<(), String> {
+        let parent = path.parent().unwrap_or(path);
+        std::fs::create_dir_all(parent).map_err(|e| build_err(parent, e))?;
+        std::fs::write(path, Fixture::sentinel_content(path)).map_err(|e| build_err(path, e))
     }
 
-    fn junk_file(&mut self, rel: &str) {
+    fn junk_file(&mut self, rule: &str, rel: &str) -> Result<(), String> {
         let path = self.profile.join(rel);
-        Self::write(&path);
-        self.junk.push(path);
+        Self::write(&path)?;
+        self.junk.push(JunkFile {
+            path,
+            rule: rule.to_string(),
+        });
+        Ok(())
     }
 
-    fn sentinel(&mut self, path: PathBuf, why: &'static str) {
-        Self::write(&path);
+    fn sentinel(&mut self, path: PathBuf, why: &'static str) -> Result<(), String> {
+        Self::write(&path)?;
         self.sentinels.push(Sentinel { path, why });
+        Ok(())
     }
 
-    fn profile_sentinel(&mut self, rel: &str, why: &'static str) {
+    /// A sentinel that can only be reached by crossing a junction: it is
+    /// counted separately in the verdict, as the measure of the indirection
+    /// being refused.
+    fn bait(&mut self, path: PathBuf, why: &'static str) -> Result<(), String> {
+        self.junction_baits.push(path.clone());
+        self.sentinel(path, why)
+    }
+
+    fn profile_sentinel(&mut self, rel: &str, why: &'static str) -> Result<(), String> {
         let path = self.profile.join(rel);
-        self.sentinel(path, why);
+        self.sentinel(path, why)
+    }
+
+    /// Every junk path, in order. The harness compares whole sets of paths; the
+    /// rule attribution only matters to the verdict.
+    pub fn junk_paths(&self) -> Vec<PathBuf> {
+        self.junk.iter().map(|j| j.path.clone()).collect()
     }
 
     pub fn lookup(&self, name: &str) -> Option<String> {
@@ -161,16 +219,14 @@ impl Fixture {
         // Canonicalised so the injected variables and what `canonicalize`
         // returns during the walk describe the same directory: the base sits
         // under `%TMP%`, which Windows may hand out in 8.3 short form.
-        let base = strip_verbatim_str(
-            &std::fs::canonicalize(base)
-                .map_err(|e| format!("{}: {e}", base.display()))?,
-        );
+        let base =
+            strip_verbatim_str(&std::fs::canonicalize(base).map_err(|e| build_err(base, e))?);
         let profile = base.join("profile");
         let local = profile.join("AppData").join("Local");
         let roaming = profile.join("AppData").join("Roaming");
         let temp = local.join("Temp");
-        std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(&roaming).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&temp).map_err(|e| build_err(&temp, e))?;
+        std::fs::create_dir_all(&roaming).map_err(|e| build_err(&roaming, e))?;
 
         let vars = HashMap::from([
             ("USERPROFILE".to_string(), profile.display().to_string()),
@@ -189,12 +245,13 @@ impl Fixture {
             junk: Vec::new(),
             sentinels: Vec::new(),
             junctions: Vec::new(),
+            junction_baits: Vec::new(),
             vars,
         };
 
-        fx.populate_junk();
-        fx.populate_sentinels();
-        fx.populate_detect_files();
+        fx.populate_junk()?;
+        fx.populate_sentinels()?;
+        fx.populate_detect_files()?;
         fx.populate_junctions()?;
         Ok(fx)
     }
@@ -202,28 +259,44 @@ impl Fixture {
     /// One or more files for EVERY `kind = "files"` rule of `rules.toml`.
     /// A new rule with no entry here fails the harness (the scan finds nothing
     /// for it), which is the point.
-    fn populate_junk(&mut self) {
+    fn populate_junk(&mut self) -> Result<(), String> {
         // windows.temp — `%TEMP%\**\*`, recursive.
-        self.junk_file(r"AppData\Local\Temp\stray.tmp");
-        self.junk_file(r"AppData\Local\Temp\nested\installer.log");
-        self.junk_file(r"AppData\Local\Temp\nested\deeper\chunk.bin");
+        self.junk_file("windows.temp", r"AppData\Local\Temp\stray.tmp")?;
+        self.junk_file("windows.temp", r"AppData\Local\Temp\nested\installer.log")?;
+        self.junk_file("windows.temp", r"AppData\Local\Temp\nested\deeper\chunk.bin")?;
         // The TOCTOU subject. `zz_` so it sorts last inside %TEMP%: the swap
         // is performed on the FIRST deletion of the rule, and this path must
         // still be ahead of the cursor when it happens.
-        self.junk_file(&format!(r"AppData\Local\Temp\{TOCTOU_DIR}\victim.txt"));
+        self.junk_file(
+            "windows.temp",
+            &format!(r"AppData\Local\Temp\{TOCTOU_DIR}\victim.txt"),
+        )?;
 
         // windows.thumbnails — non-recursive, two prefixes.
-        self.junk_file(r"AppData\Local\Microsoft\Windows\Explorer\thumbcache_1024.db");
-        self.junk_file(r"AppData\Local\Microsoft\Windows\Explorer\iconcache_32.db");
+        self.junk_file(
+            "windows.thumbnails",
+            r"AppData\Local\Microsoft\Windows\Explorer\thumbcache_1024.db",
+        )?;
+        self.junk_file(
+            "windows.thumbnails",
+            r"AppData\Local\Microsoft\Windows\Explorer\iconcache_32.db",
+        )?;
 
         // windows.explorer-recent — `*.lnk` (non-recursive) + AutomaticDestinations.
-        self.junk_file(r"AppData\Roaming\Microsoft\Windows\Recent\report.lnk");
         self.junk_file(
+            "windows.explorer-recent",
+            r"AppData\Roaming\Microsoft\Windows\Recent\report.lnk",
+        )?;
+        self.junk_file(
+            "windows.explorer-recent",
             r"AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\1b4dd67f29cb1962.automaticDestinations-ms",
-        );
+        )?;
 
         // windows.crash-dumps
-        self.junk_file(r"AppData\Local\CrashDumps\wincleaner.exe.4242.dmp");
+        self.junk_file(
+            "windows.crash-dumps",
+            r"AppData\Local\CrashDumps\wincleaner.exe.4242.dmp",
+        )?;
 
         // edge.cache — one file per declared pattern.
         for rel in [
@@ -235,9 +308,15 @@ impl Fixture {
             r"Default\Service Worker\CacheStorage\0a1b\index",
             r"Default\Service Worker\ScriptCache\index",
         ] {
-            self.junk_file(&format!(r"AppData\Local\Microsoft\Edge\User Data\{rel}"));
+            self.junk_file(
+                "edge.cache",
+                &format!(r"AppData\Local\Microsoft\Edge\User Data\{rel}"),
+            )?;
         }
-        self.junk_file(r"AppData\Local\Microsoft\Edge\User Data\ShaderCache\GPUCache\data_1");
+        self.junk_file(
+            "edge.cache",
+            r"AppData\Local\Microsoft\Edge\User Data\ShaderCache\GPUCache\data_1",
+        )?;
 
         // chrome.cache — same, plus a second profile directory so the `*`
         // level is really expanded.
@@ -251,23 +330,35 @@ impl Fixture {
             r"Default\Service Worker\ScriptCache\index",
             r"Profile 1\Cache\Cache_Data\f_000003",
         ] {
-            self.junk_file(&format!(r"AppData\Local\Google\Chrome\User Data\{rel}"));
+            self.junk_file(
+                "chrome.cache",
+                &format!(r"AppData\Local\Google\Chrome\User Data\{rel}"),
+            )?;
         }
-        self.junk_file(r"AppData\Local\Google\Chrome\User Data\ShaderCache\GPUCache\data_1");
+        self.junk_file(
+            "chrome.cache",
+            r"AppData\Local\Google\Chrome\User Data\ShaderCache\GPUCache\data_1",
+        )?;
 
         // firefox.cache
         self.junk_file(
+            "firefox.cache",
             r"AppData\Local\Mozilla\Firefox\Profiles\a1b2c3d4.default-release\cache2\entries\4F2A",
-        );
+        )?;
         self.junk_file(
+            "firefox.cache",
             r"AppData\Local\Mozilla\Firefox\Profiles\a1b2c3d4.default-release\startupCache\startupCache.8.little",
-        );
+        )?;
 
         // npm.cache
-        self.junk_file(r"AppData\Local\npm-cache\_cacache\content-v2\sha512\ab\cd\ef01");
+        self.junk_file(
+            "npm.cache",
+            r"AppData\Local\npm-cache\_cacache\content-v2\sha512\ab\cd\ef01",
+        )?;
+        Ok(())
     }
 
-    fn populate_sentinels(&mut self) {
+    fn populate_sentinels(&mut self) -> Result<(), String> {
         // (a) User data. No rule, native or converted, may name these: the
         // Winapp2 converter refuses the first segment under %USERPROFILE%.
         for (rel, why) in [
@@ -281,7 +372,7 @@ impl Fixture {
             (r"Documents\project\.git\HEAD", "git repository"),
             (r"Documents\project\.env", "project secret"),
         ] {
-            self.profile_sentinel(rel, why);
+            self.profile_sentinel(rel, why)?;
         }
 
         // (b) Inside app folders, right next to junk, but not matching the rule.
@@ -296,12 +387,12 @@ impl Fixture {
             ("prefs.js", "user preferences"),
             ("cookies.sqlite", "session cookies"),
         ] {
-            self.profile_sentinel(&format!(r"{ff}\{name}"), why);
+            self.profile_sentinel(&format!(r"{ff}\{name}"), why)?;
         }
         self.profile_sentinel(
             &format!(r"{ff}\extensions\ublock@raymondhill.net.xpi"),
             "installed extension",
-        );
+        )?;
 
         // (c) Sibling directories with a lookalike name. Windows file names are
         // case-insensitive, so `Cache2` vs `cache2` would be the SAME
@@ -320,7 +411,7 @@ impl Fixture {
                 "file whose name merely starts like cache2",
             ),
         ] {
-            self.profile_sentinel(&rel, why);
+            self.profile_sentinel(&rel, why)?;
         }
 
         // Chromium-family internals, sitting right next to the caches the rules
@@ -359,18 +450,18 @@ impl Fixture {
                     "file whose name merely starts like CacheStorage",
                 ),
             ] {
-                self.profile_sentinel(&format!(r"{browser}\Default\{name}"), why);
+                self.profile_sentinel(&format!(r"{browser}\Default\{name}"), why)?;
             }
         }
 
         // npm's own configuration sits next to its cache.
-        self.profile_sentinel(r".npmrc", "npm configuration");
+        self.profile_sentinel(r".npmrc", "npm configuration")?;
 
         // Pinned taskbar items: the rule stops at Recent\*.lnk on purpose.
         self.profile_sentinel(
             r"AppData\Roaming\Microsoft\Windows\Recent\CustomDestinations\pinned.customDestinations-ms",
             "items the user pinned by hand",
-        );
+        )?;
 
         // (f) One level deeper than a NON-RECURSIVE rule, and carrying the
         // very extension that rule matches. Each of these is deleted the day
@@ -399,41 +490,45 @@ impl Fixture {
                 "a file one level below CrashDumps\\*, which is not recursive",
             ),
         ] {
-            self.profile_sentinel(rel, why);
+            self.profile_sentinel(rel, why)?;
         }
 
         // (d) Reachable only through a junction, and (e) the control directory
         // no rule ever names.
         let outside = self.outside.join("secret.txt");
-        self.sentinel(outside, "outside the profile, behind a junction");
+        self.sentinel(outside, "outside the profile, behind a junction")?;
         let outside2 = self.outside2.join("also-secret.txt");
         self.sentinel(
             outside2,
             "outside the profile, behind a junction planted in a cache",
-        );
+        )?;
         // Bait: reached through the %TEMP% junction, this name matches
         // `%TEMP%\**\*`; reached through the Chrome cache junction, that one
         // matches `...\Cache\**\*`. They survive only because the walk refuses
         // to cross the junction at all.
         let bait = self.outside.join("bait.tmp");
-        self.sentinel(
+        self.bait(
             bait,
             "would match %TEMP%\\**\\* if the junction were traversed",
-        );
+        )?;
         let bait2 = self.outside2.join("Cache_Data").join("f_000009");
-        self.sentinel(
+        self.bait(
             bait2,
             "would match the Chrome cache glob if the junction were traversed",
-        );
+        )?;
         // Bait behind the junction that `junction_over_crash_dumps` plants ON
         // a walk root. Its name matches `%LOCALAPPDATA%\CrashDumps\*`, so it
         // survives only because `confined_root` refuses to walk a root that
         // carries FILE_ATTRIBUTE_REPARSE_POINT.
+        // Not a junction bait as far as the verdict is concerned: the junction
+        // that makes it reachable is planted by the harness
+        // (`junction_over_crash_dumps`), never by Sandbox mode. It stays an
+        // ordinary sentinel — a file that must survive whatever happens.
         let bait3 = self.outside3.join("bait.dmp");
         self.sentinel(
             bait3,
             "would match %LOCALAPPDATA%\\CrashDumps\\* if a junction AT the walk root were walked",
-        );
+        )?;
         // Victim of the TOCTOU swap: after the scan, `%TEMP%\<TOCTOU_DIR>`
         // becomes a junction to this directory, so the already-scanned path
         // `%TEMP%\<TOCTOU_DIR>\victim.txt` now resolves here. Only
@@ -443,17 +538,18 @@ impl Fixture {
         self.sentinel(
             victim,
             "would be deleted if deletable_path stopped re-resolving the path before deleting",
-        );
+        )?;
 
         let control = self.base.join("control").join("untouched.dat");
-        self.sentinel(control, "control directory, named by no rule");
+        self.sentinel(control, "control directory, named by no rule")?;
+        Ok(())
     }
 
     /// `DetectFile` targets, so a sample of Winapp2 entries becomes "detected"
     /// against this tree and nothing else. The Chromium and Edge entries are
     /// detected as a side effect of the browser cache fixtures above
     /// (`DetectFile=%LocalAppData%\Google\Chrome*`).
-    fn populate_detect_files(&mut self) {
+    fn populate_detect_files(&mut self) -> Result<(), String> {
         for rel in [
             r"AppData\Local\Postman",
             r"AppData\Roaming\Slack",
@@ -467,8 +563,10 @@ impl Fixture {
             r"AppData\Local\Microsoft\PowerToys\ZoomIt",
             r"AppData\Local\Packages\DropboxInc.Dropbox_xbfy0k16fey96",
         ] {
-            std::fs::create_dir_all(self.profile.join(rel)).unwrap();
+            let dir = self.profile.join(rel);
+            std::fs::create_dir_all(&dir).map_err(|e| build_err(&dir, e))?;
         }
+        Ok(())
     }
 
     /// Two junctions pointing outside the profile: one on the `%TEMP%` walk,
@@ -500,7 +598,7 @@ impl Fixture {
         std::fs::remove_dir_all(&root).unwrap();
         let prefix = root.to_string_lossy().to_lowercase();
         let under = |p: &Path| p.to_string_lossy().to_lowercase().starts_with(&prefix);
-        self.junk.retain(|p| !under(p));
+        self.junk.retain(|j| !under(&j.path));
         self.sentinels.retain(|s| !under(&s.path));
         junction(&root, &self.outside3).expect("mklink /J over the crash-dump root");
         self.junctions.push(root.clone());
@@ -541,7 +639,10 @@ impl Fixture {
     /// on that number: every `continue` below is silent, so a change that made
     /// them all fire would otherwise leave the Winapp2 rules walking empty
     /// trees while the suite stayed green.
-    pub fn add_winapp2_junk(&mut self, patterns: &[String]) -> usize {
+    /// `patterns` pairs each resolved glob with the id of the rule it came
+    /// from, so the file created for it is attributed to that rule and the
+    /// verdict can scope its counts to what was actually cleaned.
+    pub fn add_winapp2_junk(&mut self, patterns: &[(String, String)]) -> usize {
         // Windows file names are case-insensitive and Winapp2 spells the same
         // directory several ways (`DropBox` and `Dropbox`): the bookkeeping has
         // to be case-insensitive too, or the same file would be created twice
@@ -550,13 +651,14 @@ impl Fixture {
         let mut known: BTreeSet<String> = self
             .junk
             .iter()
+            .map(|j| &j.path)
             .chain(self.sentinels.iter().map(|s| &s.path))
             .chain(self.junctions.iter())
             .map(|p| key(p))
             .collect();
 
         let mut created = 0usize;
-        for pattern in patterns {
+        for (rule, pattern) in patterns {
             let Some(path) = concrete_path(pattern) else {
                 continue;
             };
@@ -577,7 +679,10 @@ impl Fixture {
             if std::fs::write(&path, Fixture::sentinel_content(&path)).is_err() {
                 continue;
             }
-            self.junk.push(path);
+            self.junk.push(JunkFile {
+                path,
+                rule: rule.clone(),
+            });
             created += 1;
         }
         created
@@ -687,9 +792,14 @@ pub struct SandboxManifest {
     pub root: PathBuf,
     pub profile_dir: PathBuf,
     pub sentinels: Vec<ManifestSentinel>,
-    pub junk: Vec<PathBuf>,
-    /// The sentinels that do NOT live under `profile_dir`: junction targets,
-    /// their bait, and the control directory no rule ever names.
+    /// Every junk file, with the rule it belongs to: the verdict counts only
+    /// the entries of the rules that were actually cleaned.
+    pub junk: Vec<JunkFile>,
+    /// The sentinels reachable ONLY by crossing a junction the sandbox plants
+    /// — two of them. The other files outside the fake profile (the junction
+    /// targets' own content, the control directory) are ordinary sentinels;
+    /// the harness-only junctions of `outside3` / `outside4` are never planted
+    /// in Sandbox mode, so their files are not baits here either.
     pub outside: Vec<PathBuf>,
     /// The junction links themselves (not their targets).
     pub junctions: Vec<PathBuf>,
@@ -713,11 +823,17 @@ pub struct SandboxVerdict {
     /// Paths of the sentinels that were deleted or rewritten. Empty is the
     /// only acceptable answer.
     pub sentinels_damaged: Vec<String>,
+    /// Junk **of the rules that were cleaned**, and nothing else: a user who
+    /// cleans nine of eighty rules is told about the junk of those nine, not
+    /// held to the whole catalogue.
     pub junk_total: u32,
     pub junk_removed: u32,
     pub junk_remaining: Vec<String>,
-    /// Sentinels outside the fake profile: reachable only through a junction,
-    /// or named by no rule at all.
+    /// How many rules the counts above are scoped to.
+    pub rules_cleaned: u32,
+    /// The junction baits: files that a rule's glob does match, but that can
+    /// only be reached by crossing a junction. Untouched is the only
+    /// acceptable answer.
     pub outside_total: u32,
     pub outside_intact: u32,
     /// Every junction link still stands and every file behind one is intact:
@@ -736,26 +852,26 @@ impl Fixture {
                 marker: String::from_utf8_lossy(&Fixture::sentinel_content(&s.path)).into_owned(),
             })
             .collect();
-        let outside = self
-            .sentinels
-            .iter()
-            .map(|s| s.path.clone())
-            .filter(|p| !p.starts_with(&self.profile))
-            .collect();
         SandboxManifest {
             root: self.base.clone(),
             profile_dir: self.profile.clone(),
             sentinels,
             junk: self.junk.clone(),
-            outside,
+            outside: self.junction_baits.clone(),
             junctions: self.junctions.clone(),
         }
     }
 }
 
-/// Compares the disk with the manifest. Pure over `(manifest, disk)`: nothing
-/// here is remembered from the run that did the cleaning.
-pub fn verify(manifest: &SandboxManifest) -> SandboxVerdict {
+/// Compares the disk with the manifest. Pure over `(manifest, cleaned, disk)`:
+/// nothing here is remembered from the run that did the cleaning.
+///
+/// `cleaned` is the list of rule ids the user actually cleaned. The sentinels
+/// and the junction baits are held to the whole fixture — no selection can
+/// license damaging a file — but the junk counts are scoped to those rules:
+/// holding a partial selection to the whole catalogue would paint a correct
+/// run red for the only reason that the user did not tick every box.
+pub fn verify(manifest: &SandboxManifest, cleaned: &[String]) -> SandboxVerdict {
     let intact =
         |s: &ManifestSentinel| std::fs::read(&s.path).is_ok_and(|b| b == s.marker.as_bytes());
     let damaged: Vec<String> = manifest
@@ -764,12 +880,19 @@ pub fn verify(manifest: &SandboxManifest) -> SandboxVerdict {
         .filter(|s| !intact(s))
         .map(|s| s.path.display().to_string())
         .collect();
-    let remaining: Vec<String> = manifest
+
+    let scope: BTreeSet<&str> = cleaned.iter().map(|s| s.as_str()).collect();
+    let in_scope: Vec<&JunkFile> = manifest
         .junk
         .iter()
-        .filter(|p| p.exists())
-        .map(|p| p.display().to_string())
+        .filter(|j| scope.contains(j.rule.as_str()))
         .collect();
+    let remaining: Vec<String> = in_scope
+        .iter()
+        .filter(|j| j.path.exists())
+        .map(|j| j.path.display().to_string())
+        .collect();
+
     let outside_ok = manifest
         .sentinels
         .iter()
@@ -783,9 +906,10 @@ pub fn verify(manifest: &SandboxManifest) -> SandboxVerdict {
         sentinels_total: manifest.sentinels.len() as u32,
         sentinels_intact: manifest.sentinels.len() as u32 - damaged.len() as u32,
         sentinels_damaged: damaged,
-        junk_total: manifest.junk.len() as u32,
-        junk_removed: manifest.junk.len() as u32 - remaining.len() as u32,
+        junk_total: in_scope.len() as u32,
+        junk_removed: in_scope.len() as u32 - remaining.len() as u32,
         junk_remaining: remaining,
+        rules_cleaned: scope.len() as u32,
         outside_total: manifest.outside.len() as u32,
         outside_intact: outside_ok,
         junctions_refused,
@@ -815,13 +939,16 @@ pub fn full_catalogue(fx: &Fixture) -> Result<(Vec<Rule>, Vec<Rule>, ConversionR
     Ok((native, winapp2, report))
 }
 
-/// Every path the given rules resolve to against this fixture, so
-/// `add_winapp2_junk` can materialise one concrete file per converted glob.
-pub fn resolved_patterns(fx: &Fixture, rules: &[Rule]) -> Result<Vec<String>, String> {
+/// Every path the given rules resolve to against this fixture, paired with the
+/// id of the rule it came from, so `add_winapp2_junk` can materialise one
+/// concrete file per converted glob and attribute it to its rule.
+pub fn resolved_patterns(fx: &Fixture, rules: &[Rule]) -> Result<Vec<(String, String)>, String> {
     let lookup: EnvLookup = &|n: &str| fx.lookup(n);
     let mut out = Vec::new();
     for rule in rules {
-        out.extend(crate::rules::resolved_paths_with(rule, lookup).map_err(|e| e.to_string())?);
+        for pattern in crate::rules::resolved_paths_with(rule, lookup).map_err(|e| e.to_string())? {
+            out.push((rule.id.clone(), pattern));
+        }
     }
     Ok(out)
 }
@@ -849,9 +976,13 @@ pub const SANDBOX_BIN: &str = "recycle-bin";
 /// checking the cautious mode wants to see.
 ///
 /// The destination name is the path relative to the root with its separators
-/// flattened, so two files sharing a base name cannot collide. `recycle-bin`
-/// sits beside `profile`, not under it, so no rule can ever name what landed
-/// there and the verdict cannot mistake it for a survivor.
+/// flattened, so two files sharing a base name cannot collide. Two *runs* can
+/// still land on the same flattened name — the same rule cleaned twice on a
+/// re-created file — so an existing destination gets a `~1`, `~2`... suffix
+/// rather than being silently overwritten: the bin is supposed to be
+/// recoverable. `recycle-bin` sits beside `profile`, not under it, so no rule
+/// can ever name what landed there and the verdict cannot mistake it for a
+/// survivor.
 pub fn sandbox_trash(root: &Path, path: &Path) -> Result<(), String> {
     // `clean::deletable_path` hands its caller the canonical path, verbatim
     // `\\?\` prefix included; the root is a plain path. Reconcile the two forms
@@ -867,5 +998,19 @@ pub fn sandbox_trash(root: &Path, path: &Path) -> Result<(), String> {
         .collect();
     let bin = root.join(SANDBOX_BIN);
     std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
-    std::fs::rename(path, bin.join(flat)).map_err(|e| e.to_string())
+    std::fs::rename(path, free_name(&bin, &flat)).map_err(|e| e.to_string())
+}
+
+/// `<bin>\<flat>`, or the first `<bin>\<flat>~n` that does not exist yet.
+/// Bounded: after a thousand collisions the last name is returned and `rename`
+/// decides — an unbounded loop here would hang a clean instead of failing it.
+fn free_name(bin: &Path, flat: &str) -> PathBuf {
+    let mut candidate = bin.join(flat);
+    for n in 1..1000 {
+        if !candidate.exists() {
+            break;
+        }
+        candidate = bin.join(format!("{flat}~{n}"));
+    }
+    candidate
 }
