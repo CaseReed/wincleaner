@@ -24,6 +24,11 @@ WinCleaner ne contient pas de « nettoyeur de registre » et n'en contiendra jam
     cd src-tauri
     cargo test
 
+Les vérifications qui ne peuvent pas être automatisées sans détruire des
+données (vidage de la corbeille, désactivation réelle d'un programme au
+démarrage) sont décrites dans `docs/verification-manuelle.md` et sont à
+rejouer avant chaque release.
+
 ## Build
 
     npm run tauri build
