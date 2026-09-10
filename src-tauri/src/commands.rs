@@ -19,6 +19,10 @@ pub struct RuleSummary {
     pub kind: RuleKind,
     /// Case cochée au premier lancement (cf. `rules.toml`).
     pub default_checked: bool,
+    /// Renseigné quand la règle ne s'applique pas sur cette machine. Le front
+    /// grise la ligne et affiche ce motif ; la règle n'est ni analysée ni
+    /// nettoyée, même si son identifiant était envoyé.
+    pub unavailable_reason: Option<String>,
 }
 
 fn find_rules(rule_ids: &[String]) -> Result<Vec<Rule>, String> {
@@ -56,7 +60,8 @@ pub fn list_rules() -> Result<Vec<RuleSummary>, String> {
             label: r.label,
             risk: r.risk,
             kind: r.kind,
-            default_checked: r.default_checked,
+            default_checked: r.default_checked && r.unavailable_reason.is_none(),
+            unavailable_reason: r.unavailable_reason,
         })
         .collect())
 }
@@ -79,7 +84,18 @@ fn scan_rules(rule_ids: &[String]) -> Result<Vec<ScanResult>, String> {
     let rules = find_rules(rule_ids)?;
     rules
         .iter()
-        .map(|r| scan_rule(r).map_err(|e| e.to_string()))
+        .map(|r| match &r.unavailable_reason {
+            // La règle ne s'applique pas sur cette machine : rien à parcourir,
+            // et surtout rien à supprimer. Comptée « ignorée », pas en erreur.
+            Some(_) => Ok(ScanResult {
+                rule_id: r.id.clone(),
+                file_count: 0,
+                total_bytes: 0,
+                paths: Vec::new(),
+                skipped: 1,
+            }),
+            None => scan_rule(r).map_err(|e| e.to_string()),
+        })
         .collect()
 }
 
@@ -120,8 +136,9 @@ fn ordre_de_nettoyage(mut rules: Vec<Rule>) -> Vec<Rule> {
 
 fn clean_rules(rule_ids: &[String], mode: CleanMode) -> Result<CleanReport, String> {
     let rules = ordre_de_nettoyage(find_rules(rule_ids)?);
-    Ok(clean_all(&rules, |rule| {
-        clean_rule(rule, mode).map_err(|e| e.to_string())
+    Ok(clean_all(&rules, |rule| match &rule.unavailable_reason {
+        Some(raison) => Err(raison.clone()),
+        None => clean_rule(rule, mode).map_err(|e| e.to_string()),
     }))
 }
 
@@ -240,6 +257,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::Files,
             default_checked: true,
+            unavailable_reason: None,
         }
     }
 
@@ -274,7 +292,27 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            unavailable_reason: None,
         }
+    }
+
+    /// Une règle indisponible ne doit jamais atteindre le disque, même si le
+    /// front envoie son identifiant.
+    #[test]
+    fn une_regle_indisponible_nest_ni_analysee_ni_nettoyee() {
+        let mut regle = regle("x.y");
+        regle.paths = vec![r"%TEMP%\**\*".into()];
+        regle.unavailable_reason = Some("%TEMP% sort du profil".into());
+
+        let rapport = clean_all(std::slice::from_ref(&regle), |r| {
+            match &r.unavailable_reason {
+                Some(raison) => Err(raison.clone()),
+                None => panic!("une règle indisponible ne doit pas être nettoyée"),
+            }
+        });
+        assert_eq!(rapport.deleted, 0);
+        assert_eq!(rapport.skipped.len(), 1);
+        assert_eq!(rapport.skipped[0].path, "x.y");
     }
 
     #[test]

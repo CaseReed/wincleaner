@@ -350,6 +350,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::Files,
             default_checked: true,
+            unavailable_reason: None,
         }
     }
 
@@ -635,6 +636,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            unavailable_reason: None,
         };
         let query = || Ok((7u64, 700u64));
         let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();
@@ -657,6 +659,7 @@ mod tests {
             risk: Risk::Low,
             kind: RuleKind::RecycleBin,
             default_checked: false,
+            unavailable_reason: None,
         };
         let query = || Err("échec".to_string());
         let res = scan_rule_with_api(&rule, &lookup, &query).unwrap();

@@ -234,6 +234,7 @@ export function CleanPanel() {
               <ul className="overflow-hidden rounded-lg border bg-card">
                 {catRules.map((rule, index) => {
                   const result = (results ?? []).find((r) => r.rule_id === rule.id);
+                  const indisponible = rule.unavailable_reason;
                   return (
                     <li
                       key={rule.id}
@@ -244,11 +245,16 @@ export function CleanPanel() {
                           id={rule.id}
                           aria-label={rule.label}
                           checked={selected.has(rule.id)}
+                          disabled={!!indisponible}
                           onCheckedChange={() => toggleRule(rule.id)}
                         />
                         <span
-                          className="min-w-0 flex-1 cursor-pointer truncate text-sm"
-                          onClick={() => toggleRule(rule.id)}
+                          className={
+                            indisponible
+                              ? "min-w-0 flex-1 truncate text-sm text-muted-foreground"
+                              : "min-w-0 flex-1 cursor-pointer truncate text-sm"
+                          }
+                          onClick={() => !indisponible && toggleRule(rule.id)}
                         >
                           {rule.label}
                         </span>
@@ -290,6 +296,14 @@ export function CleanPanel() {
                           </div>
                         )}
                       </div>
+                      {indisponible && (
+                        <p
+                          data-testid={`unavailable-${rule.id}`}
+                          className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
+                        >
+                          Indisponible sur ce poste : {indisponible}
+                        </p>
+                      )}
                       {rule.kind === "recycle-bin" && (
                         <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
                           Vide la corbeille de tous les volumes du poste, y compris

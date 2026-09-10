@@ -45,6 +45,12 @@ pub struct Rule {
     /// hors du profil, ou données curées à la main.
     #[serde(default = "coche_par_defaut")]
     pub default_checked: bool,
+    /// Renseigné quand la règle ne s'applique pas sur CETTE machine :
+    /// variable absente, ou pointant hors du profil. La règle est chargée,
+    /// affichée grisée avec ce motif, et jamais analysée ni nettoyée. Ce
+    /// n'est pas un rules.toml fautif, donc ce n'est pas bloquant.
+    #[serde(skip)]
+    pub unavailable_reason: Option<String>,
 }
 
 fn coche_par_defaut() -> bool {
@@ -239,21 +245,33 @@ pub fn resolved_excludes_with(rule: &Rule, lookup: EnvLookup) -> Result<Vec<Stri
     rule.exclude.iter().map(|p| resolve_one(p, lookup)).collect()
 }
 
+/// Sépare « rules.toml est mal écrit » — un bug du binaire, bloquant — de
+/// « cette règle ne s'applique pas sur cette machine ». Un poste où %TEMP%
+/// est redirigé vers D:\Temp, ou %APPDATA% vers un partage par stratégie de
+/// groupe, sont des configurations légitimes : elles désactivent la règle
+/// concernée, elles n'empêchent pas l'application de démarrer.
 pub fn load_rules_with(src: &str, lookup: EnvLookup) -> Result<Vec<Rule>, RuleError> {
-    let parsed: RuleFile =
-        toml::from_str(src).map_err(|e| RuleError::Toml(e.to_string()))?;
+    let parsed: RuleFile = toml::from_str(src).map_err(|e| RuleError::Toml(e.to_string()))?;
     let mut seen: HashSet<String> = HashSet::new();
-    for rule in &parsed.rule {
+    let mut out: Vec<Rule> = Vec::with_capacity(parsed.rule.len());
+    for mut rule in parsed.rule {
         if !seen.insert(rule.id.clone()) {
             return Err(RuleError::DuplicateId(rule.id.clone()));
         }
         if rule.kind == RuleKind::Files && rule.paths.is_empty() {
             return Err(RuleError::EmptyPaths(rule.id.clone()));
         }
-        resolved_paths_with(rule, lookup)?;
-        resolved_excludes_with(rule, lookup)?;
+        match resolved_paths_with(&rule, lookup).and_then(|_| resolved_excludes_with(&rule, lookup))
+        {
+            Ok(_) => {}
+            Err(e @ (RuleError::MissingVar(_) | RuleError::OutsideProfile(_))) => {
+                rule.unavailable_reason = Some(e.to_string());
+            }
+            Err(e) => return Err(e),
+        }
+        out.push(rule);
     }
-    Ok(parsed.rule)
+    Ok(out)
 }
 
 pub fn load_rules(src: &str) -> Result<Vec<Rule>, RuleError> {
@@ -368,21 +386,11 @@ risk = "low""#,
     }
 
     #[test]
-    fn refuse_un_chemin_hors_du_profil() {
+    fn une_variable_hors_profil_desactive_la_regle_sans_bloquer_le_chargement() {
+        // Poste d'entreprise où %TEMP% est redirigé vers D:\Temp, ou %APPDATA%
+        // vers un partage par stratégie de groupe : ce n'est pas un rules.toml
+        // fautif, c'est la machine. L'application doit démarrer.
         let src = toml_one(
-            r#"id = "x.y"
-category = "Système"
-label = "Test"
-paths = ["%USERPROFILE%\\**\\*"]
-exclude = []
-risk = "low""#,
-        );
-        let hors_profil = |name: &str| match name {
-            "USERPROFILE" => Some(r"C:\Users\Autre".to_string()),
-            _ => fake_env(name),
-        };
-        // %TEMP% pointe sur C:\Users\Test alors que le profil est C:\Users\Autre
-        let src2 = toml_one(
             r#"id = "x.y"
 category = "Système"
 label = "Test"
@@ -390,9 +398,68 @@ paths = ["%TEMP%\\**\\*"]
 exclude = []
 risk = "low""#,
         );
-        assert!(load_rules_with(&src, &hors_profil).is_ok());
-        let err = load_rules_with(&src2, &hors_profil).unwrap_err();
-        assert!(matches!(err, RuleError::OutsideProfile(_)));
+        let temp_ailleurs = |name: &str| match name {
+            "TEMP" => Some(r"D:\Temp".to_string()),
+            _ => fake_env(name),
+        };
+        let rules = load_rules_with(&src, &temp_ailleurs).unwrap();
+        assert_eq!(rules.len(), 1);
+        let raison = rules[0]
+            .unavailable_reason
+            .as_deref()
+            .expect("la règle doit être marquée indisponible");
+        assert!(raison.contains("sort du profil"), "raison = {raison}");
+    }
+
+    #[test]
+    fn une_variable_absente_desactive_la_regle_sans_bloquer_le_chargement() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%APPDATA%\\*"]
+exclude = []
+risk = "low""#,
+        );
+        let sans_appdata = |name: &str| match name {
+            "APPDATA" => None,
+            _ => fake_env(name),
+        };
+        let rules = load_rules_with(&src, &sans_appdata).unwrap();
+        assert!(rules[0].unavailable_reason.is_some());
+    }
+
+    #[test]
+    fn une_regle_resolvable_nest_pas_marquee_indisponible() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%TEMP%\\**\\*"]
+exclude = []
+risk = "low""#,
+        );
+        assert!(load_rules_with(&src, &fake_env).unwrap()[0]
+            .unavailable_reason
+            .is_none());
+    }
+
+    /// Une erreur structurelle reste bloquante : c'est un bug du binaire, pas
+    /// une particularité du poste.
+    #[test]
+    fn un_segment_parent_reste_bloquant() {
+        let src = toml_one(
+            r#"id = "x.y"
+category = "Système"
+label = "Test"
+paths = ["%TEMP%\\..\\..\\Windows\\*"]
+exclude = []
+risk = "low""#,
+        );
+        assert!(matches!(
+            load_rules_with(&src, &fake_env).unwrap_err(),
+            RuleError::ParentSegment(_)
+        ));
     }
 
     #[test]
@@ -674,6 +741,7 @@ default_checked = false"#,
             risk: Risk::Low,
             kind: RuleKind::Files,
             default_checked: true,
+            unavailable_reason: None,
         };
         let got = resolved_paths_with(&rule, &fake_env).unwrap();
         assert_eq!(got, vec![r"C:\Users\Test\AppData\Local\Temp\**\*"]);

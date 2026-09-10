@@ -208,6 +208,30 @@ describe("CleanPanel", () => {
     expect(screen.getByTestId("recycle-order-note")).toHaveTextContent(/vidée en premier/);
   });
 
+  it("grise une règle indisponible et affiche le motif", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([
+      {
+        ...REGLES[0],
+        default_checked: false,
+        unavailable_reason:
+          "le chemin « %TEMP%\**\* » sort du profil utilisateur",
+      },
+      REGLES[1],
+    ]);
+    render(<CleanPanel />);
+    const case_ = await screen.findByLabelText("Fichiers temporaires");
+    expect(case_).toHaveAttribute("aria-disabled", "true");
+    expect(case_).not.toBeChecked();
+    expect(screen.getByTestId("unavailable-windows.temp")).toHaveTextContent(
+      /sort du profil utilisateur/
+    );
+
+    // Elle n'est jamais envoyée au back, même en cliquant la ligne.
+    await user.click(screen.getByRole("button", { name: /Analyser/ }));
+    await waitFor(() => expect(api.scan).toHaveBeenCalledWith(["edge.cache"]));
+  });
+
   it("demande confirmation avant de nettoyer", async () => {
     const user = userEvent.setup();
     api.scan.mockResolvedValue([

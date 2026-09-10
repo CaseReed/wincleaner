@@ -53,9 +53,9 @@ describe("api", () => {
 
   it("groupByCategory conserve l'ordre d'apparition des catégories", () => {
     const rules: RuleSummary[] = [
-      { id: "a", category: "Système", label: "A", risk: "low", kind: "files", default_checked: true },
-      { id: "b", category: "Navigateurs", label: "B", risk: "low", kind: "files", default_checked: true },
-      { id: "c", category: "Système", label: "C", risk: "medium", kind: "files", default_checked: false },
+      { id: "a", category: "Système", label: "A", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
+      { id: "b", category: "Navigateurs", label: "B", risk: "low", kind: "files", default_checked: true, unavailable_reason: null },
+      { id: "c", category: "Système", label: "C", risk: "medium", kind: "files", default_checked: false, unavailable_reason: null },
     ];
     const grouped = groupByCategory(rules);
     expect(grouped.map(([cat]) => cat)).toEqual(["Système", "Navigateurs"]);

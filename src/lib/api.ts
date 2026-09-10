@@ -14,6 +14,9 @@ export interface RuleSummary {
   /// Case cochée au premier lancement. Faux pour ce qu'on ne nettoie pas
   /// sans l'avoir voulu explicitement (cf. src-tauri/rules.toml).
   default_checked: boolean;
+  /// Renseigné quand la règle ne s'applique pas sur cette machine (variable
+  /// absente, ou pointant hors du profil). La ligne est grisée et inerte.
+  unavailable_reason: string | null;
 }
 
 export interface ScanResult {
