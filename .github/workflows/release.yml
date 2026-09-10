@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and create draft release
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: WinCleaner ${{ github.ref_name }}
+          releaseBody: |
+            Notes de version générées à partir du tag ${{ github.ref_name }}.
+
+            Installateurs non signés tant que la signature SignPath n'est pas
+            configurée dans les secrets du dépôt — voir `docs/signature.md`.
+          releaseDraft: true
+          prerelease: false
+
+      # --- Squelette de signature SignPath (gratuit pour l'OSS) ---------------
+      #
+      # Ce job ne s'exécute que si les quatre secrets SignPath sont renseignés
+      # dans les paramètres du dépôt (Settings > Secrets and variables >
+      # Actions). Tant qu'ils sont absents, cette étape est simplement ignorée
+      # et la release publiée par tauri-action ci-dessus reste non signée —
+      # voir `docs/signature.md` pour la procédure d'inscription au programme
+      # OSS de SignPath et le détail des quatre secrets à renseigner :
+      #   SIGNPATH_API_TOKEN, SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG,
+      #   SIGNPATH_SIGNING_POLICY_SLUG.
+      #
+      # Inputs vérifiés le 2026-09-10 dans action.yml de
+      # signpath/github-action-submit-signing-request (branche main) :
+      # api-token, organization-id, project-slug, signing-policy-slug,
+      # github-artifact-id (requis) ; artifact-configuration-slug, parameters,
+      # output-artifact-directory (optionnels) ; wait-for-completion (bool,
+      # défaut true). Sortie utile : signed-artifact-download-url.
+      - name: Check SignPath secrets
+        id: signpath-check
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.SIGNPATH_API_TOKEN }}" ] && \
+             [ -n "${{ secrets.SIGNPATH_ORGANIZATION_ID }}" ] && \
+             [ -n "${{ secrets.SIGNPATH_PROJECT_SLUG }}" ] && \
+             [ -n "${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload installers as build artifact (for signing)
+        if: steps.signpath-check.outputs.configured == 'true'
+        id: upload-for-signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: wincleaner-unsigned-installers
+          path: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        if: steps.signpath-check.outputs.configured == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-for-signing.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-installers
+
+      # TODO (post-inscription SignPath) : téléverser le contenu de
+      # `signed-installers/` sur la release créée par tauri-action ci-dessus
+      # (par exemple avec `gh release upload` ou softprops/action-gh-release),
+      # une fois le premier essai de signature validé sur un vrai projet
+      # SignPath.
