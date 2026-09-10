@@ -3,6 +3,7 @@ pub mod commands;
 pub mod rules;
 pub mod scan;
 pub mod startup;
+pub mod update;
 pub mod winapp2;
 
 /// Text shown when the embedded rules refuse to load. In release,
@@ -67,6 +68,7 @@ pub fn run() {
             commands::running_browsers,
             commands::list_startup,
             commands::set_startup_enabled,
+            commands::check_for_updates,
         ])
         .run(tauri::generate_context!())
         .expect("error while launching WinCleaner");

@@ -28,6 +28,10 @@ globset = "0.4"
 trash = "5"
 winreg = "0.52"
 sysinfo = "0.33"
+# One GET to the GitHub REST API for the manual update check (src/update.rs).
+# rustls only: no OpenSSL to build, and no system-proxy lookup.
+ureq = { version = "3.4.1", default-features = false, features = ["rustls"] }
+semver = "1.0.28"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Storage_FileSystem"] }

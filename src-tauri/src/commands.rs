@@ -2,6 +2,7 @@ use crate::clean::{clean_rule, CleanMode, CleanReport, SkippedItem};
 use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::scan::{scan_rule, ScanResult};
 use crate::startup::StartupEntry;
+use crate::update::{check_with, http_get, UpdateCheck, LATEST_RELEASE_URL};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -248,6 +249,19 @@ pub fn running_browsers() -> Vec<String> {
         .map(|p| p.name().to_string_lossy().to_string())
         .collect();
     running_browsers_from(&names)
+}
+
+/// The single network-touching command: one GET on the GitHub REST API, run
+/// off the main thread like every other blocking call here. The error crossing
+/// the IPC boundary is a stable code (`offline`, `not-available`,
+/// `rate-limited`, `malformed`); the wording lives in the front end.
+#[tauri::command]
+pub async fn check_for_updates() -> Result<UpdateCheck, String> {
+    blocking(|| {
+        check_with(env!("CARGO_PKG_VERSION"), http_get, LATEST_RELEASE_URL)
+            .map_err(|e| e.code().to_string())
+    })
+    .await
 }
 
 #[tauri::command]
