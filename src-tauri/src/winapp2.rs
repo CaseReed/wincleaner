@@ -424,23 +424,37 @@ pub type Probe<'a> = &'a dyn Fn(&str) -> bool;
 
 /// Read-only existence check on a `DetectN=HKCU\..` / `HKLM\..` key. Opening a
 /// key with `KEY_READ` writes nothing and needs no privilege; a hive we do not
-/// know is simply "not detected".
+/// know is simply "not detected". An empty subkey (`HKCU\`) would otherwise
+/// resolve to the hive root, which always exists: rejected explicitly rather
+/// than probed. A 32-bit application registers its `HKLM` keys under the
+/// WOW6432Node redirector; when the default (64-bit) view misses the key, we
+/// retry once, read-only, with `KEY_WOW64_32KEY`.
 pub fn registry_key_exists(key: &str) -> bool {
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY};
     use winreg::RegKey;
 
     let key = key.trim().trim_matches('"');
     let Some((root, sub)) = key.split_once('\\') else {
         return false;
     };
+    if sub.trim().is_empty() {
+        return false;
+    }
     let hive = match root.to_ascii_uppercase().as_str() {
         "HKCU" | "HKEY_CURRENT_USER" => HKEY_CURRENT_USER,
         "HKLM" | "HKEY_LOCAL_MACHINE" => HKEY_LOCAL_MACHINE,
         _ => return false,
     };
-    RegKey::predef(hive)
-        .open_subkey_with_flags(sub, KEY_READ)
-        .is_ok()
+    let hkey = RegKey::predef(hive);
+    if hkey.open_subkey_with_flags(sub, KEY_READ).is_ok() {
+        return true;
+    }
+    if hive == HKEY_LOCAL_MACHINE {
+        return hkey
+            .open_subkey_with_flags(sub, KEY_READ | KEY_WOW64_32KEY)
+            .is_ok();
+    }
+    false
 }
 
 /// Expands `%VAR%\rest` for a probe, WITHOUT `globset::escape`: this string is
@@ -455,36 +469,108 @@ fn expand_raw(mapped: &str, lookup: EnvLookup) -> Option<String> {
     ))
 }
 
-/// `DetectFileN=<path>`, read-only. A trailing `\*` means "any child": the
-/// directory must exist AND hold at least one entry, otherwise an empty
-/// left-over folder would keep an uninstalled application visible forever.
+/// Maps and confines the literal directory a `DetectFile` wildcard is probed
+/// against. `None` when the directory is outside the four allowed variables,
+/// resolves outside the profile, or (for the "any child" case) is the bare
+/// variable root itself — `%LocalAppData%\*` would otherwise always be true,
+/// since the profile root is never empty.
+fn confined_probe_dir(dir_part: &str, lookup: EnvLookup, profile: &str, bare_variable_ok: bool) -> Option<String> {
+    if dir_part.is_empty() {
+        return None;
+    }
+    let mapped = map_path(dir_part)?;
+    if !bare_variable_ok && !mapped.contains('\\') {
+        return None;
+    }
+    let path = expand_raw(&mapped, lookup)?;
+    if !crate::rules::under_profile(&path, profile) {
+        return None;
+    }
+    Some(path)
+}
+
+/// `DetectFileN=<path>`, read-only. Three shapes, and nothing else:
 ///
-/// The probe is confined to the profile like everything else. It only ever
-/// reads metadata, but the allow-list is what keeps a `%WinDir%` path from
-/// being stat-ed at all.
+/// - no wildcard: the exact path must exist (`symlink_metadata`).
+/// - a trailing `\*` on its own: the parent directory must exist AND hold at
+///   least one entry, otherwise an empty left-over folder would keep an
+///   uninstalled application visible forever. The variable root alone
+///   (`%LocalAppData%\*`) does not count: it always has children.
+/// - `<prefix>*` as the last segment (e.g. `Adobe Illustrator *`, a trailing
+///   space kept literal): the parent directory must hold an entry whose name
+///   starts with `prefix`, case-insensitively — upstream often only knows the
+///   product name, not the version suffix Windows appends
+///   (`Bridge*` matching `Bridge CC 2019`).
+///
+/// A `*` anywhere else — a middle segment, or not trailing the last one — is
+/// refused rather than guessed at: fail closed.
+///
+/// The probe is confined to the profile like everything else. The exact-path
+/// branch reads metadata only (`symlink_metadata`, a one-bit existence
+/// oracle that does not follow a reparse point); the two wildcard branches
+/// `read_dir` the parent, which does traverse a reparse point sitting at the
+/// probe target to list what is inside it — accepted here, since the branch
+/// only ever reports existence, never a path that gets walked or deleted.
 pub fn detect_file_exists_with(raw: &str, lookup: EnvLookup) -> bool {
     let raw = raw.trim().trim_matches('"');
-    let any_child = raw.ends_with(r"\*");
-    let base = raw.trim_end_matches('*').trim_end_matches('\\');
-    let Some(mapped) = map_path(base) else {
+    let Some(profile) = lookup("USERPROFILE") else {
+        return false;
+    };
+
+    let (dir_part, last_segment) = match raw.rfind('\\') {
+        Some(i) => (&raw[..i], &raw[i + 1..]),
+        None => ("", raw),
+    };
+    // A `*` before the last segment: fail closed rather than guess.
+    if dir_part.contains('*') {
+        return false;
+    }
+    if let Some(pos) = last_segment.find('*') {
+        if pos != last_segment.len() - 1 {
+            // A `*` in the middle of the last segment: same rule.
+            return false;
+        }
+    }
+
+    if last_segment == "*" {
+        let Some(path) = confined_probe_dir(dir_part, lookup, &profile, false) else {
+            return false;
+        };
+        return std::fs::read_dir(&path)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+    }
+
+    if let Some(prefix) = last_segment.strip_suffix('*') {
+        if prefix.is_empty() {
+            return false;
+        }
+        let Some(path) = confined_probe_dir(dir_part, lookup, &profile, true) else {
+            return false;
+        };
+        let prefix = prefix.to_ascii_lowercase();
+        return std::fs::read_dir(&path)
+            .map(|entries| {
+                entries.filter_map(|e| e.ok()).any(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .starts_with(&prefix)
+                })
+            })
+            .unwrap_or(false);
+    }
+
+    let Some(mapped) = map_path(raw) else {
         return false;
     };
     let Some(path) = expand_raw(&mapped, lookup) else {
         return false;
     };
-    let Some(profile) = lookup("USERPROFILE") else {
-        return false;
-    };
     if !crate::rules::under_profile(&path, &profile) {
         return false;
     }
-    if any_child {
-        std::fs::read_dir(&path)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false)
-    } else {
-        std::fs::symlink_metadata(&path).is_ok()
-    }
+    std::fs::symlink_metadata(&path).is_ok()
 }
 
 /// One matching `Detect` or `DetectFile` is enough. An entry with none of
@@ -960,5 +1046,52 @@ FileKey1=%AppData%\\Cafe|*.*\r
         let never = |_: &str| false;
         let always = |_: &str| true;
         assert_eq!(detected_rules_with(converted, &never, &always).len(), 1);
+    }
+
+    /// `Adobe Bridge*` must match `Bridge CC 2019`: upstream often knows only
+    /// the product name, not the version suffix Windows appends to it.
+    #[test]
+    fn a_prefix_wildcard_matches_a_versioned_directory_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let lookup = move |name: &str| match name {
+            "USERPROFILE" | "LOCALAPPDATA" => Some(root.clone()),
+            _ => None,
+        };
+        std::fs::create_dir(dir.path().join("Bridge CC 2019")).unwrap();
+        std::fs::create_dir(dir.path().join("Adobe Illustrator 2024")).unwrap();
+
+        assert!(detect_file_exists_with(r"%LocalAppData%\Bridge*", &lookup));
+        // No trailing wildcard: an exact-path probe, which does not match.
+        assert!(!detect_file_exists_with(r"%LocalAppData%\Bridge", &lookup));
+        // A trailing space before `*` is part of the prefix, not trimmed.
+        assert!(detect_file_exists_with(
+            r"%LocalAppData%\Adobe Illustrator *",
+            &lookup
+        ));
+        assert!(!detect_file_exists_with(r"%LocalAppData%\Nope*", &lookup));
+        // `*` in a middle segment, not trailing the last one: fail closed.
+        assert!(!detect_file_exists_with(r"%LocalAppData%\*\Bridge", &lookup));
+    }
+
+    /// `%LocalAppData%\*` has no literal segment between the variable and the
+    /// wildcard: the profile root is never empty, so this would otherwise
+    /// always report "detected".
+    #[test]
+    fn a_wildcard_directly_under_the_variable_root_is_never_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let lookup = move |name: &str| match name {
+            "USERPROFILE" | "LOCALAPPDATA" => Some(root.clone()),
+            _ => None,
+        };
+        std::fs::create_dir(dir.path().join("Something")).unwrap();
+        assert!(!detect_file_exists_with(r"%LocalAppData%\*", &lookup));
+    }
+
+    #[test]
+    fn an_empty_registry_subkey_does_not_resolve_to_the_hive_root() {
+        assert!(!registry_key_exists(r"HKCU\"));
+        assert!(!registry_key_exists(r"HKCU\ "));
     }
 }
