@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Front-end tests
+        run: npm test
+
+      - name: Front-end build
+        run: npm run build
+
+      # Les tests registre partagent HKCU\Software\wincleaner-test : single-thread
+      # obligatoire, et ils doivent rester confinés à l'utilisateur du runner
+      # (jamais de clés HKLM ni d'un autre profil).
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+
+      # continue-on-error : au moment d'écrire ce workflow, clippy signale deux
+      # avertissements préexistants dans src-tauri/src (manual_contains dans
+      # scan.rs, unnecessary_sort_by dans startup.rs) que ce changement ne doit
+      # pas corriger silencieusement. Retirer continue-on-error une fois ces
+      # deux points traités séparément.
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        continue-on-error: true
+
+      - name: Tauri build
+        run: npm run tauri build
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: wincleaner-installers
+          path: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+          if-no-files-found: error
