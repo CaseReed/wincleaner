@@ -26,6 +26,8 @@ click Check for updates or enable automatic checks (off by default).
   new" for the running version, extracted from `CHANGELOG.md` at build time and
   shown offline — nothing is fetched.
 - **Light and dark themes**, including the Windows title bar.
+- **Keyboard and screen-reader friendly.** Every screen is operable without
+  a mouse, every control is named and every result is announced.
 - **No installer bloat.** A single Tauri 2 binary, ~10 MB, no runtime to
   install beyond WebView2, which Windows 11 already ships.
 

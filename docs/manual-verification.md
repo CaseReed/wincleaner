@@ -306,3 +306,41 @@ but only your own eyes can confirm that.
     entries again, and `%TEMP%\wincleaner-sandbox-<id>` is gone from Explorer.
 12. Confirm one last time that your Recycle Bin and your startup entries are
     exactly as they were at step 1.
+
+## VM-18 — Keyboard only, and a screen reader — to be run by the user
+
+A browser test proves the markup; only a real pass proves the experience.
+Unplug the mouse, or simply do not touch it.
+
+1. Cleanup screen. Press `Tab` once from a fresh start: the focus must land on
+   the sidebar, on **Cleanup**, with a ring you can see without hunting for it.
+   Press `ArrowDown` twice: **Startup**, then **Settings**, each screen opening
+   as the focus reaches it. `ArrowUp` twice to come back, `End` and `Home` to
+   jump to the last and the first.
+2. From the sidebar, one more `Tab` must leave it altogether — not three.
+3. Keep tabbing through the Cleanup screen. Every stop must show a ring: the
+   theme toggle, the Sort by size checkbox, Analyze, the search field, each
+   category header, each rule checkbox, the mode selector, Clean. Nothing may
+   be reachable without a visible ring, and nothing may be skipped.
+4. On a rule checkbox, press `Space`: it must tick and untick. On a category
+   header, press `Enter`: the rows must fold and unfold, chevron included.
+5. `Enter` on **Analyze**. The progress must run to the end and the focus must
+   stay where you left it.
+6. `Enter` on **Clean**. The focus must jump to the confirmation, which reads
+   what is about to be deleted. `Tab` must reach **Cancel** then **Confirm
+   cleanup**, in that order. Press `Escape`: the confirmation goes, nothing is
+   deleted, and the focus is back on **Clean** — press `Enter` again to check
+   it really is.
+7. Repeat step 6 and use **Cancel** instead of `Escape`: the focus must come
+   back to **Clean** the same way.
+8. Turn on **Settings > Ease of Access > Show animations in Windows = Off**
+   (`prefers-reduced-motion`) and relaunch: the chevrons must snap, the gauge
+   and the progress bar must jump, and the "Checking…" and "Cleaning…" loaders
+   must stop spinning. Everything must still say what it is doing in words.
+9. With Narrator on (`Win`+`Ctrl`+`Enter`), Analyze once: it must speak the
+   progress a few times, not on every rule, and state the total at the end.
+   Clean once: the report must be spoken without you going to look for it. The
+   reclaim gauge must read as "Reclaimable X: <rule> Y, <rule> Z…", not as a
+   silent image.
+10. Startup screen with Narrator: the table must be announced by its caption,
+    and flipping a row must speak "<name> enabled at startup" or "disabled".

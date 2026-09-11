@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Keyboard and screen-reader pass over the whole interface.** The sidebar is
+  a named `Main` landmark with a roving tabindex — the arrow keys, `Home` and
+  `End` move between the three screens, and it costs one Tab press to get past
+  instead of three; the theme toggle states which theme is on, not only what
+  the next press does. On Cleanup, each category header names the rows it
+  folds, each "Show the paths" names its rule and opens a named region, and the
+  confirmation takes the focus when it appears, cancels on `Escape` and hands
+  the focus back to the Clean button. The scan announces itself every ten rules
+  and on completion — not on every rule, which would be hundreds of
+  interruptions — and the cleanup report, the sandbox verdict and the sandbox
+  banner announce themselves too. The reclaim gauge states its total and its
+  three largest rules in words. The startup table is named and every row toggle
+  reports its outcome. Nothing moved on screen: no layout, no wording, no test
+  id changed.
+- **Two measured contrast failures fixed.** The focus ring on the controls that
+  carry no border — sidebar entries, category headers, paths triggers, the
+  search field, the mode selector — was drawn at half opacity (1.66:1 against
+  the card in the light theme) and is now solid (4.87:1). The Clean and Confirm
+  buttons wrote `--destructive` on a wash of itself: 4.11:1 light, 3.75:1 dark,
+  2.87:1 hovered, all under the 4.5:1 body text asks for. A new
+  `--destructive-foreground` token takes the worst case to 4.71:1 with the
+  fills untouched. Everything else measured clean, `--muted-foreground`
+  included (5.11:1 to 6.42:1 on every surface, both themes), and
+  `src/theme-contrast.test.ts` recomputes all of it from the stylesheet so the
+  next nudge to a colour fails in CI.
+- **`prefers-reduced-motion` is now honoured app-wide**, the shadcn transitions
+  and the loading spinners included, by one rule in the base layer rather than
+  a class to remember on each element.
+
 ## [0.5.1] - 2026-09-12
 
 ### Fixed
