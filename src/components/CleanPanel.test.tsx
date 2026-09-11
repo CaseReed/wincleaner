@@ -9,6 +9,7 @@ const api = {
   clean: vi.fn(),
   runningBrowsers: vi.fn(),
   onScanProgress: vi.fn(),
+  onCleanProgress: vi.fn(),
   sandboxVerify: vi.fn(),
 };
 
@@ -22,6 +23,7 @@ vi.mock("@/lib/api", async () => {
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
     onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
+    onCleanProgress: (cb: (p: unknown) => void) => api.onCleanProgress(cb),
     sandboxVerify: (ids: string[]) => api.sandboxVerify(ids),
   };
 });
@@ -50,10 +52,22 @@ type Progress = {
   total_bytes: number;
 };
 
+type CleanStep = {
+  done_rules: number;
+  total_rules: number;
+  rule_id: string;
+  label: string;
+  files_deleted: number;
+  bytes_freed: number;
+};
+
 /// Set by the `onScanProgress` mock: lets a test play the events the Rust side
 /// would emit, in the middle of a scan that has not resolved yet.
 let emitProgress: (p: Progress) => void = () => {};
 let unlisten = vi.fn();
+/// The same, for the `clean-progress` events of a clean still running.
+let emitClean: (p: CleanStep) => void = () => {};
+let cleanUnlisten = vi.fn();
 
 describe("CleanPanel", () => {
   beforeEach(() => {
@@ -62,6 +76,12 @@ describe("CleanPanel", () => {
     api.onScanProgress.mockReset().mockImplementation((cb: (p: Progress) => void) => {
       emitProgress = cb;
       return Promise.resolve(unlisten);
+    });
+    emitClean = () => {};
+    cleanUnlisten = vi.fn();
+    api.onCleanProgress.mockReset().mockImplementation((cb: (p: CleanStep) => void) => {
+      emitClean = cb;
+      return Promise.resolve(cleanUnlisten);
     });
     api.listRules.mockReset().mockResolvedValue(RULES);
     api.scan.mockReset().mockResolvedValue([]);
@@ -882,6 +902,117 @@ describe("CleanPanel", () => {
     expect(report).toHaveAccessibleName("Last cleanup");
   });
 
+  /// Analyzes, then starts a clean that never resolves: the hero is left on
+  /// the state the `clean-progress` events paint.
+  async function startPendingClean() {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    api.clean.mockImplementation(() => new Promise(() => {}));
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+    await waitFor(() => expect(api.onCleanProgress).toHaveBeenCalled());
+  }
+
+  /// A disabled "Cleaning…" button said nothing about thirteen minutes of
+  /// work. The bar and the running total come from the events.
+  it("draws the progress of the clean rule by rule", async () => {
+    await startPendingClean();
+
+    expect(screen.getByTestId("hero-status")).toHaveTextContent("Cleaning 1 rules");
+
+    act(() =>
+      emitClean({
+        done_rules: 1,
+        total_rules: 4,
+        rule_id: "windows.recycle-bin",
+        label: "Recycle Bin",
+        files_deleted: 500,
+        bytes_freed: 1024,
+      })
+    );
+    expect(screen.getByTestId("clean-progress")).toHaveTextContent(
+      "Cleaning 1 / 4 · Recycle Bin"
+    );
+    expect(screen.getByTestId("clean-progress-bar")).toHaveStyle({ width: "25%" });
+    expect(screen.getByTestId("clean-progress-bytes")).toHaveTextContent("1 KB");
+    expect(screen.getByTestId("clean-progress-files")).toHaveTextContent("500 files deleted");
+
+    act(() =>
+      emitClean({
+        done_rules: 3,
+        total_rules: 4,
+        rule_id: "windows.temp",
+        label: "Temporary files",
+        files_deleted: 1200,
+        bytes_freed: 3072,
+      })
+    );
+    expect(screen.getByTestId("clean-progress")).toHaveTextContent(
+      "Cleaning 3 / 4 · Temporary files"
+    );
+    expect(screen.getByTestId("clean-progress-bar")).toHaveStyle({ width: "75%" });
+    expect(screen.getByTestId("clean-progress-bytes")).toHaveTextContent("3 KB");
+    expect(screen.getByTestId("clean-progress-files")).toHaveTextContent("1,200 files deleted");
+
+    // The action bar keeps its disabled button while all this happens.
+    expect(screen.getByRole("button", { name: /Cleaning/ })).toBeDisabled();
+  });
+
+  /// One rule reporting every 500 files must not read that rule's name out
+  /// again each time: the live region follows the rules, like the scan's.
+  it("announces the clean every ten rules and on completion", async () => {
+    await startPendingClean();
+    const live = screen.getByTestId("scan-announcement");
+
+    act(() =>
+      emitClean({ done_rules: 3, total_rules: 25, rule_id: "a", label: "A", files_deleted: 1, bytes_freed: 1024 })
+    );
+    expect(live).toHaveTextContent("Cleaning…");
+
+    act(() =>
+      emitClean({ done_rules: 10, total_rules: 25, rule_id: "b", label: "B", files_deleted: 500, bytes_freed: 2048 })
+    );
+    expect(live).toHaveTextContent("Cleaning: 10 of 25 rules, 2 KB freed so far");
+
+    // Same rule again, 500 files later: nothing new is said.
+    act(() =>
+      emitClean({ done_rules: 10, total_rules: 25, rule_id: "b", label: "B", files_deleted: 1000, bytes_freed: 3072 })
+    );
+    expect(live).toHaveTextContent("Cleaning: 10 of 25 rules, 2 KB freed so far");
+
+    act(() =>
+      emitClean({ done_rules: 25, total_rules: 25, rule_id: "c", label: "C", files_deleted: 2000, bytes_freed: 4096 })
+    );
+    expect(live).toHaveTextContent("Cleaning: 25 of 25 rules, 4 KB freed so far");
+  });
+
+  /// An event arriving outside a clean (a previous run finishing late) must not
+  /// repaint a hero that is showing results.
+  it("ignores clean progress events when no clean is pending", async () => {
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await waitFor(() => expect(api.onCleanProgress).toHaveBeenCalled());
+
+    act(() =>
+      emitClean({
+        done_rules: 1,
+        total_rules: 4,
+        rule_id: "windows.temp",
+        label: "Temporary files",
+        files_deleted: 10,
+        bytes_freed: 1024,
+      })
+    );
+    expect(screen.queryByTestId("clean-progress")).toBeNull();
+    expect(screen.queryByTestId("clean-progress-bytes")).toBeNull();
+  });
+
   it("raises the rule loading error as an alert", async () => {
     api.listRules.mockRejectedValue("rules.toml is invalid: bad risk");
     render(<CleanPanel />);
@@ -908,6 +1039,7 @@ describe("CleanPanel", () => {
 
     unmount();
     await waitFor(() => expect(unlisten).toHaveBeenCalled());
+    await waitFor(() => expect(cleanUnlisten).toHaveBeenCalled());
   });
 
   /// Biggest wins first: the scan decides what is worth looking at.

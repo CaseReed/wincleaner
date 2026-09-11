@@ -1,4 +1,6 @@
-use crate::clean::{clean_rule, clean_rule_with_trash, CleanMode, CleanReport, SkippedItem};
+use crate::clean::{
+    clean_rule, clean_rule_with_trash, CleanMode, CleanReport, CleanTick, SkippedItem,
+};
 use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::sandbox::{
     full_catalogue, orphaned_sandboxes, remove_orphan, resolved_patterns, sandbox_recycle_empty,
@@ -69,6 +71,32 @@ pub struct ScanProgress {
     /// duplicated event cannot make the running total drift.
     pub total_bytes: u64,
 }
+
+/// One step of a Clean, sent to the front end while `clean` runs. Emptying a
+/// loaded Recycle Bin is minutes of work, not seconds: without this the only
+/// feedback is a disabled button reading "Cleaning…".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CleanProgress {
+    /// Rules finished or in flight, this one included. Starts at 1.
+    pub done_rules: u32,
+    /// Rules this clean will go through. `done_rules == total_rules` marks the
+    /// last event.
+    pub total_rules: u32,
+    /// The rule being cleaned.
+    pub rule_id: String,
+    /// Its label, shown as is next to the counter.
+    pub label: String,
+    /// Files deleted **since the start of this clean**, not by this one rule:
+    /// the hero shows this number verbatim, so a dropped or duplicated event
+    /// cannot make the running total drift. Same for `bytes_freed`.
+    pub files_deleted: u64,
+    pub bytes_freed: u64,
+}
+
+/// How many files a rule has to delete before it says so again. One event per
+/// file would be 59,000 IPC messages for a single Recycle Bin; one per rule
+/// leaves that rule looking frozen for thirteen minutes.
+const PROGRESS_EVERY: u64 = 500;
 
 /// The rule list of this session: the native rules first, then the Winapp2
 /// rules whose application was detected.
@@ -276,45 +304,96 @@ fn cleaning_order(mut rules: Vec<Rule>) -> Vec<Rule> {
 /// carrying the rule id.
 ///
 /// `run` is injected so that the test exercises this order and this refusal
-/// right here: a test replaying the sequence by hand would lock nothing down.
+/// right here: a test replaying the sequence by hand would lock nothing down;
+/// `progress` likewise, so the sequence the front end draws is asserted without
+/// a Tauri application. One event closes every rule, unavailable ones included
+/// — they cost nothing to "clean", but dropping them from the count would leave
+/// the bar short of its end — plus one every `PROGRESS_EVERY` files inside a
+/// rule, which is the only feedback a Recycle Bin holding 59,000 files gives
+/// for minutes on end.
 pub fn clean_rules_with(
     rules: Vec<Rule>,
     mode: CleanMode,
-    mut run: impl FnMut(&Rule, CleanMode) -> Result<CleanReport, String>,
+    mut run: impl FnMut(&Rule, CleanMode, CleanTick) -> Result<CleanReport, String>,
+    progress: &mut dyn FnMut(CleanProgress),
 ) -> CleanReport {
+    let ordered = cleaning_order(rules);
+    let total_rules = ordered.len() as u32;
     let mut report = CleanReport::default();
-    for rule in cleaning_order(rules) {
+    // Running totals across the rules already finished: the mid-rule events add
+    // the rule's own counts on top, so what the front end reads never goes
+    // backwards between two rules.
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    for (index, rule) in ordered.iter().enumerate() {
+        let step = |files_deleted, bytes_freed| CleanProgress {
+            done_rules: index as u32 + 1,
+            total_rules,
+            rule_id: rule.id.clone(),
+            label: rule.label.clone(),
+            files_deleted,
+            bytes_freed,
+        };
         let outcome = match &rule.unavailable_reason {
             Some(reason) => Err(reason.clone()),
-            None => run(&rule, mode),
+            None => {
+                let mut announced = 0u64;
+                let mut tick = |deleted: u64, freed: u64| {
+                    if deleted >= announced + PROGRESS_EVERY {
+                        announced = deleted;
+                        progress(step(files + deleted, bytes + freed));
+                    }
+                };
+                run(rule, mode, &mut tick)
+            }
         };
         match outcome {
-            Ok(partial) => report.merge(partial),
+            Ok(partial) => {
+                files += partial.deleted;
+                bytes += partial.freed_bytes;
+                report.merge(partial);
+            }
             Err(reason) => report.skipped.push(SkippedItem {
                 path: rule.id.clone(),
                 reason,
             }),
         }
+        progress(step(files, bytes));
     }
     report
 }
 
-fn clean_rules(rule_ids: &[String], mode: CleanMode) -> Result<CleanReport, String> {
+fn clean_rules(
+    rule_ids: &[String],
+    mode: CleanMode,
+    progress: &mut dyn FnMut(CleanProgress),
+) -> Result<CleanReport, String> {
     Ok(clean_rules_with(
         find_rules(rule_ids)?,
         mode,
-        |rule, mode| clean_rule(rule, mode).map_err(|e| e.to_string()),
+        |rule, mode, tick| clean_rule(rule, mode, tick).map_err(|e| e.to_string()),
+        progress,
     ))
 }
 
+/// Emits `clean-progress` while it deletes, for the same reason `scan` emits
+/// `scan-progress`: the event has to reach the window *during* the work, not
+/// once it has returned. An emit that fails (window already gone) must never
+/// abort a deletion that is still legitimate work.
 #[tauri::command]
 pub async fn clean(
+    app: tauri::AppHandle,
     state: tauri::State<'_, SandboxState>,
     rule_ids: Vec<String>,
     mode: CleanMode,
 ) -> Result<CleanReport, String> {
     let state = state.inner().clone();
-    blocking(move || clean_rules_in(&state, &rule_ids, mode)).await
+    blocking(move || {
+        clean_rules_in(&state, &rule_ids, mode, &mut |step| {
+            let _ = app.emit("clean-progress", step);
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -742,6 +821,7 @@ pub fn clean_rules_in(
     state: &SandboxState,
     rule_ids: &[String],
     mode: CleanMode,
+    progress: &mut dyn FnMut(CleanProgress),
 ) -> Result<CleanReport, String> {
     {
         let guard = lock(state);
@@ -749,21 +829,32 @@ pub fn clean_rules_in(
             let rules = pick_rules(&active.catalogue, rule_ids)?;
             let lookup = |n: &str| active.fixture.lookup(n);
             let root = active.manifest.root.clone();
-            let trash = |p: &std::path::Path| sandbox_trash(&root, p);
-            return Ok(clean_rules_with(rules, mode, |rule, mode| {
-                clean_rule_with_trash(
-                    rule,
-                    mode,
-                    &lookup,
-                    &sandbox_recycle_query,
-                    &sandbox_recycle_empty,
-                    &trash,
-                )
-                .map_err(|e| e.to_string())
-            }));
+            // The sandbox bin is a directory, not a shell operation: a batch is
+            // one rename per path, and a failure on one stops the batch so the
+            // per-file fallback can name it.
+            let trash = |paths: &[std::path::PathBuf]| {
+                paths.iter().try_for_each(|p| sandbox_trash(&root, p))
+            };
+            return Ok(clean_rules_with(
+                rules,
+                mode,
+                |rule, mode, tick| {
+                    clean_rule_with_trash(
+                        rule,
+                        mode,
+                        &lookup,
+                        &sandbox_recycle_query,
+                        &sandbox_recycle_empty,
+                        &trash,
+                        tick,
+                    )
+                    .map_err(|e| e.to_string())
+                },
+                progress,
+            ));
         }
     }
-    clean_rules(rule_ids, mode)
+    clean_rules(rule_ids, mode, progress)
 }
 
 #[tauri::command]
@@ -968,17 +1059,22 @@ mod tests {
     #[test]
     fn one_rule_failing_does_not_throw_away_the_report_of_the_previous_ones() {
         let rules = vec![rule("a"), rule("b"), rule("c")];
-        let report = clean_rules_with(rules, CleanMode::Auto, |r, _| {
-            if r.id == "b" {
-                Err("access denied".to_string())
-            } else {
-                Ok(CleanReport {
-                    freed_bytes: 10,
-                    deleted: 1,
-                    skipped: Vec::new(),
-                })
-            }
-        });
+        let report = clean_rules_with(
+            rules,
+            CleanMode::Auto,
+            |r, _, _| {
+                if r.id == "b" {
+                    Err("access denied".to_string())
+                } else {
+                    Ok(CleanReport {
+                        freed_bytes: 10,
+                        deleted: 1,
+                        skipped: Vec::new(),
+                    })
+                }
+            },
+            &mut |_| {},
+        );
         assert_eq!(report.deleted, 2);
         assert_eq!(report.freed_bytes, 20);
         assert_eq!(report.skipped.len(), 1);
@@ -1092,9 +1188,12 @@ mod tests {
         assert!(scans[0].paths.is_empty());
         assert_eq!(scans[0].skipped, 1);
 
-        let report = clean_rules_with(vec![unavailable], CleanMode::Auto, |_, _| {
-            panic!("an unavailable rule must not be cleaned")
-        });
+        let report = clean_rules_with(
+            vec![unavailable],
+            CleanMode::Auto,
+            |_, _, _| panic!("an unavailable rule must not be cleaned"),
+            &mut |_| {},
+        );
         assert_eq!(report.deleted, 0);
         assert_eq!(report.skipped.len(), 1);
         assert_eq!(report.skipped[0].path, "x.y");
@@ -1127,11 +1226,12 @@ mod tests {
         let report = clean_rules_with(
             vec![rule("a"), recycle_bin_rule(), rule("b")],
             CleanMode::Permanent,
-            |r, mode| {
+            |r, mode, tick| {
                 log.borrow_mut().push(r.id.clone());
-                crate::clean::clean_rule_with_api(r, mode, &lookup, &query, &empty)
+                crate::clean::clean_rule_with_api(r, mode, &lookup, &query, &empty, tick)
                     .map_err(|e| e.to_string())
             },
+            &mut |_| {},
         );
 
         assert_eq!(
@@ -1141,6 +1241,110 @@ mod tests {
         assert!(report.skipped.is_empty(), "{:?}", report.skipped);
         // 2 items announced by the recycle bin + the file of rule "a".
         assert_eq!(report.deleted, 3);
+    }
+
+    /// The progress the front end draws during a Clean is produced here, in
+    /// cleaning order — recycle bin first — with running totals the hero can
+    /// show verbatim, and a last event whose `done_rules` equals `total_rules`.
+    #[test]
+    fn every_rule_reports_its_cleaning_progress_in_cleaning_order() {
+        let rules = vec![rule("a"), recycle_bin_rule(), rule("b")];
+        let mut seen: Vec<CleanProgress> = Vec::new();
+        clean_rules_with(
+            rules,
+            CleanMode::Auto,
+            |_, _, _| {
+                Ok(CleanReport {
+                    freed_bytes: 100,
+                    deleted: 2,
+                    skipped: Vec::new(),
+                })
+            },
+            &mut |p| seen.push(p),
+        );
+
+        assert_eq!(
+            seen.iter().map(|p| p.rule_id.as_str()).collect::<Vec<_>>(),
+            ["windows.recycle-bin", "a", "b"]
+        );
+        assert_eq!(seen.iter().map(|p| p.done_rules).collect::<Vec<_>>(), [1, 2, 3]);
+        assert!(seen.iter().all(|p| p.total_rules == 3));
+        assert_eq!(seen.iter().map(|p| p.files_deleted).collect::<Vec<_>>(), [2, 4, 6]);
+        assert_eq!(seen.iter().map(|p| p.bytes_freed).collect::<Vec<_>>(), [100, 200, 300]);
+        let last = seen.last().unwrap();
+        assert_eq!(last.done_rules, last.total_rules);
+        assert_eq!(last.label, "b");
+    }
+
+    /// The thirteen-minute case: one rule deleting tens of thousands of files
+    /// has to say so while it runs, not once it has returned. The rule reports
+    /// each deletion step; only every `PROGRESS_EVERY`-th file becomes an
+    /// event, and the totals it carries already include the rules before it.
+    #[test]
+    fn a_rule_reports_from_inside_its_own_deletion_loop() {
+        let rules = vec![rule("a"), rule("b")];
+        let mut seen: Vec<CleanProgress> = Vec::new();
+        clean_rules_with(
+            rules,
+            CleanMode::Auto,
+            |r, _, tick| {
+                // "a" deletes one file, "b" deletes 1,200 one at a time.
+                let count = if r.id == "a" { 1 } else { 1_200 };
+                for n in 1..=count {
+                    tick(n, n * 10);
+                }
+                Ok(CleanReport {
+                    freed_bytes: count * 10,
+                    deleted: count,
+                    skipped: Vec::new(),
+                })
+            },
+            &mut |p| seen.push(p),
+        );
+
+        // "a": its single tick is short of the threshold, so only its closing
+        // event. "b": one at 500, one at 1,000, then its closing event.
+        assert_eq!(
+            seen.iter()
+                .map(|p| (p.rule_id.as_str(), p.done_rules, p.files_deleted))
+                .collect::<Vec<_>>(),
+            [
+                ("a", 1, 1),
+                ("b", 2, 501),
+                ("b", 2, 1_001),
+                ("b", 2, 1_201),
+            ]
+        );
+        assert_eq!(seen[1].bytes_freed, 5_010);
+    }
+
+    /// A rule that does not apply is cleaned by nobody, but the user still
+    /// asked for it: it closes with an event of its own, so the bar never
+    /// stalls short of its end.
+    #[test]
+    fn an_unavailable_rule_still_counts_in_the_cleaning_progress_total() {
+        let mut unavailable = rule("b");
+        unavailable.unavailable_reason = Some("%TEMP% is outside the profile".into());
+        let mut seen: Vec<CleanProgress> = Vec::new();
+        clean_rules_with(
+            vec![rule("a"), unavailable],
+            CleanMode::Auto,
+            |_, _, _| {
+                Ok(CleanReport {
+                    freed_bytes: 7,
+                    deleted: 1,
+                    skipped: Vec::new(),
+                })
+            },
+            &mut |p| seen.push(p),
+        );
+
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].rule_id, "b");
+        assert_eq!(seen[1].done_rules, 2);
+        assert_eq!(seen[1].total_rules, 2);
+        assert_eq!(seen[1].files_deleted, 1);
+        assert_eq!(seen[1].bytes_freed, 7);
     }
 
     #[test]
@@ -1328,7 +1532,7 @@ mod tests {
         let scans = scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
         assert!(scans.iter().map(|s| s.file_count).sum::<u64>() > 0);
 
-        let report = clean_rules_in(&state, &ids, CleanMode::Permanent).unwrap();
+        let report = clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
         assert!(report.deleted > 0);
 
         let verdict = verify_sandbox(&state, &ids).unwrap();
@@ -1368,7 +1572,7 @@ mod tests {
 
         let ids = vec!["windows.temp".to_string()];
         scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
-        clean_rules_in(&state, &ids, CleanMode::Permanent).unwrap();
+        clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
 
         let verdict = verify_sandbox(&state, &ids).unwrap();
         assert_eq!(verdict.rules_cleaned, 1);
@@ -1465,7 +1669,7 @@ mod tests {
 
         let ids = vec!["windows.temp".to_string()];
         scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
-        let report = clean_rules_in(&state, &ids, CleanMode::Trash).unwrap();
+        let report = clean_rules_in(&state, &ids, CleanMode::Trash, &mut |_| {}).unwrap();
         assert!(report.deleted > 0);
 
         let moved = std::fs::read_dir(&bin).unwrap().count();
@@ -1529,7 +1733,7 @@ mod tests {
     fn cleaning_an_unknown_id_is_an_error() {
         let state = SandboxState::default();
         let err = tauri::async_runtime::block_on(blocking(move || {
-            clean_rules_in(&state, &["nonexistent".to_string()], CleanMode::Auto)
+            clean_rules_in(&state, &["nonexistent".to_string()], CleanMode::Auto, &mut |_| {})
         }))
         .unwrap_err();
         assert!(err.contains("nonexistent"));

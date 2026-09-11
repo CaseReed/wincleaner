@@ -108,8 +108,12 @@ fn scan_all(fx: &Fixture, rules: &[Rule]) -> Vec<ScanResult> {
 /// — both public, both wired to the real `trash_delete`, which is private and
 /// therefore not shadowable from here. Nothing in this file names them; a test
 /// that did would have to type the name.
-fn forbidden_trash(path: &Path) -> Result<(), String> {
-    panic!("the real recycle-bin move was reached with: {}", path.display());
+fn forbidden_trash(paths: &[PathBuf]) -> Result<(), String> {
+    panic!(
+        "the real recycle-bin move was reached with {} path(s), first: {}",
+        paths.len(),
+        paths.first().map(|p| p.display().to_string()).unwrap_or_default()
+    );
 }
 
 /// The real cleaning path: `commands::clean_rules_with` driving
@@ -120,13 +124,43 @@ fn clean_all_with_trash(
     fx: &Fixture,
     rules: &[Rule],
     mode: CleanMode,
-    trash: &dyn Fn(&Path) -> Result<(), String>,
+    trash: &dyn Fn(&[PathBuf]) -> Result<(), String>,
+) -> CleanReport {
+    clean_all_ticking(fx, rules, mode, trash, &mut |_, _| {})
+}
+
+/// Same, with the per-deletion-step callback the `clean` command turns into
+/// `clean-progress` events. Only the TOCTOU test needs it: it is the one hook
+/// that reaches *inside* the deletion loop, after the internal re-scan.
+fn clean_all_ticking(
+    fx: &Fixture,
+    rules: &[Rule],
+    mode: CleanMode,
+    trash: &dyn Fn(&[PathBuf]) -> Result<(), String>,
+    tick: &mut dyn FnMut(u64, u64),
 ) -> CleanReport {
     let lookup = |n: &str| fx.lookup(n);
-    clean_rules_with(rules.to_vec(), mode, |rule, mode| {
-        clean_rule_with_trash(rule, mode, &lookup, &recycle_query, &recycle_empty, trash)
+    let tick = std::cell::RefCell::new(tick);
+    clean_rules_with(
+        rules.to_vec(),
+        mode,
+        |rule, mode, inner| {
+            clean_rule_with_trash(
+                rule,
+                mode,
+                &lookup,
+                &recycle_query,
+                &recycle_empty,
+                trash,
+                &mut |d, b| {
+                    (tick.borrow_mut())(d, b);
+                    inner(d, b);
+                },
+            )
             .map_err(|e| e.to_string())
-    })
+        },
+        &mut |_| {},
+    )
 }
 
 /// `Permanent` mode, with the move-to-bin call wired to the panic stub.
@@ -134,11 +168,13 @@ fn clean_all_permanent(fx: &Fixture, rules: &[Rule]) -> CleanReport {
     clean_all_with_trash(fx, rules, CleanMode::Permanent, &forbidden_trash)
 }
 
-/// `Trash` mode with a recording, non-deleting stand-in.
+/// `Trash` mode with a recording, non-deleting stand-in. The recorder is handed
+/// whole batches now (`clean::TRASH_BATCH`), and flattens them back: what this
+/// asserts is which paths reached the shell, not how they were grouped.
 fn clean_all_trash_recording(fx: &Fixture, rules: &[Rule]) -> (CleanReport, Vec<PathBuf>) {
     let trashed: std::cell::RefCell<Vec<PathBuf>> = std::cell::RefCell::new(Vec::new());
-    let trash = |p: &Path| {
-        trashed.borrow_mut().push(p.to_path_buf());
+    let trash = |paths: &[PathBuf]| {
+        trashed.borrow_mut().extend(paths.iter().cloned());
         Ok(())
     };
     let report = clean_all_with_trash(fx, rules, CleanMode::Trash, &trash);
@@ -534,9 +570,12 @@ fn a_junction_at_a_rule_root_is_refused_never_walked_and_never_deleted() {
 /// inside the injected deletion closure — i.e. AFTER the internal re-scan
 /// `clean_rule_with_trash` runs, in the one window the re-scan cannot see.
 ///
-/// The stand-in deletes for real (`remove_file`), so the victim survives only
-/// if the guard refuses the path. `Trash` mode is used because it is the only
-/// mode whose deletion call is injectable, and the guard runs before it.
+/// The deletion is real (`Permanent` mode's own `remove_file`), so the victim
+/// survives only if the guard refuses the path. `Permanent` mode is used
+/// because it deletes one file at a time — the guard and the deletion stay
+/// interleaved, which is exactly the window this test needs; `Trash` mode
+/// batches (`clean::TRASH_BATCH`), and its hook fires once per batch. The
+/// move-to-bin call is wired to the panic stub, so nothing reaches the shell.
 #[test]
 fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
     let fx = fixture();
@@ -564,17 +603,20 @@ fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
     // The swap fires on the first deletion of the run and never again. The
     // hijacked path sorts last inside %TEMP% (`zz_toctou`), so it is still
     // ahead of the cursor when the junction appears under it.
-    let swapped = std::cell::Cell::new(false);
-    let deleted: std::cell::RefCell<Vec<PathBuf>> = std::cell::RefCell::new(Vec::new());
-    let trash = |p: &Path| {
-        if !swapped.replace(true) {
-            fx.swap_toctou_dir_for_junction();
-        }
-        deleted.borrow_mut().push(p.to_path_buf());
-        std::fs::remove_file(p).map_err(|e| e.to_string())
-    };
-    let report = clean_all_with_trash(&fx, &rules, CleanMode::Trash, &trash);
-    assert!(swapped.get(), "the swap must have been performed");
+    let mut swapped = false;
+    let report = clean_all_ticking(
+        &fx,
+        &rules,
+        CleanMode::Permanent,
+        &forbidden_trash,
+        &mut |_, _| {
+            if !swapped {
+                swapped = true;
+                fx.swap_toctou_dir_for_junction();
+            }
+        },
+    );
+    assert!(swapped, "the swap must have been performed");
 
     assert!(
         victim.exists(),
@@ -585,11 +627,6 @@ fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
         std::fs::read(&victim).unwrap(),
         Fixture::sentinel_content(&victim),
         "the victim was rewritten"
-    );
-    let handed: BTreeSet<String> = deleted.borrow().iter().map(|p| key(p)).collect();
-    assert!(
-        !handed.contains(&victim_key),
-        "the hijacked path reached the deletion call: deletable_path let it through"
     );
     assert!(
         report

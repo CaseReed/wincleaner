@@ -54,7 +54,7 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   so what they watch is what CI proves. While a sandbox is active the four
   rule variables all resolve inside its root, the recycle-bin query/empty are
   no-op stand-ins, `Trash` mode moves the file to `<root>ecycle-bin` instead
-  of calling `trash::delete`, and both startup commands refuse.
+  of calling `trash::delete_all`, and both startup commands refuse.
 - One network call and one only: `check_for_updates` (`src-tauri/src/update.rs`)
   does a single unauthenticated `GET` on
   `https://api.github.com/repos/CaseReed/wincleaner/releases/latest`, from

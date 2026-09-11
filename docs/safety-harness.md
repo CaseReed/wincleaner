@@ -21,7 +21,7 @@ recording which assertion fires. The mutation table lives in
 | Guard | Fixture that makes it load-bearing |
 | --- | --- |
 | `scan::confined_root` | a junction planted **on the walk root itself** (`%LOCALAPPDATA%\CrashDumps` → `outside3\bait.dmp`). `walkdir` descends into its own root even when that root is a reparse point, so this is the only place the guard can act |
-| `clean::deletable_path` | a directory swapped for a junction **between the internal re-scan and the deletion**, from inside the injected deletion call (`%TEMP%\zz_toctou` → `outside4\victim.txt`) |
+| `clean::deletable_path` | a directory swapped for a junction **between the internal re-scan and the deletion**, from inside the deletion loop (`%TEMP%\zz_toctou` → `outside4\victim.txt`) |
 | `rules::normalize`'s `..` refusal | a rule set carrying `%TEMP%\..\..\..\Documents\*` — which lands exactly on `<profile>\Documents` and passes the textual containment check — loaded through `rules::load_rules_with`, the loader the application uses |
 | `scan::build_set`'s `literal_separator(true)` | `Recent\CustomDestinations\pinned.lnk`: the sibling pattern `Recent\AutomaticDestinations\*` raises the shared walk ceiling to two levels, so the walk *reaches* this file and only the glob refuses it |
 | the non-recursive rule patterns of `rules.toml` | one sentinel one level below each: `Recent\CustomDestinations\pinned.lnk`, `Explorer\keep\thumbcache_9.db`, `CrashDumps\keep\notes.dmp`, each carrying the extension its rule matches |
@@ -45,7 +45,7 @@ fixture to add.
 | `%USERPROFILE%`, `%LOCALAPPDATA%`, `%APPDATA%`, `%TEMP%` | `rules::system_env` |
 | `RecycleQuery` returning a fixed `(3, 4096)` | `SHQueryRecycleBinW` |
 | `RecycleEmpty` returning `Ok(())` | `SHEmptyRecycleBinW` |
-| `TrashDelete` recording the path | `trash::delete` |
+| `TrashDelete` recording the batch | `trash::delete_all` |
 | Winapp2 registry probe always answering `false` | `winapp2::registry_key_exists` |
 
 No test ever reads the real profile, empties the real recycle bin, opens a
@@ -168,7 +168,7 @@ Nothing of yours is reachable while a sandbox is active:
 | `%USERPROFILE%`, `%LOCALAPPDATA%`, `%APPDATA%`, `%TEMP%` all mapped inside the sandbox root | `rules::system_env` |
 | a query answering `(0, 0)` | `SHQueryRecycleBinW` |
 | an empty that does nothing | `SHEmptyRecycleBinW` |
-| `Trash` mode **moves** the file to `<root>\recycle-bin` | `trash::delete` |
+| `Trash` mode **moves** the file to `<root>\recycle-bin` | `trash::delete_all` |
 | Winapp2 registry probe always answering `false` | `winapp2::registry_key_exists` |
 | `list_startup` / `set_startup_enabled` refuse with a message | the real `HKCU` startup keys |
 
@@ -206,13 +206,16 @@ asserts exactly that.
    byte-for-byte intact.
 5. **`a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion`**
    — `clean::deletable_path`. The scan runs and records
-   `%TEMP%\zz_toctou\victim.txt`; then, from *inside* the injected deletion
-   call — after the internal re-scan, in the one window the re-scan cannot see
-   — `zz_toctou` becomes a junction to `outside4`. The stand-in deletes for
-   real (`remove_file`), so the victim survives only if the guard refuses.
-   Asserts the victim is intact, the hijacked path never reached the deletion
-   call, and `CleanReport.skipped` carries it with the reason "outside the user
-   profile at deletion time".
+   `%TEMP%\zz_toctou\victim.txt`; then, from *inside* the deletion loop — the
+   injected per-deletion callback the `clean` command turns into
+   `clean-progress` events, so after the internal re-scan, in the one window
+   the re-scan cannot see — `zz_toctou` becomes a junction to `outside4`. Run
+   in `Permanent` mode, which deletes one file at a time (`Trash` mode batches,
+   `clean::TRASH_BATCH`), so the guard and the deletion stay interleaved; the
+   deletion is the real `remove_file`, so the victim survives only if the guard
+   refuses. Asserts the victim is intact and byte-for-byte unchanged, and that
+   `CleanReport.skipped` carries it with the reason "outside the user profile
+   at deletion time".
 6. **`a_rule_set_carrying_a_parent_segment_is_rejected_by_the_loader`** —
    `rules::normalize`. A rule set whose first entry is
    `%TEMP%\..\..\..\Documents\*` is loaded through `rules::load_rules_with`.
@@ -231,7 +234,7 @@ containment, not as a count that no longer adds up.
 * **The reparse `filter_entry` in `scan::collect`.** See the table above:
   defence in depth, no privilege-free construct exercises it, removing it
   leaves the harness green.
-* **The real `trash::delete`.** Every test passes an injected deletion call, and
+* **The real `trash::delete_all`.** Every test passes an injected deletion call, and
   the `Permanent`-mode tests pass a panic stub (`forbidden_trash`) so reaching
   the move-to-bin aborts the run rather than being caught after the fact. Two
   doors cannot be closed from an integration test: `clean::clean_rule` and
@@ -245,7 +248,7 @@ containment, not as a count that no longer adds up.
   accepted limitation already stated in `CLAUDE.md`; the harness documents it
   rather than asserting it.
 * **The real Recycle Bin.** `SHQueryRecycleBinW` / `SHEmptyRecycleBinW` and
-  `trash::delete` are injected. That the shell really empties the bin is
+  `trash::delete_all` are injected. That the shell really empties the bin is
   covered by `docs/manual-verification.md`, not here.
 * **The real registry.** Winapp2 `Detect=HK..` probes always answer `false`,
   so registry-detected entries are never exercised. The startup keys are

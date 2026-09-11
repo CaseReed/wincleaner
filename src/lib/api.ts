@@ -49,6 +49,20 @@ export interface ScanProgress {
   total_bytes: number;
 }
 
+/// Mirrors `src-tauri/src/commands.rs::CleanProgress`, emitted while `clean`
+/// runs: once as each rule closes, and every 500 files inside a rule — a
+/// Recycle Bin holding tens of thousands of files is minutes of work on its
+/// own. `files_deleted` and `bytes_freed` are the running totals since the
+/// start of that clean, not the counts of the rule named by the event.
+export interface CleanProgress {
+  done_rules: number;
+  total_rules: number;
+  rule_id: string;
+  label: string;
+  files_deleted: number;
+  bytes_freed: number;
+}
+
 export interface SkippedItem {
   path: string;
   reason: string;
@@ -139,6 +153,14 @@ export function onScanProgress(
 
 export function clean(ruleIds: string[], mode: CleanMode): Promise<CleanReport> {
   return invoke<CleanReport>("clean", { ruleIds, mode });
+}
+
+/// Subscribes to the progress of the running `clean`. Same contract as
+/// `onScanProgress`: resolves with the function that stops listening.
+export function onCleanProgress(
+  cb: (progress: CleanProgress) => void,
+): Promise<() => void> {
+  return listen<CleanProgress>("clean-progress", (event) => cb(event.payload));
 }
 
 export function runningBrowsers(): Promise<string[]> {

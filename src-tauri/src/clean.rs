@@ -39,20 +39,80 @@ impl CleanReport {
 /// Emptying of the recycle bin, injected to stay testable.
 pub type RecycleEmpty<'a> = &'a dyn Fn() -> Result<(), String>;
 
-/// Moving ONE file to the recycle bin, injected to stay testable.
+/// Moving files to the recycle bin, injected to stay testable.
 ///
-/// `trash::delete` is the only deletion path that reaches outside the tree it
-/// is given: it hands the file to the shell, which files it in the real
+/// `trash::delete_all` is the only deletion path that reaches outside the tree
+/// it is given: it hands the files to the shell, which files them in the real
 /// recycle bin of the volume. A test exercising `CleanMode::Trash` for real
 /// would therefore litter the recycle bin of whoever runs the suite. This
 /// injection point exists so the safety harness can run the whole `Trash`
 /// path — re-scan, `deletable_path` guard, emptied-directory sweep — while
 /// recording the paths instead of handing them to the shell.
-pub type TrashDelete<'a> = &'a dyn Fn(&Path) -> Result<(), String>;
+///
+/// The slice is what makes the mode usable at all: see `TRASH_BATCH`.
+pub type TrashDelete<'a> = &'a dyn Fn(&[PathBuf]) -> Result<(), String>;
+
+/// How many approved paths go to the recycle bin in one call.
+///
+/// On Windows one `trash::delete_all` is one `IFileOperation`, whose fixed cost
+/// — COM plumbing, the shell's own progress reporting, one undo record — is
+/// what dominates a bin full of small files. Handing them over one at a time
+/// measured about 75 files/s on a real profile: 59,000 files took thirteen
+/// minutes. The batch is what that number is divided by.
+pub const TRASH_BATCH: usize = 500;
+
+/// Called after each deletion step with the running counts of the rule being
+/// cleaned: `(deleted, freed_bytes)`. A step is one file in `Permanent` mode,
+/// one batch in `Trash` mode. Injected, like `TrashDelete`, so the sequence the
+/// front end draws is asserted without a Tauri application — the caller decides
+/// how often that becomes an event (`commands.rs::PROGRESS_EVERY`).
+pub type CleanTick<'a> = &'a mut dyn FnMut(u64, u64);
 
 /// The real one. Separate function so `clean_rule_with_api` can name it.
-fn trash_delete(path: &Path) -> Result<(), String> {
-    trash::delete(path).map_err(|e| e.to_string())
+fn trash_delete(paths: &[PathBuf]) -> Result<(), String> {
+    trash::delete_all(paths).map_err(|e| e.to_string())
+}
+
+/// One entry approved by `deletable_path` and waiting for its batch: the
+/// canonical path handed to the shell, the size credited on success, and the
+/// scanned path a failure is reported against (`skipped` never shows the
+/// verbatim `\\?\` form).
+type Approved = (PathBuf, u64, String);
+
+/// Hands one batch to the recycle bin, then falls back to one call per file if
+/// that fails.
+///
+/// The shell reports a failed `IFileOperation` as a single error for the whole
+/// lot: without the retry, one locked file would cost the other 499 their place
+/// in `deleted` and name none of them in `skipped`. The fallback pays a batch's
+/// worth of calls only on the batch that failed.
+fn send_to_trash(batch: &[Approved], trash: TrashDelete, report: &mut CleanReport) {
+    let paths: Vec<PathBuf> = batch.iter().map(|(real, _, _)| real.clone()).collect();
+    if trash(&paths).is_ok() {
+        report.deleted += batch.len() as u64;
+        report.freed_bytes += batch.iter().map(|(_, size, _)| size).sum::<u64>();
+        return;
+    }
+    for (real, size, scanned) in batch {
+        let reason = match trash(std::slice::from_ref(real)) {
+            Ok(()) => None,
+            // A file the failed batch did move is gone from the disk: the retry
+            // cannot find it any more, and calling that "skipped" would be a
+            // lie about what is still there.
+            Err(reason) if real.exists() => Some(reason),
+            Err(_) => None,
+        };
+        match reason {
+            None => {
+                report.deleted += 1;
+                report.freed_bytes += size;
+            }
+            Some(reason) => report.skipped.push(SkippedItem {
+                path: scanned.clone(),
+                reason,
+            }),
+        }
+    }
 }
 
 /// Resolves `Auto` from the rule risk. Never returns `Auto`.
@@ -147,6 +207,7 @@ pub fn clean_rule_with_api(
     lookup: EnvLookup,
     recycle_query: RecycleQuery,
     recycle_empty: RecycleEmpty,
+    tick: CleanTick,
 ) -> Result<CleanReport, RuleError> {
     clean_rule_with_trash(
         rule,
@@ -155,6 +216,7 @@ pub fn clean_rule_with_api(
         recycle_query,
         recycle_empty,
         &trash_delete,
+        tick,
     )
 }
 
@@ -167,6 +229,7 @@ pub fn clean_rule_with_trash(
     recycle_query: RecycleQuery,
     recycle_empty: RecycleEmpty,
     trash: TrashDelete,
+    tick: CleanTick,
 ) -> Result<CleanReport, RuleError> {
     // Internal re-scan just before deleting: the front end never sent a path,
     // and the state of the disk may have changed since the scan.
@@ -195,6 +258,7 @@ pub fn clean_rule_with_trash(
     let patterns = crate::rules::resolved_paths_with(rule, lookup)?;
     let excludes = crate::rules::resolved_excludes_with(rule, lookup)?;
     let mut report = CleanReport::default();
+    let mut pending: Vec<Approved> = Vec::new();
 
     for path in &scan.paths {
         let (real, size) = match deletable_path(path, &profile_canon) {
@@ -207,34 +271,48 @@ pub fn clean_rule_with_trash(
                 continue;
             }
         };
-        let outcome = match target {
-            CleanMode::Permanent => std::fs::remove_file(&real).map_err(|e| e.to_string()),
-            CleanMode::Trash => trash(&real),
-            CleanMode::Auto => unreachable!("effective_mode never returns Auto"),
-        };
-        match outcome {
-            Ok(()) => {
-                report.deleted += 1;
-                report.freed_bytes += size;
+        match target {
+            CleanMode::Permanent => {
+                match std::fs::remove_file(&real) {
+                    Ok(()) => {
+                        report.deleted += 1;
+                        report.freed_bytes += size;
+                    }
+                    Err(e) => report.skipped.push(SkippedItem {
+                        path: path.clone(),
+                        reason: e.to_string(),
+                    }),
+                }
+                tick(report.deleted, report.freed_bytes);
             }
-            Err(reason) => report.skipped.push(SkippedItem {
-                path: path.clone(),
-                reason,
-            }),
+            CleanMode::Trash => {
+                pending.push((real, size, path.clone()));
+                if pending.len() == TRASH_BATCH {
+                    send_to_trash(&pending, trash, &mut report);
+                    pending.clear();
+                    tick(report.deleted, report.freed_bytes);
+                }
+            }
+            CleanMode::Auto => unreachable!("effective_mode never returns Auto"),
         }
+    }
+    if !pending.is_empty() {
+        send_to_trash(&pending, trash, &mut report);
+        tick(report.deleted, report.freed_bytes);
     }
 
     remove_emptied_directories(&patterns, &excludes, &profile_canon)?;
     Ok(report)
 }
 
-pub fn clean_rule(rule: &Rule, mode: CleanMode) -> Result<CleanReport, RuleError> {
+pub fn clean_rule(rule: &Rule, mode: CleanMode, tick: CleanTick) -> Result<CleanReport, RuleError> {
     clean_rule_with_api(
         rule,
         mode,
         &system_env,
         &query_recycle_bin,
         &empty_recycle_bin,
+        tick,
     )
 }
 
@@ -425,6 +503,7 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(report.deleted, 2);
@@ -446,12 +525,206 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(report.deleted, 2);
         assert_eq!(report.freed_bytes, 8);
         let temp = dir.path().join("AppData").join("Local").join("Temp");
         assert!(!temp.join("a.txt").exists());
+    }
+
+    /// Builds `count` files under `%TEMP%`, and answers their total size.
+    fn temp_files(dir: &Path, count: usize) -> u64 {
+        let temp = dir.join("AppData").join("Local").join("Temp");
+        fs::create_dir_all(&temp).unwrap();
+        for n in 0..count {
+            fs::write(temp.join(format!("f{n:05}.txt")), b"junk").unwrap();
+        }
+        (count * 4) as u64
+    }
+
+    /// The item itself: 59,000 files handed over one at a time measured about
+    /// 75 files/s. What the rule owes the shell is one call per `TRASH_BATCH`,
+    /// and the counts must stay exactly what the per-file loop reported.
+    #[test]
+    fn trash_mode_hands_the_shell_one_call_per_batch() {
+        let dir = TempDir::new().unwrap();
+        let bytes = temp_files(dir.path(), 5_000);
+        let lookup = lookup_for(dir.path());
+        let sizes = std::cell::RefCell::new(Vec::<usize>::new());
+        let trash = |paths: &[PathBuf]| {
+            sizes.borrow_mut().push(paths.len());
+            paths.iter().try_for_each(|p| fs::remove_file(p).map_err(|e| e.to_string()))
+        };
+
+        let report = clean_rule_with_trash(
+            &temp_rule(Risk::Medium),
+            CleanMode::Trash,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &trash,
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(report.deleted, 5_000);
+        assert_eq!(report.freed_bytes, bytes);
+        assert!(report.skipped.is_empty());
+        assert_eq!(
+            *sizes.borrow(),
+            vec![TRASH_BATCH; 5_000 / TRASH_BATCH],
+            "one call per batch of {TRASH_BATCH}, and nothing left over"
+        );
+    }
+
+    /// A batch that does not divide evenly ends on a short call, not on a
+    /// silently dropped remainder.
+    #[test]
+    fn the_last_batch_carries_whatever_is_left() {
+        let dir = TempDir::new().unwrap();
+        temp_files(dir.path(), TRASH_BATCH + 3);
+        let lookup = lookup_for(dir.path());
+        let sizes = std::cell::RefCell::new(Vec::<usize>::new());
+        let trash = |paths: &[PathBuf]| {
+            sizes.borrow_mut().push(paths.len());
+            paths.iter().try_for_each(|p| fs::remove_file(p).map_err(|e| e.to_string()))
+        };
+
+        let report = clean_rule_with_trash(
+            &temp_rule(Risk::Medium),
+            CleanMode::Trash,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &trash,
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(report.deleted, (TRASH_BATCH + 3) as u64);
+        assert_eq!(*sizes.borrow(), vec![TRASH_BATCH, 3]);
+    }
+
+    /// The shell reports a failed batch as one error for the whole lot. Without
+    /// the per-file retry, one unusable file would cost the other 499 their
+    /// place in `deleted` and name none of them in `skipped`.
+    #[test]
+    fn a_failed_batch_falls_back_to_one_call_per_file() {
+        let dir = TempDir::new().unwrap();
+        temp_files(dir.path(), 4);
+        let lookup = lookup_for(dir.path());
+        let calls = std::cell::RefCell::new(Vec::<usize>::new());
+        let trash = |paths: &[PathBuf]| {
+            calls.borrow_mut().push(paths.len());
+            if paths.len() > 1 {
+                return Err("the operation could not be completed".to_string());
+            }
+            if paths[0].to_string_lossy().contains("f00002") {
+                return Err("the file is in use".to_string());
+            }
+            fs::remove_file(&paths[0]).map_err(|e| e.to_string())
+        };
+
+        let report = clean_rule_with_trash(
+            &temp_rule(Risk::Medium),
+            CleanMode::Trash,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &trash,
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        // One failed batch of four, then the four retries.
+        assert_eq!(*calls.borrow(), vec![4, 1, 1, 1, 1]);
+        assert_eq!(report.deleted, 3);
+        assert_eq!(report.freed_bytes, 12);
+        assert_eq!(report.skipped.len(), 1);
+        assert!(report.skipped[0].path.ends_with("f00002.txt"));
+        assert_eq!(report.skipped[0].reason, "the file is in use");
+    }
+
+    /// A batch that failed halfway has still moved some of its files. The retry
+    /// cannot find those any more, and calling them "skipped" would claim they
+    /// are still on disk.
+    #[test]
+    fn a_file_the_failed_batch_did_move_is_still_counted_as_deleted() {
+        let dir = TempDir::new().unwrap();
+        temp_files(dir.path(), 2);
+        let lookup = lookup_for(dir.path());
+        let trash = |paths: &[PathBuf]| {
+            // The shell moved the first file, then gave up on the batch; the
+            // per-file retries that follow move nothing at all.
+            if paths.len() > 1 {
+                let _ = fs::remove_file(&paths[0]);
+            }
+            Err("the operation could not be completed".to_string())
+        };
+
+        let report = clean_rule_with_trash(
+            &temp_rule(Risk::Medium),
+            CleanMode::Trash,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &trash,
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(report.deleted, 1);
+        assert_eq!(report.freed_bytes, 4);
+        assert_eq!(report.skipped.len(), 1);
+        assert!(report.skipped[0].path.ends_with("f00001.txt"));
+    }
+
+    /// `Permanent` mode stays one `remove_file` per file — and therefore one
+    /// tick per file, which is what the harness uses to reach inside the loop.
+    #[test]
+    fn permanent_mode_ticks_once_per_file_and_trash_mode_once_per_batch() {
+        let dir = TempDir::new().unwrap();
+        temp_files(dir.path(), TRASH_BATCH + 1);
+        let lookup = lookup_for(dir.path());
+        let mut ticks = Vec::<(u64, u64)>::new();
+        clean_rule_with_api(
+            &temp_rule(Risk::Low),
+            CleanMode::Permanent,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &mut |d, b| ticks.push((d, b)),
+        )
+        .unwrap();
+        assert_eq!(ticks.len(), TRASH_BATCH + 1);
+        assert_eq!(*ticks.last().unwrap(), ((TRASH_BATCH + 1) as u64, (TRASH_BATCH + 1) as u64 * 4));
+
+        let dir = TempDir::new().unwrap();
+        temp_files(dir.path(), TRASH_BATCH + 1);
+        let lookup = lookup_for(dir.path());
+        let trash = |paths: &[PathBuf]| {
+            paths.iter().try_for_each(|p| fs::remove_file(p).map_err(|e| e.to_string()))
+        };
+        let mut ticks = Vec::<(u64, u64)>::new();
+        clean_rule_with_trash(
+            &temp_rule(Risk::Medium),
+            CleanMode::Trash,
+            &lookup,
+            &forbidden_recycle_query,
+            &forbidden_recycle_empty,
+            &trash,
+            &mut |d, b| ticks.push((d, b)),
+        )
+        .unwrap();
+        assert_eq!(
+            ticks,
+            vec![
+                (TRASH_BATCH as u64, TRASH_BATCH as u64 * 4),
+                ((TRASH_BATCH + 1) as u64, (TRASH_BATCH + 1) as u64 * 4),
+            ]
+        );
     }
 
     #[test]
@@ -485,6 +758,7 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -517,6 +791,7 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -553,6 +828,7 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
 
@@ -578,6 +854,7 @@ mod tests {
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(report.deleted, 0);
@@ -620,6 +897,7 @@ mod tests {
             &lookup,
             &query,
             &empty,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(report.deleted, 4);
@@ -639,6 +917,7 @@ mod tests {
             &lookup,
             &query,
             &empty,
+            &mut |_, _| {},
         )
         .unwrap();
         assert_eq!(report.deleted, 0);

@@ -12,6 +12,7 @@ import {
   filterRules,
   groupByCategory,
   listRules,
+  onCleanProgress,
   onScanProgress,
   rulesSummary,
   runningBrowsers,
@@ -19,6 +20,7 @@ import {
   scan,
   sortGrouped,
   type CleanMode,
+  type CleanProgress,
   type CleanReport,
   type RuleSummary,
   type RulesSummary,
@@ -236,6 +238,13 @@ export function CleanPanel({
   /// over `busyAction` would let a late event from a finished scan repaint a
   /// hero that is showing results.
   const scanPending = useRef(false);
+  /// The last `clean-progress` event of the running clean, or null before the
+  /// first one arrives. Read only while a clean is pending.
+  const [cleanProgress, setCleanProgress] = useState<CleanProgress | null>(null);
+  const cleanPending = useRef(false);
+  /// The rule count the live region last spoke about, so a rule that reports
+  /// from inside its own deletion loop is not read out every 500 files.
+  const spokenRule = useRef(0);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [query, setQuery] = useState("");
@@ -263,6 +272,10 @@ export function CleanPanel({
   /// Zero until the first event: a bar that starts full would be a lie.
   const scanPercent =
     progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
+  const cleanPercent =
+    cleanProgress && cleanProgress.total_rules > 0
+      ? (cleanProgress.done_rules / cleanProgress.total_rules) * 100
+      : 0;
   const stillProgress = prefersReducedMotion();
 
   const [reloadKey, setReloadKey] = useState(0);
@@ -319,6 +332,43 @@ export function CleanPanel({
       })
       .catch(() => {
         // No progress feedback, but Analyze itself still works: the hero falls
+        // back to the rule count.
+      });
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
+
+  /// Same contract as the scan subscription above: in place before `clean` is
+  /// invoked, because `clean` emits while it deletes.
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let gone = false;
+    onCleanProgress((step) => {
+      if (!cleanPending.current) return;
+      setCleanProgress(step);
+      // A rule that deletes 59,000 files reports every 500 of them: the live
+      // region follows the rules, not the files, or it reads the same sentence
+      // a hundred times over.
+      if (
+        step.done_rules !== spokenRule.current &&
+        (step.done_rules % 10 === 0 || step.done_rules === step.total_rules)
+      ) {
+        spokenRule.current = step.done_rules;
+        setAnnouncement(
+          `Cleaning: ${RULE_COUNT.format(step.done_rules)} of ${RULE_COUNT.format(
+            step.total_rules
+          )} rules, ${formatBytes(step.bytes_freed)} freed so far`
+        );
+      }
+    })
+      .then((unlisten) => {
+        if (gone) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {
+        // No progress feedback, but Clean itself still works: the hero falls
         // back to the rule count.
       });
     return () => {
@@ -485,6 +535,10 @@ export function CleanPanel({
     setBusyAction("clean");
     setVerdict(null);
     setVerdictError(null);
+    setCleanProgress(null);
+    setAnnouncement("Cleaning…");
+    spokenRule.current = 0;
+    cleanPending.current = true;
     // What was cleaned, captured before `results` is dropped: the verdict is
     // scoped to these rules, so it must be the list Clean was actually given.
     const cleaned = cleanIds;
@@ -492,6 +546,11 @@ export function CleanPanel({
       const done = await clean(cleaned, mode);
       setReport(done);
       setResults(null);
+      setAnnouncement(
+        `Cleanup complete: ${formatBytes(done.freed_bytes)} freed, ${formatCount(
+          done.deleted
+        )} files deleted`
+      );
       toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
       // The whole point of the sandbox: read the disk back against what it
       // promised, instead of trusting the report the cleaner just wrote. In
@@ -507,6 +566,7 @@ export function CleanPanel({
     } catch (err) {
       setRulesError(String(err));
     } finally {
+      cleanPending.current = false;
       setBusyAction(null);
     }
   }
@@ -600,9 +660,30 @@ export function CleanPanel({
                   belongs to the rule categories, and an extra one here would
                   put "Reclaimable" in the document outline above them. */}
               <p id={heroTitleId} className="eyebrow text-muted-foreground">
-                Reclaimable
+                {busyAction === "clean" ? "Freed" : "Reclaimable"}
               </p>
-              {busyAction === "scan" ? (
+              {busyAction === "clean" ? (
+                // What the clean has actually freed so far. A Recycle Bin
+                // holding tens of thousands of files is minutes of work: the
+                // number ticks up instead of standing at an em dash.
+                <>
+                  <p
+                    data-testid="clean-progress-bytes"
+                    className="mt-1.5 font-mono tnum text-[2rem] leading-none font-semibold"
+                  >
+                    {formatBytes(cleanProgress?.bytes_freed ?? 0)}
+                  </p>
+                  <p
+                    data-testid="clean-progress-files"
+                    className="mt-1.5 text-sm text-muted-foreground"
+                  >
+                    <span className="font-mono tnum">
+                      {formatCount(cleanProgress?.files_deleted ?? 0)}
+                    </span>{" "}
+                    files deleted
+                  </p>
+                </>
+              ) : busyAction === "scan" ? (
                 // What has been measured so far, ticking up as the walk
                 // progresses instead of an em dash held for thirty seconds.
                 <p
@@ -667,22 +748,35 @@ export function CleanPanel({
           </div>
           {busyAction ? (
             <div data-testid="hero-status" className="flex flex-col gap-2.5">
-              {busyAction === "scan" && (
-                <div className="h-2.5 w-full overflow-hidden rounded-[5px] bg-muted">
-                  <div
-                    data-testid="scan-progress-bar"
-                    className="h-full rounded-[5px]"
-                    style={{
-                      width: `${scanPercent}%`,
-                      background: "var(--primary)",
-                      transition: stillProgress ? "none" : "width 200ms linear",
-                    }}
-                  />
-                </div>
-              )}
+              <div className="h-2.5 w-full overflow-hidden rounded-[5px] bg-muted">
+                <div
+                  data-testid={
+                    busyAction === "clean" ? "clean-progress-bar" : "scan-progress-bar"
+                  }
+                  className="h-full rounded-[5px]"
+                  style={{
+                    width: `${busyAction === "clean" ? cleanPercent : scanPercent}%`,
+                    background: "var(--primary)",
+                    transition: stillProgress ? "none" : "width 200ms linear",
+                  }}
+                />
+              </div>
               <p className="text-sm text-muted-foreground">
                 {busyAction === "clean" ? (
-                  "Cleaning…"
+                  cleanProgress ? (
+                    <span data-testid="clean-progress">
+                      Cleaning{" "}
+                      <span className="font-mono tnum">
+                        {RULE_COUNT.format(cleanProgress.done_rules)} /{" "}
+                        {RULE_COUNT.format(cleanProgress.total_rules)}
+                      </span>{" "}
+                      · {cleanProgress.label}
+                    </span>
+                  ) : (
+                    // Between the click and the first event: the recycle bin
+                    // goes first, and nothing has been deleted yet.
+                    `Cleaning ${RULE_COUNT.format(cleanIds.length)} rules…`
+                  )
                 ) : progress ? (
                   <span data-testid="scan-progress">
                     Analyzing{" "}

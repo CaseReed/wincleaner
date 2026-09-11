@@ -344,3 +344,40 @@ Unplug the mouse, or simply do not touch it.
    silent image.
 10. Startup screen with Narrator: the table must be announced by its caption,
     and flipping a row must speak "<name> enabled at startup" or "disabled".
+
+## VM-19 — Progress during Clean, and batched Recycle Bin deletion — to be run by the user
+
+Not run automatically: it deletes for real, and the whole point is the time it
+takes on a profile that is actually loaded.
+
+1. Cleanup screen. Set the mode to **Recycle Bin**, check **Temporary files**
+   and whatever else is large, leave **Recycle Bin** itself unchecked, and
+   click **Analyze**. Note the total and the file count.
+2. Click **Clean**, then **Confirm cleanup**, and watch the hero without
+   touching anything else. Start a stopwatch.
+3. Before the first event, the hero reads "Cleaning N rules…" with an empty
+   bar. Within a second it must switch to "Cleaning 1 / N · <rule name>" and
+   the bar must start filling.
+4. The counter must only ever go up, name a different rule as it goes, and
+   reach exactly N / N. The big number must climb with it — that is what has
+   been freed so far — and the file count under it likewise. A rule holding
+   tens of thousands of files must keep reporting **while** it works: the
+   numbers must move several times a second, not once when the rule ends.
+5. The bottom bar must keep its disabled "Cleaning…" button throughout: the
+   progress belongs to the hero, the action bar does not move.
+6. Stop the stopwatch. A rule of a few tens of thousands of small files should
+   take **tens of seconds, not tens of minutes** — the measured run this
+   replaces was 59,000 files in thirteen minutes, one file per call.
+7. Open the Windows Recycle Bin: every file must be in it, restorable, with the
+   right count. Nothing may have been deleted permanently.
+8. Check the report: "X freed · N files deleted", with "Skipped" empty, or
+   naming only files that really are still on disk (open ones, typically a
+   running browser). A file listed under "Skipped" that is no longer there is
+   the bug this item exists to catch.
+9. Run it again with a browser open so a batch fails: the other files of that
+   batch must still be counted as deleted, and only the locked one named.
+10. Turn on **Settings > Ease of Access > Show animations in Windows = Off**
+    (`prefers-reduced-motion`), relaunch and clean again: the bar must jump
+    from step to step with no sliding animation, and still reach N / N.
+11. With Narrator on, clean once: it must speak the progress a few times, not
+    on every batch, and state the report at the end.

@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Clean has a progress bar of its own.** Cleaning used to be a disabled
+  button reading "Cleaning…" for as long as the work took — thirteen minutes on
+  a measured run. `clean` now emits `clean-progress` as each rule closes and
+  every 500 files inside a rule, and the hero draws the same determinate bar as
+  Analyze: "Cleaning 3 / 9 · Temporary files", with the freed bytes and the
+  file count ticking up in the big-number position. The live region follows the
+  rules, not the files, so a rule deleting 59,000 of them is not read out a
+  hundred times over.
+
 ### Changed
+
+- **Recycle Bin mode is far faster: files go to the bin 500 at a time.** Each
+  `trash::delete` is one `IFileOperation`, and its fixed cost — COM plumbing,
+  the shell's own progress reporting, one undo record — is what dominates a bin
+  full of small files: a real run measured about 75 files/s, so 59,000 files
+  took thirteen minutes. One `trash::delete_all` per batch of 500 divides that
+  by the batch. The `deletable_path` guard still runs per file, immediately
+  before the file joins its batch, and a batch the shell refuses is retried one
+  file at a time so `skipped` still names exactly what is still on disk.
+  Permanent mode is unchanged: one `remove_file` per file.
 
 - **Keyboard and screen-reader pass over the whole interface.** The sidebar is
   a named `Main` landmark with a roving tabindex — the arrow keys, `Home` and
