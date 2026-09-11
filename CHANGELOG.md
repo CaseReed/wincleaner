@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The browser warning now tells the truth about background processes.** Closing every
+  Chrome window is not enough when "Continue running background apps" is on; the
+  banner used to say the browser was open. It now names the browser, counts its
+  processes, distinguishes a visible window from background-only processes, and
+  is refreshed every time Analyze is clicked. Closes #5.
+
 ### Added
 
 - **The Clean has a progress bar of its own.** Cleaning used to be a disabled

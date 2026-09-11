@@ -327,16 +327,49 @@ describe("CleanPanel", () => {
     expect(screen.getByLabelText("Deletion mode")).toHaveValue("auto");
   });
 
-  it("shows the banner when a targeted browser is open", async () => {
-    api.runningBrowsers.mockResolvedValue(["msedge.exe"]);
+  it("shows the banner when a targeted browser has a window open", async () => {
+    api.runningBrowsers.mockResolvedValue([
+      { process: "msedge.exe", name: "Microsoft Edge", processes: 3, has_window: true },
+    ]);
     render(<CleanPanel />);
-    expect(await screen.findByTestId("browser-warning")).toHaveTextContent("msedge.exe");
+    expect(await screen.findByTestId("browser-warning")).toHaveTextContent(
+      "Microsoft Edge is open: its cache files in use will be skipped. Close it for a complete cleanup."
+    );
+  });
+
+  it("warns about background processes when the browser has no window left", async () => {
+    api.runningBrowsers.mockResolvedValue([
+      { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+    ]);
+    render(<CleanPanel />);
+    expect(await screen.findByTestId("browser-warning")).toHaveTextContent(
+      "Google Chrome is still running in the background (9 processes): quit it from the notification area, or its cache files in use will be skipped."
+    );
   });
 
   it("does not show the banner when no browser is open", async () => {
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
     expect(screen.queryByTestId("browser-warning")).toBeNull();
+  });
+
+  it("re-checks running browsers when Analyze is clicked", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+      ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    expect(screen.queryByTestId("browser-warning")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    expect(await screen.findByTestId("browser-warning")).toHaveTextContent(
+      "Google Chrome is still running in the background"
+    );
+    expect(api.runningBrowsers).toHaveBeenCalledTimes(2);
   });
 
   it("shows the rule loading error", async () => {

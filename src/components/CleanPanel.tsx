@@ -24,6 +24,7 @@ import {
   type CleanReport,
   type RuleSummary,
   type RulesSummary,
+  type RunningBrowser,
   type SandboxSummary,
   type SandboxVerdict,
   type ScanProgress,
@@ -88,6 +89,21 @@ export function isIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
   if (rule.kind === "recycle-bin") return true;
   if (mode === "permanent") return true;
   return mode === "auto" && rule.risk === "low";
+}
+
+/// One line of the browser warning banner. A browser with a visible window
+/// open behaves like before: some of its cache files will be skipped. One
+/// with no window left — Chrome and Edge keep several background processes
+/// alive after every window is closed ("Continue running background apps")
+/// — is not actually "open" from the user's point of view, so the banner
+/// says where to actually quit it from instead of implying a window is
+/// still there.
+export function browserWarningLine(browser: RunningBrowser): string {
+  if (browser.has_window) {
+    return `${browser.name} is open: its cache files in use will be skipped. Close it for a complete cleanup.`;
+  }
+  const count = browser.processes === 1 ? "1 process" : `${browser.processes} processes`;
+  return `${browser.name} is still running in the background (${count}): quit it from the notification area, or its cache files in use will be skipped.`;
 }
 
 function Screen({ children }: { children: React.ReactNode }) {
@@ -243,7 +259,7 @@ export function CleanPanel({
   /// own: it says nothing about the clean, which has already been reported.
   const [verdictError, setVerdictError] = useState<string | null>(null);
   const [mode, setMode] = useState<CleanMode>("auto");
-  const [browsers, setBrowsers] = useState<string[]>([]);
+  const [browsers, setBrowsers] = useState<RunningBrowser[]>([]);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
   /// The last `scan-progress` event of the running scan, or null before the
   /// first one arrives. Read only while a scan is pending.
@@ -529,6 +545,11 @@ export function CleanPanel({
     // A new scan re-decides which categories are worth showing: the previous
     // hand folds no longer describe these results.
     setFolds(new Map());
+    // The browser warning was last measured at load: the user may have
+    // closed (or opened) a browser since, so Analyze re-checks it too.
+    runningBrowsers()
+      .then(setBrowsers)
+      .catch(() => setBrowsers([]));
     try {
       const measured = await scan(availableRules.map((r) => r.id));
       setResults(measured);
@@ -648,10 +669,11 @@ export function CleanPanel({
             className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/12 px-4 py-3 text-sm text-warning-foreground"
           >
             <TriangleAlert className="mt-px size-4 shrink-0 text-warning" />
-            <p>
-              <span className="font-mono">{browsers.join(", ")}</span> is open:
-              its files that are currently in use will be skipped.
-            </p>
+            <div className="flex flex-col gap-1">
+              {browsers.map((browser) => (
+                <p key={browser.process}>{browserWarningLine(browser)}</p>
+              ))}
+            </div>
           </div>
         )}
 

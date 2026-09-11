@@ -20,6 +20,29 @@ use tauri::Emitter;
 /// Processes considered "an open browser" for the warning banner.
 pub const BROWSER_PROCESSES: [&str; 3] = ["msedge.exe", "chrome.exe", "firefox.exe"];
 
+/// One tracked browser found among the running processes: how many processes
+/// it has, and whether any of them still owns a visible window. Chrome (and
+/// Edge) keep several background processes alive after every window is
+/// closed ("Continue running background apps") — `has_window` is what tells
+/// the front end whether the user actually has the browser open, or just its
+/// leftover background processes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RunningBrowser {
+    pub process: String,
+    pub name: String,
+    pub processes: u32,
+    pub has_window: bool,
+}
+
+fn browser_display_name(process: &str) -> &'static str {
+    match process {
+        "chrome.exe" => "Google Chrome",
+        "msedge.exe" => "Microsoft Edge",
+        "firefox.exe" => "Mozilla Firefox",
+        _ => "Unknown browser",
+    }
+}
+
 /// What the front end receives to build the rule list. Never contains a path:
 /// the front end has no business knowing what will be deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,15 +195,74 @@ pub fn rule_summaries() -> Result<Vec<RuleSummary>, String> {
     Ok(catalogue()?.rules.iter().cloned().map(summarize).collect())
 }
 
-pub fn running_browsers_from(process_names: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for name in process_names {
+/// Pure core of `running_browsers`: groups `(process name, pid)` pairs by the
+/// browsers we track, counting their processes and asking `has_window`
+/// (injected so this needs no real desktop) whether any of a browser's pids
+/// still owns a visible top-level window.
+pub fn summarise(processes: &[(String, u32)], has_window: &dyn Fn(u32) -> bool) -> Vec<RunningBrowser> {
+    let mut order: Vec<String> = Vec::new();
+    let mut pids: HashMap<String, Vec<u32>> = HashMap::new();
+    for (name, pid) in processes {
         let lower = name.to_lowercase();
-        if BROWSER_PROCESSES.contains(&lower.as_str()) && !out.contains(&lower) {
-            out.push(lower);
+        if !BROWSER_PROCESSES.contains(&lower.as_str()) {
+            continue;
         }
+        if !pids.contains_key(&lower) {
+            order.push(lower.clone());
+        }
+        pids.entry(lower).or_default().push(*pid);
     }
-    out
+    order
+        .into_iter()
+        .map(|process| {
+            let list = &pids[&process];
+            RunningBrowser {
+                name: browser_display_name(&process).to_string(),
+                processes: list.len() as u32,
+                has_window: list.iter().any(|&pid| has_window(pid)),
+                process,
+            }
+        })
+        .collect()
+}
+
+/// Whether any window still visible on screen belongs to `pid`. Walks every
+/// top-level window with `EnumWindows`, matching each one's owning process
+/// with `GetWindowThreadProcessId`. A background-only process (Chrome's
+/// "Continue running background apps") owns no such window.
+fn pid_has_visible_window(pid: u32) -> bool {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    struct Search {
+        target: u32,
+        found: bool,
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let search = &mut *(lparam.0 as *mut Search);
+        let mut owner_pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut owner_pid));
+        if owner_pid == search.target && IsWindowVisible(hwnd).as_bool() {
+            search.found = true;
+            return BOOL(0); // stop the walk: one visible window is enough
+        }
+        BOOL(1)
+    }
+
+    let mut search = Search {
+        target: pid,
+        found: false,
+    };
+    unsafe {
+        // A stopped enumeration returns an error from the last callback
+        // return value, not a real failure: the answer is in `search.found`
+        // either way.
+        let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
+    }
+    search.found
 }
 
 /// Async like the other heavy commands: the first call builds the catalogue if
@@ -397,15 +479,15 @@ pub async fn clean(
 }
 
 #[tauri::command]
-pub fn running_browsers() -> Vec<String> {
+pub fn running_browsers() -> Vec<RunningBrowser> {
     let mut system = System::new_all();
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    let names: Vec<String> = system
+    let processes: Vec<(String, u32)> = system
         .processes()
-        .values()
-        .map(|p| p.name().to_string_lossy().to_string())
+        .iter()
+        .map(|(pid, p)| (p.name().to_string_lossy().to_string(), pid.as_u32()))
         .collect();
-    running_browsers_from(&names)
+    summarise(&processes, &pid_has_visible_window)
 }
 
 /// The minimum spacing between two GitHub requests this process will make: a
@@ -906,36 +988,78 @@ pub async fn sandbox_remove_orphans(state: tauri::State<'_, SandboxState>) -> Re
 mod tests {
     use super::*;
 
+    /// No pid ever owns a window: the default stand-in for `has_window` in
+    /// tests that only care about which browsers and counts come out.
+    fn no_windows(_pid: u32) -> bool {
+        false
+    }
+
     #[test]
     fn only_the_targeted_browsers_are_retained() {
-        let names: Vec<String> = [
-            "explorer.exe",
-            "msedge.exe",
-            "MSEDGE.EXE",
-            "chrome.exe",
-            "code.exe",
+        let names: Vec<(String, u32)> = [
+            ("explorer.exe", 1),
+            ("msedge.exe", 2),
+            ("MSEDGE.EXE", 3),
+            ("chrome.exe", 4),
+            ("code.exe", 5),
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(|(name, pid)| (name.to_string(), *pid))
         .collect();
-        let mut got = running_browsers_from(&names);
+        let mut got: Vec<String> = summarise(&names, &no_windows)
+            .into_iter()
+            .map(|b| b.process)
+            .collect();
         got.sort();
         assert_eq!(got, vec!["chrome.exe", "msedge.exe"]);
     }
 
     #[test]
-    fn duplicate_processes_are_deduplicated() {
-        let names: Vec<String> = ["firefox.exe", "firefox.exe", "firefox.exe"]
+    fn duplicate_processes_are_counted_not_deduplicated() {
+        let names: Vec<(String, u32)> = [("firefox.exe", 1), ("firefox.exe", 2), ("firefox.exe", 3)]
             .iter()
-            .map(|s| s.to_string())
+            .map(|(name, pid)| (name.to_string(), *pid))
             .collect();
-        assert_eq!(running_browsers_from(&names), vec!["firefox.exe"]);
+        let got = summarise(&names, &no_windows);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].process, "firefox.exe");
+        assert_eq!(got[0].name, "Mozilla Firefox");
+        assert_eq!(got[0].processes, 3);
+        assert!(!got[0].has_window);
     }
 
     #[test]
     fn no_browser_returns_an_empty_list() {
-        let names: Vec<String> = ["explorer.exe".to_string()].to_vec();
-        assert!(running_browsers_from(&names).is_empty());
+        let names: Vec<(String, u32)> = [("explorer.exe".to_string(), 1)].to_vec();
+        assert!(summarise(&names, &no_windows).is_empty());
+    }
+
+    #[test]
+    fn a_process_owning_a_window_marks_the_browser_as_having_a_window() {
+        let names: Vec<(String, u32)> = [("chrome.exe".to_string(), 7), ("chrome.exe".to_string(), 8)].to_vec();
+        let got = summarise(&names, &|pid| pid == 8);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].processes, 2);
+        assert!(got[0].has_window);
+    }
+
+    #[test]
+    fn browser_process_names_map_to_a_display_name() {
+        let names: Vec<(String, u32)> = [
+            ("chrome.exe".to_string(), 1),
+            ("msedge.exe".to_string(), 2),
+            ("firefox.exe".to_string(), 3),
+        ]
+        .to_vec();
+        let got = summarise(&names, &no_windows);
+        let name_of = |process: &str| {
+            got.iter()
+                .find(|b| b.process == process)
+                .map(|b| b.name.clone())
+        };
+        assert_eq!(name_of("chrome.exe"), Some("Google Chrome".to_string()));
+        assert_eq!(name_of("msedge.exe"), Some("Microsoft Edge".to_string()));
+        assert_eq!(name_of("firefox.exe"), Some("Mozilla Firefox".to_string()));
     }
 
     #[test]

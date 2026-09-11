@@ -163,8 +163,20 @@ export function onCleanProgress(
   return listen<CleanProgress>("clean-progress", (event) => cb(event.payload));
 }
 
-export function runningBrowsers(): Promise<string[]> {
-  return invoke<string[]>("running_browsers");
+/// Mirrors `src-tauri/src/commands.rs::RunningBrowser`. `processes` is how
+/// many instances of that browser's process are running; `has_window` says
+/// whether any of them still owns a visible window — Chrome (and Edge) keep
+/// several background processes alive after every window is closed
+/// ("Continue running background apps"), which have no window at all.
+export interface RunningBrowser {
+  process: string;
+  name: string;
+  processes: number;
+  has_window: boolean;
+}
+
+export function runningBrowsers(): Promise<RunningBrowser[]> {
+  return invoke<RunningBrowser[]>("running_browsers");
 }
 
 export function rulesSummary(): Promise<RulesSummary> {
