@@ -221,6 +221,44 @@ describe("CleanPanel", () => {
     ).toBeInTheDocument();
   });
 
+  /// `aria-expanded` alone says something folds; `aria-controls` says what.
+  it("points each category header at the rows it folds", async () => {
+    render(<CleanPanel />);
+    const header = await screen.findByTestId("toggle-category-System");
+    const listId = header.getAttribute("aria-controls");
+    expect(listId).toBeTruthy();
+    expect(document.getElementById(listId!)).toContainElement(
+      screen.getByLabelText("Temporary files")
+    );
+  });
+
+  it("makes the path list a named region behind a labelled toggle", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      {
+        rule_id: "windows.temp",
+        file_count: 1,
+        total_bytes: 2048,
+        paths: [String.raw`C:\Users\T\AppData\Local\Temp\a.txt`],
+        skipped: 0,
+      },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+
+    const trigger = await screen.findByTestId("toggle-paths-windows.temp");
+    expect(trigger).toHaveAccessibleName("Show the paths of Temporary files");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls");
+    expect(
+      await screen.findByRole("region", { name: "Paths of Temporary files" })
+    ).toHaveTextContent(String.raw`C:\Users\T\AppData\Local\Temp\a.txt`);
+  });
+
   it("disables the Clean button before any scan", async () => {
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
@@ -422,6 +460,79 @@ describe("CleanPanel", () => {
     expect(api.clean).not.toHaveBeenCalled();
     expect(screen.queryByTestId("confirm-clean")).toBeNull();
     expect(screen.getByRole("button", { name: /^Clean/ })).toBeInTheDocument();
+  });
+
+  /// The confirmation appears at the bottom of a screen the user is not
+  /// looking at: without the focus move, a keyboard user has to Tab through
+  /// every rule to reach it, and a screen reader is told nothing at all.
+  it("moves the focus to the confirmation when it appears", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+
+    const confirmation = await screen.findByTestId("confirm-clean");
+    expect(confirmation).toHaveFocus();
+    // Cancel and Confirm are the next two tab stops, in that order.
+    await user.tab();
+    expect(screen.getByRole("button", { name: /Cancel/ })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: /Confirm cleanup/ })).toHaveFocus();
+  });
+
+  it("Escape cancels the confirmation and gives the Clean button its focus back", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await screen.findByTestId("confirm-clean");
+
+    await user.keyboard("{Escape}");
+
+    expect(api.clean).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-clean")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Clean/ })).toHaveFocus();
+  });
+
+  it("gives the Clean button its focus back when Cancel is used", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await user.click(await screen.findByRole("button", { name: /Cancel/ }));
+
+    expect(screen.getByRole("button", { name: /^Clean/ })).toHaveFocus();
+  });
+
+  it("names what the confirmation is about to do", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+
+    const confirmation = await screen.findByTestId("confirm-clean");
+    expect(confirmation).toHaveAccessibleName("Clean 2 KB in Auto mode?");
+    expect(confirmation).toHaveAccessibleDescription(/No way back/);
   });
 
   it("the confirmation lists the recycle bin as irreversible even in Recycle Bin mode", async () => {
@@ -712,6 +823,69 @@ describe("CleanPanel", () => {
     ]);
     await waitFor(() => expect(screen.queryByTestId("scan-progress")).toBeNull());
     expect(screen.getByTestId("total-bytes")).toHaveTextContent("4 KB");
+  });
+
+  /// A live region fed by every event would read the same sentence hundreds of
+  /// times over a thirty-second walk. Every tenth rule, and the last one.
+  it("announces the scan every ten rules and on completion", async () => {
+    const user = userEvent.setup();
+    let release: (results: unknown[]) => void = () => {};
+    api.scan.mockImplementation(
+      () => new Promise((resolve) => { release = resolve as typeof release; })
+    );
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+    const live = screen.getByTestId("scan-announcement");
+    expect(live).toHaveAttribute("aria-live", "polite");
+
+    act(() =>
+      emitProgress({ done: 3, total: 25, rule_id: "a", label: "A", total_bytes: 1024 })
+    );
+    expect(live).toHaveTextContent("Analyzing…");
+
+    act(() =>
+      emitProgress({ done: 10, total: 25, rule_id: "b", label: "B", total_bytes: 2048 })
+    );
+    expect(live).toHaveTextContent("Analyzing: 10 of 25 rules, 2 KB so far");
+
+    act(() =>
+      emitProgress({ done: 25, total: 25, rule_id: "c", label: "C", total_bytes: 4096 })
+    );
+    expect(live).toHaveTextContent("Analyzing: 25 of 25 rules, 4 KB so far");
+
+    release([
+      { rule_id: "windows.temp", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
+    ]);
+    await waitFor(() =>
+      expect(live).toHaveTextContent("Analysis complete: 4 KB reclaimable in 1 selected rule")
+    );
+  });
+
+  it("announces the cleanup report and the rule loading error", async () => {
+    const user = userEvent.setup();
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    api.clean.mockResolvedValue({ freed_bytes: 2048, deleted: 2, skipped: [] });
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+
+    const report = await screen.findByTestId("clean-report");
+    expect(report).toHaveAttribute("role", "status");
+    expect(report).toHaveAccessibleName("Last cleanup");
+  });
+
+  it("raises the rule loading error as an alert", async () => {
+    api.listRules.mockRejectedValue("rules.toml is invalid: bad risk");
+    render(<CleanPanel />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("rules.toml is invalid");
   });
 
   /// An event arriving outside a scan (a previous run finishing late) must not

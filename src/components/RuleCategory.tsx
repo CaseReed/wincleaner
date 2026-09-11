@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -46,17 +47,22 @@ export function RuleCategory({
   onToggleRule: (id: string) => void;
   onTogglePaths: (id: string) => void;
 }) {
+  const headingId = useId();
+  const listId = useId();
   return (
-    <section className="flex flex-col gap-1.5">
+    <section className="flex flex-col gap-1.5" aria-labelledby={headingId}>
       <div
         className="flex cursor-pointer items-center justify-between gap-6 rounded px-1 py-1 outline-none hover:bg-accent"
         onClick={onToggleCategory}
       >
-        <h2 className="contents">
+        <h2 className="contents" id={headingId}>
           <button
             type="button"
             data-testid={`toggle-category-${category}`}
             aria-expanded={open}
+            /// Names the rows the chevron folds. Allowed to point at nothing
+            /// while `aria-expanded` is false: the list is unmounted then.
+            aria-controls={listId}
             className="flex min-w-0 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             <ChevronRight
@@ -81,7 +87,7 @@ export function RuleCategory({
       </div>
       {open && (
         <>
-          <ul className="overflow-hidden rounded-lg border bg-card">
+          <ul id={listId} className="overflow-hidden rounded-lg border bg-card">
             {catRules.map((rule, index) => {
               const result = (results ?? []).find((r) => r.rule_id === rule.id);
               const unavailable = rule.unavailable_reason;
@@ -180,6 +186,13 @@ export function RuleCategory({
                     >
                       <CollapsibleTrigger
                         data-testid={`toggle-paths-${rule.id}`}
+                        /* The trigger says "the paths"; which rule's paths is
+                           only obvious from the row it sits under. The visible
+                           words stay in the name, so speaking them still
+                           works. */
+                        aria-label={`${
+                          openPaths.has(rule.id) ? "Hide" : "Show"
+                        } the paths of ${rule.label}`}
                         className="mb-3 ml-[38px] inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
                       >
                         <ChevronRight
@@ -193,7 +206,13 @@ export function RuleCategory({
                           {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
                         </span>
                       </CollapsibleTrigger>
-                      <CollapsibleContent>
+                      {/* A landmark of its own: the list is long, and a screen
+                          reader user needs a way out of it that is not
+                          arrowing to the end. */}
+                      <CollapsibleContent
+                        role="region"
+                        aria-label={`Paths of ${rule.label}`}
+                      >
                         <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                           {result.paths.map((p) => (
                             <li key={p} className="truncate">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -124,10 +124,16 @@ function VerdictLine({
 /// only in sandbox mode: outside it there is no manifest to compare against.
 function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
   const passed = verdictPasses(verdict);
+  const titleId = useId();
   return (
     <section
       data-testid="sandbox-verdict"
       data-verdict={passed ? "pass" : "fail"}
+      /// The answer to "did a guard let something past". It appears after the
+      /// clean, well below the button that started it: announced, not left to
+      /// be found.
+      role="status"
+      aria-labelledby={titleId}
       className={cn(
         "rounded-lg border p-5",
         passed
@@ -135,13 +141,16 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
           : "border-destructive/40 bg-destructive/8"
       )}
     >
-      <h2 className="eyebrow flex items-center gap-2 text-muted-foreground">
+      <h2 id={titleId} className="eyebrow flex items-center gap-2 text-muted-foreground">
         {passed ? (
-          <ShieldCheck className="size-4 text-success" />
+          <ShieldCheck className="size-4 text-success" aria-hidden="true" />
         ) : (
-          <ShieldX className="size-4 text-destructive" />
+          <ShieldX className="size-4 text-destructive" aria-hidden="true" />
         )}
         Sandbox verdict
+        {/* The colour of the card is the whole verdict for a sighted user;
+            without this it is the one thing a screen reader cannot read. */}
+        <span className="sr-only">: {passed ? "passed" : "failed"}</span>
       </h2>
       <ul className="mt-2.5 flex flex-col gap-1 text-sm">
         <VerdictLine
@@ -236,6 +245,19 @@ export function CleanPanel({
   const [summary, setSummary] = useState<RulesSummary | null>(null);
   const [sortBySize, setSortBySize] = useState<boolean>(() => readFlag(SORT_KEY));
   const [hintDismissed, setHintDismissed] = useState<boolean>(() => readFlag(HINT_KEY));
+  /// What a screen reader is told about the walk. Deliberately not the text on
+  /// screen: that one repaints on every rule, which would be hundreds of
+  /// interruptions for a scan nobody can hurry.
+  const [announcement, setAnnouncement] = useState("");
+  const heroTitleId = useId();
+  const reportTitleId = useId();
+  const confirmTitleId = useId();
+  const confirmDetailId = useId();
+  const confirmRef = useRef<HTMLDivElement | null>(null);
+  const cleanButtonRef = useRef<HTMLButtonElement | null>(null);
+  /// Set when the confirmation is dismissed by the user rather than carried
+  /// out: the focus then belongs back on the button that raised it.
+  const returnFocus = useRef(false);
 
   const busy = busyAction !== null;
   /// Zero until the first event: a bar that starts full would be a lie.
@@ -277,7 +299,17 @@ export function CleanPanel({
     let stop: (() => void) | null = null;
     let gone = false;
     onScanProgress((step) => {
-      if (scanPending.current) setProgress(step);
+      if (!scanPending.current) return;
+      setProgress(step);
+      // Every tenth rule, and the last one: enough to know the walk is moving,
+      // rare enough to leave room for anything else being read.
+      if (step.done % 10 === 0 || step.done === step.total) {
+        setAnnouncement(
+          `Analyzing: ${RULE_COUNT.format(step.done)} of ${RULE_COUNT.format(
+            step.total
+          )} rules, ${formatBytes(step.total_bytes)} so far`
+        );
+      }
     })
       .then((unlisten) => {
         // Unmounted while the subscription was still resolving: drop it at
@@ -294,6 +326,36 @@ export function CleanPanel({
       stop?.();
     };
   }, []);
+
+  /// The confirmation is the last stop before an irreversible deletion: the
+  /// focus goes to it, so what is about to happen is read out, and `Escape`
+  /// steps back out of it from anywhere.
+  useEffect(() => {
+    if (confirming) {
+      confirmRef.current?.focus();
+      return;
+    }
+    if (returnFocus.current) {
+      returnFocus.current = false;
+      cleanButtonRef.current?.focus();
+    }
+  }, [confirming]);
+
+  useEffect(() => {
+    if (!confirming) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelConfirm();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [confirming]);
+
+  function cancelConfirm() {
+    returnFocus.current = true;
+    setConfirming(false);
+  }
 
   const searching = query.trim().length > 0;
   const grouped = useMemo(() => {
@@ -394,12 +456,22 @@ export function CleanPanel({
     setVerdictError(null);
     setConfirming(false);
     setProgress(null);
+    setAnnouncement("Analyzing…");
     scanPending.current = true;
     // A new scan re-decides which categories are worth showing: the previous
     // hand folds no longer describe these results.
     setFolds(new Map());
     try {
-      setResults(await scan(availableRules.map((r) => r.id)));
+      const measured = await scan(availableRules.map((r) => r.id));
+      setResults(measured);
+      const checked = measured.filter((r) => selected.has(r.rule_id));
+      setAnnouncement(
+        `Analysis complete: ${formatBytes(
+          checked.reduce((sum, r) => sum + r.total_bytes, 0)
+        )} reclaimable in ${RULE_COUNT.format(checked.length)} selected ${
+          checked.length === 1 ? "rule" : "rules"
+        }`
+      );
     } catch (err) {
       setRulesError(String(err));
     } finally {
@@ -445,6 +517,9 @@ export function CleanPanel({
         <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">
           <div
             data-testid="rules-error"
+            /// The screen has nothing else on it: the failure is the content,
+            /// and it interrupts.
+            role="alert"
             className="flex max-w-xl flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
           >
             <p className="font-medium">Could not load the rules.</p>
@@ -502,10 +577,31 @@ export function CleanPanel({
           </div>
         )}
 
-        <section className="flex flex-col gap-5 rounded-lg border bg-card p-5">
+        {/* One live region for the whole screen, off to the side of the
+            painting: the visible progress text repaints on every rule, and
+            making that one live would read the same sentence hundreds of
+            times. */}
+        <p
+          data-testid="scan-announcement"
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+        >
+          {announcement}
+        </p>
+
+        <section
+          aria-labelledby={heroTitleId}
+          className="flex flex-col gap-5 rounded-lg border bg-card p-5"
+        >
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
-              <p className="eyebrow text-muted-foreground">Reclaimable</p>
+              {/* Names the section without becoming a heading: the h2 level
+                  belongs to the rule categories, and an extra one here would
+                  put "Reclaimable" in the document outline above them. */}
+              <p id={heroTitleId} className="eyebrow text-muted-foreground">
+                Reclaimable
+              </p>
               {busyAction === "scan" ? (
                 // What has been measured so far, ticking up as the walk
                 // progresses instead of an em dash held for thirty seconds.
@@ -555,6 +651,7 @@ export function CleanPanel({
               <Button
                 size="lg"
                 onClick={onScan}
+                aria-busy={busyAction === "scan"}
                 disabled={busy || availableRules.length === 0}
               >
                 {busyAction === "scan" ? (
@@ -682,6 +779,7 @@ export function CleanPanel({
         {verdictError && (
           <section
             data-testid="sandbox-verdict-error"
+            role="status"
             className="rounded-lg border border-warning/40 bg-warning/12 p-5 text-sm"
           >
             <h2 className="eyebrow text-muted-foreground">Sandbox verdict</h2>
@@ -698,9 +796,15 @@ export function CleanPanel({
         {report && (
           <section
             data-testid="clean-report"
+            /// What the cleanup actually did, reported where the button was
+            /// not: it is the answer to the click, so it is announced.
+            role="status"
+            aria-labelledby={reportTitleId}
             className="rounded-lg border bg-card p-5"
           >
-            <h2 className="eyebrow text-muted-foreground">Last cleanup</h2>
+            <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
+              Last cleanup
+            </h2>
             <p className="mt-2 text-sm">
               <span className="font-mono tnum">{formatBytes(report.freed_bytes)}</span>{" "}
               freed ·{" "}
@@ -728,13 +832,24 @@ export function CleanPanel({
       <footer className="flex shrink-0 items-center gap-4 border-t bg-background px-8 py-3.5">
         {confirming ? (
           <>
-            <div data-testid="confirm-clean" className="min-w-0 flex-1">
-              <p className="text-sm font-medium">
+            <div
+              data-testid="confirm-clean"
+              ref={confirmRef}
+              /// Focused as it appears: the last chance to step back is worth
+              /// nothing if it is read out only to whoever happens to look at
+              /// the bottom bar. `Escape` and Cancel both send the focus back.
+              tabIndex={-1}
+              role="group"
+              aria-labelledby={confirmTitleId}
+              aria-describedby={confirmDetailId}
+              className="min-w-0 flex-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <p id={confirmTitleId} className="text-sm font-medium">
                 Clean{" "}
                 <span className="font-mono tnum">{formatBytes(total)}</span> in{" "}
                 {MODE_LABEL[mode]} mode?
               </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <p id={confirmDetailId} className="mt-0.5 text-xs text-muted-foreground">
                 {irreversibleRules.length > 0 ? (
                   <>
                     No way back:{" "}
@@ -745,7 +860,7 @@ export function CleanPanel({
                 )}
               </p>
             </div>
-            <Button variant="outline" onClick={() => setConfirming(false)}>
+            <Button variant="outline" onClick={cancelConfirm}>
               Cancel
             </Button>
             <Button size="lg" variant="destructive" onClick={onClean} disabled={busy}>
@@ -787,7 +902,9 @@ export function CleanPanel({
             <Button
               size="lg"
               variant="destructive"
+              ref={cleanButtonRef}
               onClick={() => setConfirming(true)}
+              aria-busy={busyAction === "clean"}
               disabled={busy || !results || cleanIds.length === 0}
             >
               {busyAction === "clean" ? (
