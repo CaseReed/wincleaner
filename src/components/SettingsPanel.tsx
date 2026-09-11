@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Check, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -32,12 +32,16 @@ function Section({
   testId?: string;
   children: React.ReactNode;
 }) {
+  const titleId = useId();
   return (
     <section
       data-testid={testId}
+      /// Five stacked cards with no names is five anonymous regions to a
+      /// screen reader: each takes the name of its own heading.
+      aria-labelledby={titleId}
       className="max-w-3xl rounded-lg border bg-card p-5"
     >
-      <h2 className="eyebrow text-muted-foreground">{title}</h2>
+      <h2 id={titleId} className="eyebrow text-muted-foreground">{title}</h2>
       <div className="mt-3 flex flex-col gap-2 text-sm">{children}</div>
     </section>
   );
@@ -97,7 +101,12 @@ function UpdatesSection() {
       </p>
 
       <div className="mt-1 flex items-center gap-3">
-        <Button data-testid="check-updates" onClick={() => void onCheck()} disabled={checking}>
+        <Button
+          data-testid="check-updates"
+          onClick={() => void onCheck()}
+          aria-busy={checking}
+          disabled={checking}
+        >
           {checking ? (
             <>
               <Loader2 className="size-4 animate-spin" />
@@ -110,20 +119,20 @@ function UpdatesSection() {
       </div>
 
       {state.kind === "error" && (
-        <p data-testid="update-status" className="text-muted-foreground">
+        <p data-testid="update-status" role="status" className="text-muted-foreground">
           {updateErrorMessage(state.code)}
         </p>
       )}
 
       {state.kind === "result" && !state.check.is_newer && (
-        <p data-testid="update-status" className="text-muted-foreground">
+        <p data-testid="update-status" role="status" className="text-muted-foreground">
           You&rsquo;re up to date ({state.check.current})
         </p>
       )}
 
       {state.kind === "result" && state.check.is_newer && (
         <div className="flex flex-col gap-2">
-          <p data-testid="update-status" className="font-medium">
+          <p data-testid="update-status" role="status" className="font-medium">
             WinCleaner {state.check.latest} is available
           </p>
           {state.check.published_at && (
@@ -232,7 +241,7 @@ function SandboxSection({
             Winapp2 rules detected
           </p>
           <div className="mt-1 flex items-center gap-3">
-            <Button variant="outline" onClick={onLeaveSandbox} disabled={busy}>
+            <Button variant="outline" onClick={onLeaveSandbox} aria-busy={busy} disabled={busy}>
               {busy ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
@@ -246,7 +255,7 @@ function SandboxSection({
         </>
       ) : (
         <div className="mt-1 flex items-center gap-3">
-          <Button data-testid="create-sandbox" onClick={onEnterSandbox} disabled={busy}>
+          <Button data-testid="create-sandbox" onClick={onEnterSandbox} aria-busy={busy} disabled={busy}>
             {busy ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
@@ -309,7 +318,7 @@ function SandboxOrphansLine() {
         folder{orphans.length === 1 ? "" : "s"} (
         <span className="font-mono tnum">{formatBytes(bytes)}</span>)
       </p>
-      <Button variant="outline" size="sm" disabled={busy} onClick={() => void onRemove()}>
+      <Button variant="outline" size="sm" aria-busy={busy} disabled={busy} onClick={() => void onRemove()}>
         {busy ? (
           <>
             <Loader2 className="size-4 animate-spin" />

@@ -94,6 +94,34 @@ describe("SettingsPanel — updates", () => {
     expect(screen.queryByTestId("update-status")).toBeNull();
   });
 
+  /// "Checking…" on a disabled button is a spinner for the eye only: the state
+  /// has to be in the markup for anything else to read it.
+  it("marks the update check busy while it runs and announces its answer", async () => {
+    let release!: (value: ReturnType<typeof answer>) => void;
+    mockedCheck.mockReturnValue(new Promise((resolve) => (release = resolve)));
+    render(<SettingsPanel />);
+
+    await userEvent.click(screen.getByTestId("check-updates"));
+    expect(screen.getByTestId("check-updates")).toHaveAttribute("aria-busy", "true");
+
+    release(answer({ current: "0.2.0", latest: "0.2.0", is_newer: false }));
+    const status = await screen.findByTestId("update-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("check-updates")).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("names each settings card by its own heading", () => {
+    render(<SettingsPanel />);
+    expect(screen.getByRole("region", { name: "About" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Sandbox" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Notices" })).toBeInTheDocument();
+  });
+
+  it("marks the sandbox buttons busy while the profile is being built", () => {
+    render(<SettingsPanel sandboxBusy />);
+    expect(screen.getByTestId("create-sandbox")).toHaveAttribute("aria-busy", "true");
+  });
+
   it("spins while the check is running, then reports being up to date", async () => {
     let release!: (value: ReturnType<typeof answer>) => void;
     mockedCheck.mockReturnValue(new Promise((resolve) => (release = resolve)));
