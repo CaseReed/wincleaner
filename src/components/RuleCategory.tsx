@@ -63,7 +63,7 @@ export function RuleCategory({
             /// Names the rows the chevron folds. Allowed to point at nothing
             /// while `aria-expanded` is false: the list is unmounted then.
             aria-controls={listId}
-            className="flex min-w-0 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="flex min-w-0 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring"
           >
             <ChevronRight
               aria-hidden="true"
@@ -193,7 +193,7 @@ export function RuleCategory({
                         aria-label={`${
                           openPaths.has(rule.id) ? "Hide" : "Show"
                         } the paths of ${rule.label}`}
-                        className="mb-3 ml-[38px] inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+                        className="mb-3 ml-[38px] inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
                       >
                         <ChevronRight
                           aria-hidden="true"

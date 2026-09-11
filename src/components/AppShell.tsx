@@ -40,7 +40,7 @@ function NavItem({
       onKeyDown={onKeyDown}
       className={cn(
         "relative flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium outline-none transition-colors motion-reduce:transition-none",
-        "focus-visible:ring-3 focus-visible:ring-ring/50",
+        "focus-visible:ring-3 focus-visible:ring-ring",
         active
           ? "bg-primary/12 text-foreground before:absolute before:top-2 before:bottom-2 before:left-0 before:w-[3px] before:rounded-full before:bg-primary before:content-['']"
           : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
@@ -136,7 +136,7 @@ export function AppShell({
           aria-pressed={dark}
           aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
           onClick={onToggleTheme}
-          className="mt-auto flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="mt-auto flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
         >
           {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           {dark ? "Light theme" : "Dark theme"}

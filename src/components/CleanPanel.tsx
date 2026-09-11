@@ -172,7 +172,7 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
           of={verdict.outside_total}
         />
         {!verdict.junctions_refused && (
-          <li className="text-destructive">
+          <li className="text-destructive-foreground">
             A junction the sandbox planted no longer stands.
           </li>
         )}
@@ -714,7 +714,7 @@ export function CleanPanel({
             type="search"
             aria-label="Search rules"
             placeholder="Search rules"
-            className="h-9 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="h-9 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -842,7 +842,7 @@ export function CleanPanel({
               role="group"
               aria-labelledby={confirmTitleId}
               aria-describedby={confirmDetailId}
-              className="min-w-0 flex-1 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="min-w-0 flex-1 outline-none focus-visible:ring-3 focus-visible:ring-ring"
             >
               <p id={confirmTitleId} className="text-sm font-medium">
                 Clean{" "}
@@ -873,7 +873,7 @@ export function CleanPanel({
               <select
                 id="clean-mode"
                 aria-label="Deletion mode"
-                className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as CleanMode)}
               >
