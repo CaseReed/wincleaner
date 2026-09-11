@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two Winapp2 entries deleted application content, not cache.** `[Vortex *]`
+  swept `%LocalAppData%\Vortex-Updater`, where Vortex stages the executables of
+  its own pending update, and `[Discord *]` deleted the Squirrel `.nupkg`
+  packages the installed tree is unpacked from and the next delta is computed
+  against. The converter now carries an explicit app-content deny-list
+  (`winapp2.rs::APP_CONTENT_DENY`): a denied directory prefix sinks the whole
+  `FileKey`, a denied file spec removes that spec. Refused keys are counted by
+  `app_content_keys` and an entry left with no `FileKey` by
+  `dropped_app_content`; on the embedded file this refuses 3 keys and drops no
+  entry — both applications keep their real cache keys. Closes #2.
+
 ## [0.5.0] - 2026-09-11
 
 ### Added

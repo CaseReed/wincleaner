@@ -115,12 +115,73 @@ const USER_DATA_SEGMENTS: [&str; 12] = [
     "Searches",
 ];
 
-/// Why a path could not be mapped. `UserData` is kept apart because it is the
-/// one refusal that says "we could clean this, and deliberately will not".
+/// One line of the app-content deny-list: what it matches on a `FileKey`.
+///
+/// A prefix is compared against the mapped path (so an alias spelling cannot
+/// slip past, `normalize_alias` having run first); a spec is compared against
+/// each `;`-separated file spec. Both are case-insensitive, the file system
+/// being so.
+#[derive(Debug, Clone, Copy)]
+enum AppContent {
+    /// This directory, or anything under it.
+    Prefix(&'static str),
+    /// This file spec, wherever it appears.
+    Spec(&'static str),
+}
+
+/// Paths and specs holding application *content*, not cache: what upstream
+/// offers to delete here is the application's own payload, and removing it
+/// breaks the installation or forces it to be downloaded again. Winapp2 files
+/// them under cleaning anyway; we refuse them by name.
+///
+/// Kept as one explicit table, each line carrying why it is there: the
+/// alternative is a heuristic on directory names, which would silently drop
+/// real caches the day an application picks an unlucky name.
+const APP_CONTENT_DENY: [AppContent; 2] = [
+    // Vortex stages the executables of its own update here and installs them on
+    // the next launch. Upstream sweeps the whole directory (`FileKey8`,
+    // `FileKey9` of `[Vortex *]`), which deletes the pending update, not a
+    // cache. See issue #2.
+    AppContent::Prefix(r"%LOCALAPPDATA%\Vortex-Updater"),
+    // A Squirrel `.nupkg` IS the application: the installed tree is unpacked
+    // from it and the updater deltas the next version against it. Deleting one
+    // costs a full re-download at best, and breaks the updater at worst — true
+    // of every Squirrel application, not only the Discord entry that surfaced
+    // it. See issue #2.
+    AppContent::Spec("*.nupkg"),
+];
+
+/// Does the mapped `FileKey` path fall inside a denied directory?
+fn denied_path(path: &str) -> bool {
+    APP_CONTENT_DENY.iter().any(|deny| match deny {
+        AppContent::Prefix(prefix) => {
+            let head = path.get(..prefix.len());
+            head.is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+                // The directory itself, or a child of it — never a sibling
+                // whose name merely starts with the same letters.
+                && matches!(path.as_bytes().get(prefix.len()), None | Some(b'\\'))
+        }
+        AppContent::Spec(_) => false,
+    })
+}
+
+/// Is this one file spec denied?
+fn denied_spec(spec: &str) -> bool {
+    APP_CONTENT_DENY.iter().any(|deny| match deny {
+        AppContent::Spec(denied) => denied.eq_ignore_ascii_case(spec),
+        AppContent::Prefix(_) => false,
+    })
+}
+
+/// Why a path could not be mapped. `UserData` and `AppContent` are kept apart
+/// because they are the refusals that say "we could clean this, and
+/// deliberately will not".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathDrop {
     /// The first segment under `%USERPROFILE%` is a user-data folder.
     UserData,
+    /// The key deletes application content, not cache (`APP_CONTENT_DENY`).
+    AppContent,
     /// Anything else: a variable outside the allow-list, a `..` segment, a
     /// metacharacter we cannot keep literal.
     Other,
@@ -246,14 +307,27 @@ fn exclude_specs(field: &str) -> Option<Vec<String>> {
 ///
 /// `REMOVESELF` needs nothing extra: `clean.rs` already removes a directory a
 /// rule has emptied. Only `RECURSE` changes the shape of the glob.
+///
+/// The app-content deny-list is applied here, where a key is still a key: a
+/// denied directory sinks the whole key, a denied spec only removes that spec,
+/// exactly like a spec we cannot represent. The key is reported as
+/// `PathDrop::AppContent` only when nothing survives, so the counter means
+/// "keys we refused", never "specs we narrowed".
 fn file_key_globs(value: &str) -> Result<Vec<String>, PathDrop> {
     let mut parts = value.split('|');
     let base = map_path_with_reason(parts.next().ok_or(PathDrop::Other)?)?;
+    if denied_path(&base) {
+        return Err(PathDrop::AppContent);
+    }
     let spec_field = parts.next().unwrap_or("*.*");
     let recurse = parts.any(|flag| flag.trim().eq_ignore_ascii_case("RECURSE"));
     let specs = specs(spec_field);
     if specs.is_empty() {
         return Err(PathDrop::Other);
+    }
+    let specs: Vec<String> = specs.into_iter().filter(|s| !denied_spec(s)).collect();
+    if specs.is_empty() {
+        return Err(PathDrop::AppContent);
     }
     Ok(
         specs
@@ -395,6 +469,15 @@ pub struct ConversionReport {
     /// here. Deliberately outside `dropped()`, which counts entries only —
     /// mixing the two would break `retained + dropped() == entries`.
     pub user_data_keys: u32,
+    /// Every `FileKey` was refused and at least one of them deleted
+    /// application content rather than cache (`APP_CONTENT_DENY`). Counted
+    /// apart for the same reason as `dropped_user_data`: a deliberate refusal
+    /// is not an unsupported entry.
+    pub dropped_app_content: u32,
+    /// App-content `FileKey`s refused, one per KEY, not per entry — an entry
+    /// keeping another usable `FileKey` is retained and still shows up here.
+    /// Outside `dropped()`, like `user_data_keys`.
+    pub app_content_keys: u32,
     /// An `ExcludeKey` path used a variable outside the four we map.
     pub dropped_variable: u32,
     /// An `ExcludeKey` we cannot express as a glob (unknown kind, or a spec
@@ -416,6 +499,7 @@ impl ConversionReport {
     pub fn dropped(&self) -> u32 {
         self.dropped_no_file_key
             + self.dropped_user_data
+            + self.dropped_app_content
             + self.dropped_variable
             + self.dropped_exclude
             + self.dropped_invalid
@@ -564,6 +648,7 @@ pub fn convert_with(
 
         let mut paths: Vec<String> = Vec::new();
         let mut refused_user_data = false;
+        let mut refused_app_content = false;
         for raw in &entry.file_keys {
             match file_key_globs(raw) {
                 Ok(globs) => paths.extend(globs),
@@ -571,14 +656,22 @@ pub fn convert_with(
                     refused_user_data = true;
                     report.user_data_keys += 1;
                 }
+                Err(PathDrop::AppContent) => {
+                    refused_app_content = true;
+                    report.app_content_keys += 1;
+                }
                 Err(PathDrop::Other) => {}
             }
         }
         if paths.is_empty() {
             // The entry is dropped either way; the counter says whether we
-            // could not map it or refused to touch what it points at.
+            // could not map it or refused to touch what it points at. An entry
+            // refused on both grounds is filed under user data, the older and
+            // stricter of the two.
             if refused_user_data {
                 report.dropped_user_data += 1;
+            } else if refused_app_content {
+                report.dropped_app_content += 1;
             } else {
                 report.dropped_no_file_key += 1;
             }
@@ -994,6 +1087,58 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\A\Cache\*"]);
     }
 
+    /// The two shapes of the app-content deny-list, on one entry: a denied
+    /// directory (Vortex stages its pending update there) and a denied spec
+    /// (a Squirrel `.nupkg` is the application itself). The sibling key next to
+    /// them is an ordinary cache and must survive untouched — a deny-list that
+    /// takes the whole entry with it would cost more than the bug it fixes.
+    #[test]
+    fn an_app_content_file_key_is_dropped_and_counted_apart() {
+        let src = "[Updater]\n\
+                   FileKey1=%LocalAppData%\\Vortex-Updater|*\n\
+                   FileKey2=%LocalAppData%\\App\\packages|*.nupkg\n\
+                   FileKey3=%LocalAppData%\\App\\Cache|*|RECURSE\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert_eq!(report.retained, 1);
+        assert_eq!(report.app_content_keys, 2);
+        assert_eq!(report.dropped_app_content, 0);
+        assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\App\Cache\**\*"]);
+
+        // Nothing else left: the entry goes too, under its own counter.
+        let src = "[Updater]\nFileKey1=%LocalAppData%\\Vortex-Updater\\*|*|REMOVESELF\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert!(converted.is_empty());
+        assert_eq!(report.dropped_app_content, 1);
+        assert_eq!(report.app_content_keys, 1);
+        assert_eq!(report.dropped_no_file_key, 0);
+        assert_eq!(report.dropped(), 1);
+    }
+
+    /// A denied spec listed next to others only narrows the key, exactly like
+    /// a spec we cannot represent: the `.nupkg` goes, the log stays.
+    #[test]
+    fn a_denied_spec_narrows_the_key_instead_of_dropping_it() {
+        let src = "[A]\nFileKey1=%LocalAppData%\\A\\packages|*.NUPKG;*.log\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert_eq!(report.retained, 1);
+        assert_eq!(report.app_content_keys, 0);
+        assert_eq!(converted[0].rule.paths, vec![r"%LOCALAPPDATA%\A\packages\*.log"]);
+    }
+
+    /// The prefix denies a directory and its children, never a sibling that
+    /// merely starts with the same letters.
+    #[test]
+    fn the_app_content_prefix_stops_at_a_path_separator() {
+        let src = "[A]\nFileKey1=%LocalAppData%\\Vortex-Updater-Logs|*.log\n";
+        let (converted, report) = convert_with(src, &[], &fake_env);
+        assert_eq!(report.retained, 1);
+        assert_eq!(report.app_content_keys, 0);
+        assert_eq!(
+            converted[0].rule.paths,
+            vec![r"%LOCALAPPDATA%\Vortex-Updater-Logs\*.log"]
+        );
+    }
+
     /// One directory, one spelling. `overlaps` compares unexpanded strings, so
     /// two spellings of the same directory would slip past it.
     #[test]
@@ -1233,17 +1378,19 @@ FileKey1=%AppData%\\Cafe|*.*\r
         assert_eq!(
             report.retained + report.dropped(),
             parse_ini(WINAPP2_INI).len() as u32,
-            "retained={} dropped={} (no_file_key={} user_data={} variable={} exclude={} \
-             invalid={} overlap={}), user_data_keys={}",
+            "retained={} dropped={} (no_file_key={} user_data={} app_content={} variable={} \
+             exclude={} invalid={} overlap={}), user_data_keys={} app_content_keys={}",
             report.retained,
             report.dropped(),
             report.dropped_no_file_key,
             report.dropped_user_data,
+            report.dropped_app_content,
             report.dropped_variable,
             report.dropped_exclude,
             report.dropped_invalid,
             report.dropped_overlap,
-            report.user_data_keys
+            report.user_data_keys,
+            report.app_content_keys
         );
         // The real file does reach into `%UserProfile%\Documents` and friends:
         // if this ever hits zero, the segment deny-list stopped working.
@@ -1253,6 +1400,30 @@ FileKey1=%AppData%\\Cafe|*.*\r
             report.user_data_keys
         );
         assert!(report.user_data_keys >= report.dropped_user_data);
+        // Same for the app-content deny-list: the real file carries the keys it
+        // was written for (Vortex-Updater twice, one Squirrel `.nupkg`), and
+        // NOT ONE of them may reach a retained rule.
+        assert!(
+            report.app_content_keys >= 3,
+            "only {} app-content keys refused",
+            report.app_content_keys
+        );
+        assert!(report.app_content_keys >= report.dropped_app_content);
+        for c in &converted {
+            for path in &c.rule.paths {
+                let lower = path.to_ascii_lowercase();
+                assert!(
+                    !lower.starts_with(r"%localappdata%\vortex-updater"),
+                    "{} still cleans {path}",
+                    c.rule.id
+                );
+                assert!(
+                    !lower.ends_with(".nupkg"),
+                    "{} still cleans {path}",
+                    c.rule.id
+                );
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         // The same real values as `system_env`, asked for once instead of once
         // per path: the check below is unchanged, it just stops paying a

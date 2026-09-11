@@ -102,6 +102,12 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   `\AppData\Roaming\` and `%LOCALAPPDATA%\Temp\` are first normalised onto
   `%LOCALAPPDATA%`, `%APPDATA%` and `%TEMP%`, so one directory has one spelling
   and overlap detection cannot be fooled by an alias.
+- A converted Winapp2 `FileKey` is also matched against an explicit app-content
+  deny-list (`winapp2.rs::APP_CONTENT_DENY`): a path prefix or a file spec that
+  names application payload rather than cache (`%LOCALAPPDATA%\Vortex-Updater`,
+  `*.nupkg`). One table, one reason per line — never a heuristic on directory
+  names. Refused keys are counted by `app_content_keys` (outside `dropped()`),
+  entries left with no `FileKey` by `dropped_app_content`.
 - The nine curated native rules take precedence: a converted Winapp2 rule
   whose paths overlap a native rule is dropped at conversion time
   (`dropped_overlap`), never counted or deleted twice.

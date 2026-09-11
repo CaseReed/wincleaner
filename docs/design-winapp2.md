@@ -52,6 +52,24 @@ Per entry `[Name *]`:
   `dropped_user_data` (entries) — the refused keys themselves are counted by
   `user_data_keys`, which is deliberately outside `dropped()` so that
   `retained + dropped() == entries` keeps holding.
+- **App-content deny-list.** A handful of upstream `FileKey`s do not delete a
+  cache, they delete the application: `%LocalAppData%\Vortex-Updater` holds the
+  staged executables of Vortex's own pending update, and a Squirrel `.nupkg` is
+  the package the installed tree is unpacked from and the next delta is computed
+  against. `winapp2.rs::APP_CONTENT_DENY` is one explicit table — a path prefix
+  (matched on the mapped path, so an alias spelling cannot slip past, and
+  stopping at a `\` so a sibling directory is not caught) or a file spec
+  (matched anywhere) — each line carrying the reason it is there. A heuristic on
+  directory names was rejected: it would silently drop real caches the day an
+  application picks an unlucky name. Applied in `file_key_globs`: a denied
+  directory sinks the whole key, a denied spec only removes that spec, like a
+  spec we cannot represent. A key that loses everything is counted by
+  `app_content_keys`, and the entry is dropped as `dropped_app_content` only
+  when no `FileKey` is left — same split as user data, `app_content_keys`
+  outside `dropped()` so that `retained + dropped() == entries` keeps holding.
+  On the embedded file today: 3 keys refused (`[Vortex *]` FileKey8 and
+  FileKey9, `[Discord *]` FileKey12), 0 entries dropped — both entries keep
+  their real cache keys.
 - Before that check, the spelled-out form of a variable is normalised onto the
   variable: `%UserProfile%\AppData\Local\` → `%LOCALAPPDATA%\`,
   `%UserProfile%\AppData\Roaming\` → `%APPDATA%\`, `%LocalAppData%\Temp\` →
