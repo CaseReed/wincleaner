@@ -165,6 +165,25 @@
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
+  /* One rule for the whole app rather than a `motion-reduce:` on each of a
+     hundred class lists: the shadcn wrappers, the spinners and anything added
+     later are covered without having to remember. Not `0s`: a zero-length
+     transition never fires `transitionend`, and a listener waiting on one
+     would hang.
+
+     The two width animations that are driven from JavaScript — the gauge and
+     the scan progress bar — read `prefers-reduced-motion` themselves, because
+     they must not start at zero width and stay there. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 /* Every quantity: tabular figures, and Geist Mono tightened — its default
