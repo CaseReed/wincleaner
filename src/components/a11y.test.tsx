@@ -225,4 +225,32 @@ describe("accessibility", () => {
 
     expect(withoutFocusRing(tabStops(container))).toEqual([]);
   });
+
+  /// The Applications category is folded by default. Its `aria-controls`
+  /// must still resolve to a mounted element — the rows are hidden, not
+  /// removed from the DOM — and axe must see no violation in that state.
+  it("keeps every aria-controls target resolvable with a category folded", async () => {
+    const APP_RULE = {
+      id: "winapp2.7-zip",
+      category: "Applications",
+      label: "7-Zip",
+      risk: "medium",
+      kind: "files",
+      default_checked: false,
+    };
+    api.listRules.mockResolvedValue([...RULES, APP_RULE]);
+    const { container } = renderScreen(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+
+    const toggle = screen.getByTestId("toggle-category-Applications");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    for (const el of container.querySelectorAll("[aria-controls]")) {
+      const id = el.getAttribute("aria-controls")!;
+      expect(document.getElementById(id)).not.toBeNull();
+    }
+
+    const found = await violations(container);
+    expect(describeViolations(found)).toBe("");
+  });
 });

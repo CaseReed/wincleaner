@@ -60,8 +60,9 @@ export function RuleCategory({
             type="button"
             data-testid={`toggle-category-${category}`}
             aria-expanded={open}
-            /// Names the rows the chevron folds. Allowed to point at nothing
-            /// while `aria-expanded` is false: the list is unmounted then.
+            /// Names the rows the chevron folds. The list stays mounted
+            /// (hidden, not unmounted) while folded, so the id this points at
+            /// always resolves.
             aria-controls={listId}
             className="flex min-w-0 items-center gap-1.5 rounded text-left outline-none focus-visible:ring-3 focus-visible:ring-ring"
           >
@@ -85,10 +86,12 @@ export function RuleCategory({
           )}
         </p>
       </div>
-      {open && (
-        <>
-          <ul id={listId} className="overflow-hidden rounded-lg border bg-card">
-            {catRules.map((rule, index) => {
+      {/* Kept mounted (hidden, not unmounted) while folded, so the header's
+          `aria-controls={listId}` always resolves to an element. The rows
+          themselves render only while open: rendering all of them just to
+          hide them would be up to 80 nodes of dead weight per category. */}
+      <ul id={listId} hidden={!open} className="overflow-hidden rounded-lg border bg-card">
+        {open && catRules.map((rule, index) => {
               const result = (results ?? []).find((r) => r.rule_id === rule.id);
               const unavailable = rule.unavailable_reason;
               return (
@@ -226,18 +229,16 @@ export function RuleCategory({
                 </li>
               );
             })}
-          </ul>
-          {hasWinapp2Rule(catRules) && (
-            <p
-              data-testid="winapp2-attribution"
-              className="px-1 text-xs text-muted-foreground"
-            >
-              Some of the rules in this category are community rules
-              from Winapp2 (CC-BY-SA 4.0) —{" "}
-              <span className="font-mono">{WINAPP2_URL}</span>
-            </p>
-          )}
-        </>
+      </ul>
+      {open && hasWinapp2Rule(catRules) && (
+        <p
+          data-testid="winapp2-attribution"
+          className="px-1 text-xs text-muted-foreground"
+        >
+          Some of the rules in this category are community rules
+          from Winapp2 (CC-BY-SA 4.0) —{" "}
+          <span className="font-mono">{WINAPP2_URL}</span>
+        </p>
       )}
     </section>
   );
