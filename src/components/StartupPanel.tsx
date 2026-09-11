@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -61,6 +62,10 @@ export function StartupPanel({
   const [entries, setEntries] = useState<StartupEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  /// The switch flipping under the pointer is the whole feedback a sighted
+  /// user gets. Said out loud here, because the toast lives in the shell and a
+  /// row toggle must report its own outcome.
+  const [announcement, setAnnouncement] = useState("");
   const inSandbox = sandbox !== null;
 
   const refresh = useCallback(async () => {
@@ -104,13 +109,16 @@ export function StartupPanel({
     try {
       await setStartupEnabled(entry.id, next);
       await refresh();
-      toast.success(
-        next ? `${entry.name} enabled at startup` : `${entry.name} disabled at startup`
-      );
+      const done = next
+        ? `${entry.name} enabled at startup`
+        : `${entry.name} disabled at startup`;
+      setAnnouncement(done);
+      toast.success(done);
     } catch (err) {
       setEntries((prev) =>
         prev.map((e) => (e.id === entry.id ? { ...e, enabled: entry.enabled } : e))
       );
+      setAnnouncement(`${entry.name} could not be changed`);
       toast.error(String(err));
     } finally {
       setPending(null);
@@ -122,6 +130,7 @@ export function StartupPanel({
       <Screen subtitle="Decide what starts with your session.">
         <div
           data-testid="startup-error"
+          role="alert"
           className="flex max-w-xl flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
         >
           <p className="font-medium">Could not read the startup programs.</p>
@@ -152,9 +161,17 @@ export function StartupPanel({
       }
     >
       <div className="overflow-hidden rounded-lg border bg-card">
+        <p data-testid="startup-announcement" className="sr-only" role="status" aria-live="polite">
+          {announcement}
+        </p>
         {/* table-fixed: Windows commands are long, and without this they push
             the source and the switch out of the window. */}
         <Table className="table-fixed">
+          {/* Named, not just drawn: a screen reader announces a table by its
+              caption before reading a single cell. */}
+          <TableCaption className="sr-only">
+            Programs that start with your session
+          </TableCaption>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="eyebrow w-[30%] px-4 text-muted-foreground">

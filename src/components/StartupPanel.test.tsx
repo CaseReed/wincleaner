@@ -64,6 +64,37 @@ describe("StartupPanel", () => {
     );
   });
 
+  /// A screen reader names a table before reading a cell of it; without a
+  /// caption there was nothing to name.
+  it("names the table", async () => {
+    render(<StartupPanel />);
+    expect(await screen.findByRole("table", { name: "Programs that start with your session" }))
+      .toBeInTheDocument();
+  });
+
+  /// The switch sliding is the whole feedback a sighted user gets, and the
+  /// toast lives in the shell: the row reports its own outcome.
+  it("announces the new state of a row it toggled", async () => {
+    const user = userEvent.setup();
+    render(<StartupPanel />);
+    await user.click(await screen.findByLabelText("Enable OneDrive"));
+    const live = screen.getByTestId("startup-announcement");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    await waitFor(() => expect(live).toHaveTextContent("OneDrive disabled at startup"));
+  });
+
+  it("announces a toggle that failed", async () => {
+    const user = userEvent.setup();
+    api.setStartupEnabled.mockRejectedValue("access denied");
+    render(<StartupPanel />);
+    await user.click(await screen.findByLabelText("Enable OneDrive"));
+    await waitFor(() =>
+      expect(screen.getByTestId("startup-announcement")).toHaveTextContent(
+        "OneDrive could not be changed"
+      )
+    );
+  });
+
   it("reflects the enabled state of each entry", async () => {
     render(<StartupPanel />);
     expect(await screen.findByLabelText("Enable OneDrive")).toBeChecked();
