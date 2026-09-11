@@ -39,6 +39,55 @@ fn show_startup_error(message: &str) {
     }
 }
 
+/// How long the window close waits for the sandbox to be removed. Long enough
+/// for a few hundred small files under `%TEMP%`, short enough that a user who
+/// clicks the cross does not think the application has hung: past it, the
+/// close goes through and the leftover is the next start's problem.
+const CLOSE_LEAVE_BUDGET: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// Best-effort removal of the active sandbox when the window closes.
+///
+/// **Guaranteed**: the application never *chooses* to leave a sandbox behind.
+/// A close with a sandbox open attempts the same `leave_sandbox` the Settings
+/// button calls, with the same junction-safe removal.
+///
+/// **Not guaranteed**: that it succeeds. The removal may exceed the budget
+/// above (a slow volume, a file still open under the root), the process may be
+/// killed outright, or it may crash — none of which reaches this function at
+/// all. That is why the startup sweep in `run` exists and is the real safety
+/// net: this only spares the user one restart's worth of leftover.
+///
+/// The work runs on its own thread with a bounded wait rather than inline: a
+/// `remove_dir_all` that blocks would freeze the window on the way out, which
+/// is exactly the impression a cleaner cannot afford to give.
+fn leave_on_close(window: &tauri::Window) {
+    use tauri::Manager;
+
+    // `CloseRequested` is followed by `Destroyed`; one attempt is enough, and
+    // a second would spend the budget again for nothing.
+    static ATTEMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ATTEMPTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+
+    let state = window.state::<commands::SandboxState>().inner().clone();
+    if commands::sandbox_status_of(&state).is_none() {
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(commands::leave_sandbox(&state));
+    });
+    match rx.recv_timeout(CLOSE_LEAVE_BUDGET) {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => eprintln!("sandbox not removed on close: {err}"),
+        Err(_) => eprintln!(
+            "sandbox removal did not finish within {} ms; the next start will sweep it",
+            CLOSE_LEAVE_BUDGET.as_millis()
+        ),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Blocking load: an invalid rules.toml forbids startup.
@@ -60,10 +109,30 @@ pub fn run() {
         }
     });
 
+    // The safety net for a sandbox whose process died before `leave`: a crash,
+    // a kill, a close the window event below could not finish. Off the main
+    // thread — it reads and deletes a few hundred files — and after the
+    // catalogue, which is what the first screen waits on.
+    tauri::async_runtime::spawn_blocking(|| {
+        let removed = commands::sweep_orphans();
+        if removed > 0 {
+            let plural = if removed == 1 { "y" } else { "ies" };
+            eprintln!("swept {removed} orphaned sandbox director{plural} from %TEMP%");
+        }
+    });
+
     tauri::Builder::default()
         // Empty until the user asks for a sandbox in Settings: the engine runs
         // against the real profile, as it always has.
         .manage(commands::SandboxState::default())
+        .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
+                leave_on_close(window);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_rules,
             commands::rules_summary,
@@ -77,6 +146,8 @@ pub fn run() {
             commands::sandbox_leave,
             commands::sandbox_status,
             commands::sandbox_verify,
+            commands::sandbox_orphans,
+            commands::sandbox_remove_orphans,
         ])
         .run(tauri::generate_context!())
         .expect("error while launching WinCleaner");

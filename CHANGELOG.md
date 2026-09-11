@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `app_content_keys` and an entry left with no `FileKey` by
   `dropped_app_content`; on the embedded file this refuses 3 keys and drops no
   entry — both applications keep their real cache keys. Closes #2.
+- **Sandbox folders are no longer left behind in `%TEMP%`.** Leaving the
+  sandbox was the only thing that removed its directory, so a crash, a kill or
+  a window closed with a sandbox still open left
+  `%TEMP%\wincleaner-sandbox-…` and its few hundred files there for good.
+  WinCleaner now sweeps those leftovers at every start — only ever a directory
+  whose owning process is gone, never one a running WinCleaner is using — and
+  Settings → Sandbox shows a line naming how many are left and how much they
+  take, with a Remove button, so no restart is needed. Closing the window with
+  a sandbox active also attempts the removal on the way out, within a short
+  budget so the window never hangs on it. The sweep unlinks junctions before
+  removing a tree, exactly as leaving the sandbox does, and never counts nor
+  follows what is on the other side. Closes #3.
 
 ## [0.5.0] - 2026-09-11
 

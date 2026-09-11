@@ -1,18 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import whatsNew from "@/generated/whats-new.json";
 import { AUTO_CHECK_KEY } from "@/lib/updates";
 import { SettingsPanel } from "./SettingsPanel";
 
-vi.mock("@/lib/api", () => ({ checkForUpdates: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  checkForUpdates: vi.fn(),
+  sandboxOrphans: vi.fn(),
+  sandboxRemoveOrphans: vi.fn(),
+}));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { checkForUpdates } from "@/lib/api";
+import { checkForUpdates, sandboxOrphans, sandboxRemoveOrphans } from "@/lib/api";
 
 const mockedCheck = vi.mocked(checkForUpdates);
+const mockedOrphans = vi.mocked(sandboxOrphans);
+const mockedRemoveOrphans = vi.mocked(sandboxRemoveOrphans);
 
 const SANDBOX = {
   root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
@@ -37,6 +43,10 @@ function answer(over: Partial<Awaited<ReturnType<typeof checkForUpdates>>> = {})
 beforeEach(() => {
   localStorage.clear();
   mockedCheck.mockReset();
+  // Nothing left behind is the normal case, and the one every other test here
+  // renders against.
+  mockedOrphans.mockReset().mockResolvedValue([]);
+  mockedRemoveOrphans.mockReset().mockResolvedValue(0);
 });
 
 afterEach(() => {
@@ -249,6 +259,32 @@ describe("SettingsPanel — updates", () => {
 
       await user.click(screen.getByRole("button", { name: "Leave the sandbox" }));
       expect(onLeaveSandbox).toHaveBeenCalled();
+    });
+
+    /// A sandbox whose process died is not the user's problem to find: the
+    /// line names it, and the button is the way out without a restart.
+    it("offers to remove the sandbox folders a previous run left behind", async () => {
+      const user = userEvent.setup();
+      mockedOrphans.mockResolvedValueOnce([
+        { path: String.raw`C:\Temp\wincleaner-sandbox-a-1-0`, size_bytes: 2 * 1024 * 1024, files: 40 },
+        { path: String.raw`C:\Temp\wincleaner-sandbox-b-2-0`, size_bytes: 1024 * 1024, files: 20 },
+      ]);
+      mockedRemoveOrphans.mockResolvedValue(2);
+      render(<SettingsPanel />);
+
+      const line = await screen.findByTestId("sandbox-orphans");
+      expect(line).toHaveTextContent("2 old sandbox folders (3 MB)");
+
+      await user.click(within(line).getByRole("button", { name: "Remove" }));
+      expect(mockedRemoveOrphans).toHaveBeenCalled();
+      // The back end is asked again, and now answers nothing: the line goes.
+      await waitFor(() => expect(screen.queryByTestId("sandbox-orphans")).toBeNull());
+    });
+
+    it("says nothing at all when no sandbox folder was left behind", async () => {
+      render(<SettingsPanel />);
+      await waitFor(() => expect(mockedOrphans).toHaveBeenCalled());
+      expect(screen.queryByTestId("sandbox-orphans")).toBeNull();
     });
 
     /// Building the profile writes a few hundred files: without a busy state

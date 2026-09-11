@@ -1,8 +1,9 @@
 use crate::clean::{clean_rule, clean_rule_with_trash, CleanMode, CleanReport, SkippedItem};
 use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
 use crate::sandbox::{
-    full_catalogue, resolved_patterns, sandbox_recycle_empty, sandbox_recycle_query, sandbox_trash,
-    verify, Fixture, SandboxManifest, SandboxSummary, SandboxVerdict,
+    full_catalogue, orphaned_sandboxes, remove_orphan, resolved_patterns, sandbox_recycle_empty,
+    sandbox_recycle_query, sandbox_trash, verify, Fixture, Orphan, SandboxManifest, SandboxSummary,
+    SandboxVerdict, SANDBOX_PREFIX,
 };
 use crate::scan::{scan_rule, scan_rule_with_api, ScanResult};
 use crate::startup::StartupEntry;
@@ -521,7 +522,7 @@ pub fn enter_sandbox(state: &SandboxState) -> Result<SandboxSummary, String> {
     if guard.is_some() {
         return Err("A sandbox is already active. Leave it before creating another.".to_string());
     }
-    let root = std::env::temp_dir().join(format!("wincleaner-sandbox-{}", sandbox_token()));
+    let root = std::env::temp_dir().join(format!("{SANDBOX_PREFIX}{}", sandbox_token()));
     // `create_dir`, not `create_dir_all`: the name carries a random suffix, so
     // the directory must not exist yet. `create_dir_all` on a name someone
     // else planted — a junction to somewhere else, say — would succeed
@@ -596,6 +597,80 @@ pub fn verify_sandbox(
     let guard = lock(state);
     let active = guard.as_ref().ok_or("No sandbox is active.")?;
     Ok(verify(&active.manifest, rule_ids))
+}
+
+// ---------------------------------------------------------------------------
+// Orphaned sandboxes.
+//
+// `leave_sandbox` is the only thing that removes a sandbox tree, and it only
+// runs when the user asks for it. A process that dies before that — a crash, a
+// kill from the Task Manager, a window closed with a sandbox still active —
+// leaves a few hundred files in `%TEMP%` that nothing will ever mention again.
+//
+// Two sweeps, and they are not equivalent:
+//
+// * `lib.rs` runs `sweep_orphans` at every start, off the main thread. This is
+//   the safety net, and the only one that is guaranteed: whatever happened to
+//   the previous process, the next start cleans up after it.
+// * `sandbox_orphans` / `sandbox_remove_orphans` put the same thing in
+//   Settings, so a user who has just seen a sandbox survive a crash does not
+//   have to restart the application to be rid of it.
+//
+// Neither ever touches a directory whose owning process is still running: a
+// second WinCleaner with an open sandbox is not an orphan.
+// ---------------------------------------------------------------------------
+
+/// The process check the application runs with. Injected everywhere else, so
+/// no test ever asks the real machine what is running.
+fn pid_is_running(pid: u32) -> bool {
+    let mut system = System::new();
+    system.refresh_processes(
+        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+        true,
+    );
+    system.process(sysinfo::Pid::from_u32(pid)).is_some()
+}
+
+/// The sandbox directories left behind in `%TEMP%`, excluding the one this
+/// process has open.
+pub fn orphans_of(state: &SandboxState) -> Vec<Orphan> {
+    let active = lock(state).as_ref().map(|a| a.manifest.root.clone());
+    orphaned_sandboxes(
+        &std::env::temp_dir(),
+        std::process::id(),
+        active.as_deref(),
+        &pid_is_running,
+    )
+}
+
+/// Removes each of `orphans` and answers how many went. A failure on one — a
+/// file still open, a permission the sweep does not have — is not allowed to
+/// stop the others: the point is to reclaim what can be reclaimed, and the
+/// next start tries the rest again.
+fn remove_all(temp_dir: &std::path::Path, orphans: &[Orphan]) -> u32 {
+    orphans
+        .iter()
+        .filter(|orphan| match remove_orphan(temp_dir, &orphan.path) {
+            Ok(()) => true,
+            Err(err) => {
+                eprintln!("orphaned sandbox: {err}");
+                false
+            }
+        })
+        .count() as u32
+}
+
+/// What the Settings button does: sweep, minus whatever this process has open.
+pub fn remove_orphans_of(state: &SandboxState) -> u32 {
+    remove_all(&std::env::temp_dir(), &orphans_of(state))
+}
+
+/// The startup sweep. No sandbox can be active this early, so there is nothing
+/// to exclude beyond this process's own pid.
+pub fn sweep_orphans() -> u32 {
+    let temp = std::env::temp_dir();
+    let orphans = orphaned_sandboxes(&temp, std::process::id(), None, &pid_is_running);
+    remove_all(&temp, &orphans)
 }
 
 /// Why the Startup screen steps aside while a sandbox is active. It reads and
@@ -718,6 +793,22 @@ pub async fn sandbox_verify(
 ) -> Result<SandboxVerdict, String> {
     let state = state.inner().clone();
     blocking(move || verify_sandbox(&state, &rule_ids)).await
+}
+
+#[tauri::command]
+pub async fn sandbox_orphans(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<Vec<Orphan>, String> {
+    let state = state.inner().clone();
+    // Measuring the trees is disk work: off the window thread like every other
+    // sandbox command.
+    blocking(move || Ok(orphans_of(&state))).await
+}
+
+#[tauri::command]
+pub async fn sandbox_remove_orphans(state: tauri::State<'_, SandboxState>) -> Result<u32, String> {
+    let state = state.inner().clone();
+    blocking(move || Ok(remove_orphans_of(&state))).await
 }
 
 #[cfg(test)]

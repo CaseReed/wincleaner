@@ -101,6 +101,15 @@ export interface SandboxVerdict {
   junctions_refused: boolean;
 }
 
+/// Mirrors `src-tauri/src/sandbox.rs::Orphan`: a sandbox directory left in
+/// `%TEMP%` by a process that is no longer running. The size never counts
+/// anything behind a junction, because removing it never crosses one either.
+export interface SandboxOrphan {
+  path: string;
+  size_bytes: number;
+  files: number;
+}
+
 export interface StartupEntry {
   id: string;
   name: string;
@@ -178,6 +187,19 @@ export function sandboxStatus(): Promise<SandboxSummary | null> {
 /// to them, so a partial selection is not judged against the whole catalogue.
 export function sandboxVerify(ruleIds: string[]): Promise<SandboxVerdict> {
   return invoke<SandboxVerdict>("sandbox_verify", { ruleIds });
+}
+
+/// Sandbox directories a previous run left behind in `%TEMP%` — a crash, a
+/// kill, a close the back end could not finish in time. Never includes the
+/// active sandbox, nor one another running WinCleaner is using.
+export function sandboxOrphans(): Promise<SandboxOrphan[]> {
+  return invoke<SandboxOrphan[]>("sandbox_orphans");
+}
+
+/// Removes those directories and resolves with how many went. Startup does the
+/// same sweep on its own; this is the way to do it without restarting.
+export function sandboxRemoveOrphans(): Promise<number> {
+  return invoke<number>("sandbox_remove_orphans");
 }
 
 /// Groups rules by category, preserving the order of rules.toml.

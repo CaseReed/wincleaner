@@ -124,6 +124,43 @@ one builder, one catalogue, one set of guards.
 4. **Settings → Leave the sandbox** (or the banner's *Leave*) removes the
    directory and hands the real catalogue back.
 
+### When the application never reaches step 4
+
+Step 4 is the only thing that removes the tree, and it only runs when you ask
+for it. A process that dies first — a crash, a kill from the Task Manager, a
+window closed with a sandbox still open — used to leave
+`%TEMP%\wincleaner-sandbox-<id>` behind for good.
+
+Three things now clean that up, and they are not equally strong:
+
+* **Every start sweeps `%TEMP%`** (`commands::sweep_orphans`, called from
+  `lib.rs` off the main thread). This is the guarantee: whatever happened to
+  the previous process, the next start removes what it left. Only a directory
+  named `wincleaner-sandbox-<hex pid>-…` whose pid is not running is touched —
+  a second WinCleaner with an open sandbox is left alone, and so is the active
+  root, named explicitly rather than inferred.
+* **Settings → Sandbox** shows `N old sandbox folders (X MB)` with a *Remove*
+  button when the sweep has something to do, so a user who has just watched a
+  sandbox survive a crash need not restart. The line is absent, not empty, at
+  zero.
+* **Closing the window** with a sandbox active attempts the same `leave`
+  (`lib.rs::leave_on_close`), on its own thread with a 1.5 s budget so the
+  window never hangs on the way out. This one is **best effort and nothing
+  more**: it can run out of budget, and a kill or a crash never reaches it at
+  all. It spares one restart's worth of leftover; the startup sweep is the
+  safety net.
+
+The removal is the junction-safe one `leave_sandbox` uses — every reparse point
+under the tree is unlinked with `remove_dir` **before** `remove_dir_all` runs,
+because `remove_dir_all` is free to descend into a junction and delete what
+lives on the other side. With no manifest to read the junction list from, the
+tree is walked for reparse points instead; the size shown in Settings is
+measured the same way, with `symlink_metadata` and no crossing, so it is what a
+sweep would actually reclaim. `sandbox::remove_orphan` re-checks its argument
+rather than trusting it: a direct child of `%TEMP%`, carrying the sandbox
+prefix, and nothing else. Seven tests in `sandbox::tests` cover it, all against
+a `TempDir` standing in for `%TEMP%`.
+
 Nothing of yours is reachable while a sandbox is active:
 
 | Sandbox mode | Instead of |

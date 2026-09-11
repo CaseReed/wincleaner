@@ -1,9 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { checkForUpdates, type SandboxSummary, type UpdateCheck } from "@/lib/api";
+import {
+  checkForUpdates,
+  sandboxOrphans,
+  sandboxRemoveOrphans,
+  type SandboxOrphan,
+  type SandboxSummary,
+  type UpdateCheck,
+} from "@/lib/api";
+import { formatBytes, formatCount } from "@/lib/format";
 import {
   readAutoCheck,
   toPlainText,
@@ -254,6 +262,67 @@ function SandboxSection({
   );
 }
 
+/// Sandbox directories a previous run left in %TEMP% without removing them: a
+/// crash, a kill, a close the back end could not finish in time. Startup
+/// sweeps them on its own — this is the line that lets a user who has just
+/// watched it happen be rid of them without restarting.
+///
+/// Absent, not empty, when there is nothing to clean up: a permanent "0 old
+/// sandbox folders" would be a scab on a screen most users open once.
+function SandboxOrphansLine() {
+  const [orphans, setOrphans] = useState<SandboxOrphan[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    // A failure here is not worth a toast: the startup sweep is the guarantee,
+    // this line is the convenience.
+    void sandboxOrphans()
+      .then(setOrphans)
+      .catch(() => {});
+  }, []);
+
+  async function onRemove() {
+    setBusy(true);
+    try {
+      const removed = await sandboxRemoveOrphans();
+      // The back end is asked again rather than assumed empty: a directory it
+      // could not remove must stay on screen.
+      setOrphans(await sandboxOrphans());
+      toast.success(
+        removed === 1 ? "1 old sandbox folder removed" : `${removed} old sandbox folders removed`,
+      );
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (orphans.length === 0) return null;
+
+  const bytes = orphans.reduce((sum, orphan) => sum + orphan.size_bytes, 0);
+
+  return (
+    <div data-testid="sandbox-orphans" className="mt-1 flex items-center gap-3">
+      <p className="text-muted-foreground">
+        <span className="font-mono tnum">{formatCount(orphans.length)}</span> old sandbox
+        folder{orphans.length === 1 ? "" : "s"} (
+        <span className="font-mono tnum">{formatBytes(bytes)}</span>)
+      </p>
+      <Button variant="outline" size="sm" disabled={busy} onClick={() => void onRemove()}>
+        {busy ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            Removing…
+          </>
+        ) : (
+          "Remove"
+        )}
+      </Button>
+    </div>
+  );
+}
+
 export function SettingsPanel({
   sandbox = null,
   sandboxBusy = false,
@@ -310,6 +379,7 @@ export function SettingsPanel({
               onEnterSandbox={onEnterSandbox}
               onLeaveSandbox={onLeaveSandbox}
             />
+            <SandboxOrphansLine />
           </Section>
 
           <Section title="Notices" testId="notices">

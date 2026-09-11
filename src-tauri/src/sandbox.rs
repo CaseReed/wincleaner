@@ -1014,3 +1014,322 @@ fn free_name(bin: &Path, flat: &str) -> PathBuf {
     }
     candidate
 }
+
+// ---------------------------------------------------------------------------
+// Orphaned sandboxes.
+//
+// `leave_sandbox` removes the tree, but nothing removes it when the process
+// never reaches that call: a crash, a kill from the Task Manager, a window
+// closed while a sandbox is active. The directory then stays in `%TEMP%` with
+// its few hundred files, and nothing in the application ever mentions it
+// again. The two functions below are what finds those leftovers and removes
+// them — from the startup sweep (`lib.rs`) and from Settings.
+// ---------------------------------------------------------------------------
+
+/// The name every sandbox root starts with, under `%TEMP%`. The rest is
+/// `commands::sandbox_token`: the process id, the nanoseconds since the epoch
+/// and a counter, all in hexadecimal, separated by `-`.
+pub const SANDBOX_PREFIX: &str = "wincleaner-sandbox-";
+
+/// A sandbox directory left in `%TEMP%` by a process that is no longer
+/// running. `size_bytes` and `files` are what a sweep would reclaim: neither
+/// counts anything behind a junction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Orphan {
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub files: u32,
+}
+
+/// The process id a sandbox directory name carries, or `None` when the name
+/// is not one of ours. Hexadecimal, because that is how `sandbox_token`
+/// writes it.
+fn pid_of_sandbox_dir(name: &str) -> Option<u32> {
+    let token = name.strip_prefix(SANDBOX_PREFIX)?;
+    let (pid, rest) = token.split_once('-')?;
+    // A bare `wincleaner-sandbox-<pid>` with nothing after it is not a name
+    // this application produces; refusing it keeps the sweep off anything a
+    // third party happens to have put there under a similar name.
+    if rest.is_empty() {
+        return None;
+    }
+    u32::from_str_radix(pid, 16).ok()
+}
+
+/// Adds up the ordinary files under `dir`, never crossing a reparse point.
+/// `symlink_metadata` throughout: the size of a junction is the size of its
+/// link, and what lives on the other side is none of this application's
+/// business — it is not what a sweep would reclaim either, since
+/// `remove_orphan` unlinks the junction instead of descending into it.
+fn measure_tree(dir: &Path, size: &mut u64, files: &mut u32) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(md) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if is_reparse(&path) {
+            continue;
+        }
+        if md.is_dir() {
+            measure_tree(&path, size, files);
+        } else {
+            *size += md.len();
+            *files += 1;
+        }
+    }
+}
+
+/// Every `wincleaner-sandbox-*` directory sitting directly under `temp_dir`
+/// whose owning process is gone.
+///
+/// Four kinds of directory are deliberately left alone:
+///
+/// * anything not named `wincleaner-sandbox-<hex pid>-…` — not ours;
+/// * a directory whose pid is `current_pid` — this very process, whose own
+///   sandbox is `active_root` and whose half-built roots `enter_sandbox`
+///   already cleans up;
+/// * a directory whose pid `is_running` answers `true` for — a second
+///   WinCleaner is using it right now. A pid can be recycled, so this errs
+///   towards keeping a stranger's directory rather than removing a live one;
+/// * `active_root` itself, named explicitly rather than inferred from the pid,
+///   so the guarantee holds whatever the name turns out to be.
+///
+/// A reparse point named like a sandbox root is skipped too: `enter_sandbox`
+/// refuses to build on one, so it cannot be ours, and measuring it would mean
+/// reading a tree that belongs to someone else.
+pub fn orphaned_sandboxes(
+    temp_dir: &Path,
+    current_pid: u32,
+    active_root: Option<&Path>,
+    is_running: &dyn Fn(u32) -> bool,
+) -> Vec<Orphan> {
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return Vec::new();
+    };
+    let mut orphans = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(pid) = pid_of_sandbox_dir(&name) else {
+            continue;
+        };
+        if pid == current_pid || Some(path.as_path()) == active_root {
+            continue;
+        }
+        if !std::fs::symlink_metadata(&path).is_ok_and(|md| md.is_dir()) || is_reparse(&path) {
+            continue;
+        }
+        if is_running(pid) {
+            continue;
+        }
+        let (mut size_bytes, mut files) = (0, 0);
+        measure_tree(&path, &mut size_bytes, &mut files);
+        orphans.push(Orphan {
+            path,
+            size_bytes,
+            files,
+        });
+    }
+    orphans.sort_by(|a, b| a.path.cmp(&b.path));
+    orphans
+}
+
+/// Unlinks every reparse point under `dir`, depth first. `remove_dir` on the
+/// link, never `remove_dir_all`: the whole point is not to reach what is on
+/// the other side.
+fn unlink_reparse_points(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_reparse(&path) {
+            let _ = std::fs::remove_dir(&path).or_else(|_| std::fs::remove_file(&path));
+        } else if std::fs::symlink_metadata(&path).is_ok_and(|md| md.is_dir()) {
+            unlink_reparse_points(&path);
+        }
+    }
+}
+
+/// Removes one orphaned sandbox, the same way `commands::leave_sandbox`
+/// removes a live one: the junctions are unlinked **first**, because
+/// `remove_dir_all` is free to descend into a junction and delete what lives
+/// on the other side.
+///
+/// Unlike `leave_sandbox`, there is no manifest to read the junction list
+/// from — the process that wrote it is gone — so the tree is walked for
+/// reparse points instead.
+///
+/// `path` is checked rather than trusted: a direct child of `temp_dir`,
+/// carrying the sandbox prefix, and nothing else. No caller passes a path that
+/// did not come out of `orphaned_sandboxes`, but this function deletes a
+/// directory tree and the check costs two comparisons.
+pub fn remove_orphan(temp_dir: &Path, path: &Path) -> Result<(), String> {
+    let refused = |why: &str| Err(format!("Refused to remove {}: {why}.", path.display()));
+    if path.parent() != Some(temp_dir) {
+        return refused("it is not directly under the temporary directory");
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    if !name.starts_with(SANDBOX_PREFIX) {
+        return refused("its name is not a sandbox name");
+    }
+    if is_reparse(path) {
+        // `orphaned_sandboxes` never lists one, but the root can be swapped
+        // for a junction between the listing and this call — the same window
+        // `clean::deletable_path` guards. Unlink it, never descend:
+        // `remove_dir` on a junction leaves its target alone.
+        return std::fs::remove_dir(path).map_err(|e| format!("{}: {e}", path.display()));
+    }
+    unlink_reparse_points(path);
+    std::fs::remove_dir_all(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Nothing here touches the real `%TEMP%`: every path is built inside a
+    /// `TempDir` that stands in for it.
+    fn fake_temp() -> TempDir {
+        TempDir::new().expect("temp dir")
+    }
+
+    /// A sandbox-shaped directory holding one file, named the way
+    /// `sandbox_token` names one: hexadecimal pid, nanoseconds, counter.
+    fn sandbox_dir(temp: &Path, pid: u32) -> PathBuf {
+        let dir = temp.join(format!("{SANDBOX_PREFIX}{pid:x}-18f2c-0"));
+        std::fs::create_dir(&dir).expect("create sandbox dir");
+        std::fs::write(dir.join("junk.tmp"), b"0123456789").expect("write junk");
+        dir
+    }
+
+    /// The pid of a process that cannot be running: above the Windows maximum,
+    /// and answered `false` by the injected check in any case.
+    const DEAD_PID: u32 = 999_999;
+    const LIVE_PID: u32 = 4242;
+
+    fn nothing_runs(_: u32) -> bool {
+        false
+    }
+
+    #[test]
+    fn a_directory_whose_process_is_gone_is_an_orphan_and_the_others_are_left_alone() {
+        let temp = fake_temp();
+        let orphan = sandbox_dir(temp.path(), DEAD_PID);
+        let mine = sandbox_dir(temp.path(), LIVE_PID);
+        let active = temp.path().join(format!("{SANDBOX_PREFIX}beef-1-0"));
+        std::fs::create_dir(&active).unwrap();
+        std::fs::create_dir(temp.path().join("unrelated-folder")).unwrap();
+        // A name that carries the prefix but no token: not one of ours.
+        std::fs::create_dir(temp.path().join(format!("{SANDBOX_PREFIX}notahex"))).unwrap();
+
+        let found = orphaned_sandboxes(temp.path(), LIVE_PID, Some(&active), &nothing_runs);
+
+        assert_eq!(
+            found.iter().map(|o| o.path.clone()).collect::<Vec<_>>(),
+            vec![orphan],
+            "only the dead process's directory is an orphan"
+        );
+        assert_eq!(found[0].files, 1);
+        assert_eq!(found[0].size_bytes, 10);
+        assert!(mine.exists() && active.exists(), "listing removes nothing");
+    }
+
+    #[test]
+    fn a_directory_whose_process_is_still_running_is_kept() {
+        let temp = fake_temp();
+        sandbox_dir(temp.path(), DEAD_PID);
+        let running = |pid: u32| pid == DEAD_PID;
+
+        assert!(
+            orphaned_sandboxes(temp.path(), LIVE_PID, None, &running).is_empty(),
+            "a live owner keeps its sandbox"
+        );
+    }
+
+    #[test]
+    fn sizing_stops_at_a_junction_instead_of_counting_what_is_behind_it() {
+        let temp = fake_temp();
+        let orphan = sandbox_dir(temp.path(), DEAD_PID);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), vec![b'x'; 4096]).unwrap();
+        let link = orphan.join("link");
+        if junction(&link, &outside).is_err() {
+            // No reparse-point support on this volume: the guard cannot be
+            // exercised, and asserting on a junction that was never created
+            // would assert nothing.
+            return;
+        }
+
+        let found = orphaned_sandboxes(temp.path(), LIVE_PID, None, &nothing_runs);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].files, 1, "only the file on this side is counted");
+        assert_eq!(found[0].size_bytes, 10);
+    }
+
+    #[test]
+    fn removing_an_orphan_unlinks_a_junction_without_touching_its_target() {
+        let temp = fake_temp();
+        let orphan = sandbox_dir(temp.path(), DEAD_PID);
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, b"keep me").unwrap();
+        let nested = orphan.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        if junction(&nested.join("link"), &outside).is_err() {
+            return;
+        }
+
+        remove_orphan(temp.path(), &orphan).expect("the orphan is removed");
+
+        assert!(!orphan.exists(), "the sandbox tree is gone");
+        assert!(outside.exists(), "the junction target survives");
+        assert_eq!(std::fs::read(&secret).unwrap(), b"keep me");
+    }
+
+    #[test]
+    fn removal_refuses_a_path_outside_the_temporary_directory() {
+        let temp = fake_temp();
+        let elsewhere = fake_temp();
+        let victim = elsewhere.path().join(format!("{SANDBOX_PREFIX}f-1-0"));
+        std::fs::create_dir(&victim).unwrap();
+
+        let err = remove_orphan(temp.path(), &victim).unwrap_err();
+
+        assert!(err.contains("not directly under"), "{err}");
+        assert!(victim.exists(), "the refusal deleted nothing");
+    }
+
+    #[test]
+    fn removal_refuses_a_directory_that_is_not_named_like_a_sandbox() {
+        let temp = fake_temp();
+        let victim = temp.path().join("Documents");
+        std::fs::create_dir(&victim).unwrap();
+
+        let err = remove_orphan(temp.path(), &victim).unwrap_err();
+
+        assert!(err.contains("not a sandbox name"), "{err}");
+        assert!(victim.exists(), "the refusal deleted nothing");
+    }
+
+    /// A sub-directory of a sandbox root is not a sandbox root: the prefix
+    /// check alone would let `<root>\profile` through, the parent check is
+    /// what stops it.
+    #[test]
+    fn removal_refuses_a_grandchild_of_the_temporary_directory() {
+        let temp = fake_temp();
+        let orphan = sandbox_dir(temp.path(), DEAD_PID);
+        let inner = orphan.join(format!("{SANDBOX_PREFIX}f-1-0"));
+        std::fs::create_dir(&inner).unwrap();
+
+        assert!(remove_orphan(temp.path(), &inner).is_err());
+        assert!(inner.exists());
+    }
+}
