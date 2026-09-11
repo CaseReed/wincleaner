@@ -21,7 +21,7 @@ recording which assertion fires. The mutation table lives in
 | Guard | Fixture that makes it load-bearing |
 | --- | --- |
 | `scan::confined_root` | a junction planted **on the walk root itself** (`%LOCALAPPDATA%\CrashDumps` → `outside3\bait.dmp`). `walkdir` descends into its own root even when that root is a reparse point, so this is the only place the guard can act |
-| `clean::deletable_path` | a directory swapped for a junction **between the internal re-scan and the deletion**, from inside the deletion loop (`%TEMP%\zz_toctou` → `outside4\victim.txt`) |
+| `clean::deletable_path` | a directory swapped for a junction **between the internal re-scan and the deletion**, from inside the deletion loop (`%TEMP%\zz_toctou` → `outside4\victim.txt`); timed against a single deletion in `Permanent` mode and against a `Trash`-mode batch boundary (see "What it does NOT prove" for the narrower window that leaves open) |
 | `rules::normalize`'s `..` refusal | a rule set carrying `%TEMP%\..\..\..\Documents\*` — which lands exactly on `<profile>\Documents` and passes the textual containment check — loaded through `rules::load_rules_with`, the loader the application uses |
 | `scan::build_set`'s `literal_separator(true)` | `Recent\CustomDestinations\pinned.lnk`: the sibling pattern `Recent\AutomaticDestinations\*` raises the shared walk ceiling to two levels, so the walk *reaches* this file and only the glob refuses it |
 | the non-recursive rule patterns of `rules.toml` | one sentinel one level below each: `Recent\CustomDestinations\pinned.lnk`, `Explorer\keep\thumbcache_9.db`, `CrashDumps\keep\notes.dmp`, each carrying the extension its rule matches |
@@ -178,7 +178,7 @@ application already enforces — the textual `under_profile` check, then
 every deletion to the sandbox. `commands::tests::a_sandbox_scan_never_lists_a_path_outside_the_sandbox_root`
 asserts exactly that.
 
-## The six tests
+## The seven tests
 
 1. **`the_nine_native_rules_delete_their_junk_and_spare_every_sentinel`** —
    loads `rules.toml` against the fake environment, asserts the nine rules are
@@ -216,7 +216,26 @@ asserts exactly that.
    refuses. Asserts the victim is intact and byte-for-byte unchanged, and that
    `CleanReport.skipped` carries it with the reason "outside the user profile
    at deletion time".
-6. **`a_rule_set_carrying_a_parent_segment_is_rejected_by_the_loader`** —
+6. **`a_directory_swapped_for_a_junction_between_trash_batches_is_refused_in_the_next_one`**
+   — `clean::deletable_path`, `Trash` mode. `Permanent` mode (test 5) checks and
+   deletes one file at a time, so the swap only has to be timed against a
+   single deletion; `Trash` mode collects up to `clean::TRASH_BATCH` (500)
+   approved paths before ever calling the shell, so this test times the swap
+   against a *batch* boundary instead. `%TEMP%` is seeded with exactly
+   `TRASH_BATCH` filler files that sort ahead of the fixture's own
+   `windows.temp` junk, so the rule's first batch is filler alone; the TOCTOU
+   victim, sorting last, is only ever reached by `deletable_path` in the
+   second batch. The swap is performed from inside the injected `trash`
+   closure the first time it is called — exactly when the filler batch is
+   handed to the shell, before the second batch has been looked at at all.
+   Asserts the victim's path never reaches the (recording, non-deleting)
+   `trash` closure, the victim is intact and byte-for-byte unchanged, and
+   `CleanReport.skipped` carries it with the "outside the user profile"
+   reason. This proves a file approved *after* a swap is refused even in
+   `Trash` mode; it does not prove a file already approved and waiting inside
+   its own not-yet-flushed batch would be — see "What it does NOT prove"
+   below.
+7. **`a_rule_set_carrying_a_parent_segment_is_rejected_by_the_loader`** —
    `rules::normalize`. A rule set whose first entry is
    `%TEMP%\..\..\..\Documents\*` is loaded through `rules::load_rules_with`.
    Asserts the whole load fails with `ParentSegment` (fatal, not merely
@@ -234,6 +253,25 @@ containment, not as a count that no longer adds up.
 * **The reparse `filter_entry` in `scan::collect`.** See the table above:
   defence in depth, no privilege-free construct exercises it, removing it
   leaves the harness green.
+* **A swap landing inside an already-approved, not-yet-flushed `Trash` batch.**
+  `deletable_path` is checked once per file, immediately before it joins a
+  batch of at most `clean::TRASH_BATCH` (500); the batch is sent to the shell
+  right after the rule's files have all been checked — not right after each
+  one. Test 6 proves a swap timed against a *batch boundary* is refused for
+  the batch that follows it, because that batch's files are still checked
+  after the swap. It cannot prove the same for a swap landing on a path
+  already approved earlier in the very same unflushed batch: there is no
+  injection point between one file's approval and its own batch's flush, so
+  that path's canonical location — resolved once, at check time — is what the
+  shell is handed regardless of what happens to the directory afterward, for
+  as long as the batch is still filling (up to 499 more checks, or until the
+  rule ends). This is a real, if narrow, residual window: the shell moves by
+  path, not by an identity fixed at check time, so a directory swapped into
+  place under an already-approved path during that wait would carry the
+  delete through the swap. No privilege-free construct in this harness can
+  land the swap inside that specific window without an injection point the
+  production code does not have; adding one only to test it would be new
+  surface for a gap this narrow. Accepted and documented, not asserted.
 * **The real `trash::delete_all`.** Every test passes an injected deletion call, and
   the `Permanent`-mode tests pass a panic stub (`forbidden_trash`) so reaching
   the move-to-bin aborts the run rather than being caught after the fact. Two

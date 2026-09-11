@@ -68,6 +68,20 @@ function writeFlag(key: string, value: boolean) {
 
 const RULE_COUNT = new Intl.NumberFormat("en-US");
 
+/// How often the live region is allowed to speak while a walk is still going,
+/// besides its final event. `done % 10` never fires at all below ten rules —
+/// which is the common case with a handful of rules selected — and is silent
+/// for the whole run either way, so time is what actually bounds how long a
+/// screen-reader user goes without an update.
+const ANNOUNCE_INTERVAL_MS = 5000;
+
+/// Whether this progress event should be spoken: the last one always is, and
+/// otherwise at most one announcement per `ANNOUNCE_INTERVAL_MS`. Shared by
+/// scan and clean, whose progress shapes differ only in field names.
+function shouldAnnounce(lastAnnouncedAt: number, now: number, done: number, total: number): boolean {
+  return done >= total || now - lastAnnouncedAt >= ANNOUNCE_INTERVAL_MS;
+}
+
 /// Whether this mode will destroy this rule's content with no way back. The
 /// Recycle Bin rule always is: the deletion mode does not apply to it.
 export function isIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
@@ -242,9 +256,11 @@ export function CleanPanel({
   /// first one arrives. Read only while a clean is pending.
   const [cleanProgress, setCleanProgress] = useState<CleanProgress | null>(null);
   const cleanPending = useRef(false);
-  /// The rule count the live region last spoke about, so a rule that reports
-  /// from inside its own deletion loop is not read out every 500 files.
-  const spokenRule = useRef(0);
+  /// When the live region last spoke, for the scan and the clean walks
+  /// respectively: `shouldAnnounce` throttles on this instead of a rule count
+  /// that can stay below ten for a whole run.
+  const lastScanAnnounce = useRef(0);
+  const lastCleanAnnounce = useRef(0);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [query, setQuery] = useState("");
@@ -314,9 +330,11 @@ export function CleanPanel({
     onScanProgress((step) => {
       if (!scanPending.current) return;
       setProgress(step);
-      // Every tenth rule, and the last one: enough to know the walk is moving,
-      // rare enough to leave room for anything else being read.
-      if (step.done % 10 === 0 || step.done === step.total) {
+      // At most every five seconds, and the last one: enough to know the walk
+      // is moving, rare enough to leave room for anything else being read.
+      const now = Date.now();
+      if (shouldAnnounce(lastScanAnnounce.current, now, step.done, step.total)) {
+        lastScanAnnounce.current = now;
         setAnnouncement(
           `Analyzing: ${RULE_COUNT.format(step.done)} of ${RULE_COUNT.format(
             step.total
@@ -348,14 +366,13 @@ export function CleanPanel({
     onCleanProgress((step) => {
       if (!cleanPending.current) return;
       setCleanProgress(step);
-      // A rule that deletes 59,000 files reports every 500 of them: the live
-      // region follows the rules, not the files, or it reads the same sentence
-      // a hundred times over.
-      if (
-        step.done_rules !== spokenRule.current &&
-        (step.done_rules % 10 === 0 || step.done_rules === step.total_rules)
-      ) {
-        spokenRule.current = step.done_rules;
+      // A rule that deletes 59,000 files reports every 500 of them, and
+      // `done_rules` never moves in between: gating on time, not on the rule
+      // count, is what keeps a single long rule from going silent for its
+      // whole run.
+      const now = Date.now();
+      if (shouldAnnounce(lastCleanAnnounce.current, now, step.done_rules, step.total_rules)) {
+        lastCleanAnnounce.current = now;
         setAnnouncement(
           `Cleaning: ${RULE_COUNT.format(step.done_rules)} of ${RULE_COUNT.format(
             step.total_rules
@@ -507,6 +524,7 @@ export function CleanPanel({
     setConfirming(false);
     setProgress(null);
     setAnnouncement("Analyzing…");
+    lastScanAnnounce.current = 0;
     scanPending.current = true;
     // A new scan re-decides which categories are worth showing: the previous
     // hand folds no longer describe these results.
@@ -537,7 +555,7 @@ export function CleanPanel({
     setVerdictError(null);
     setCleanProgress(null);
     setAnnouncement("Cleaning…");
-    spokenRule.current = 0;
+    lastCleanAnnounce.current = 0;
     cleanPending.current = true;
     // What was cleaned, captured before `results` is dropped: the verdict is
     // scoped to these rules, so it must be the list Clean was actually given.

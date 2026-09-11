@@ -519,12 +519,22 @@ mod tests {
         let dir = fake_profile();
         let lookup = lookup_for(dir.path());
         let rule = temp_rule(Risk::Medium);
-        let report = clean_rule_with_api(
+        // `clean_rule_with_api` is wired to the real, private `trash_delete`,
+        // which reaches the shell and therefore the real Recycle Bin of the
+        // volume running the suite. `clean_rule_with_trash` with an injected
+        // `remove_file` stand-in (the `trash_mode_hands_the_shell_one_call_per_batch`
+        // pattern) proves the same thing — the directory is emptied — without
+        // ever touching it.
+        let trash = |paths: &[PathBuf]| {
+            paths.iter().try_for_each(|p| fs::remove_file(p).map_err(|e| e.to_string()))
+        };
+        let report = clean_rule_with_trash(
             &rule,
             CleanMode::Trash,
             &lookup,
             &forbidden_recycle_query,
             &forbidden_recycle_empty,
+            &trash,
             &mut |_, _| {},
         )
         .unwrap();

@@ -23,7 +23,12 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   `FILE_ATTRIBUTE_REPARSE_POINT` or whose `canonicalize` form leaves the
   canonical profile; `clean.rs::deletable_path` requires, right before every
   deletion, a regular file that is not a reparse point and resolves under the
-  profile. Never walk nor delete without going through those two guards
+  profile — in `Trash` mode that means checked per file immediately before it
+  joins a batch of at most 500 (`clean.rs::TRASH_BATCH`), and the batch is sent
+  right after the rule's files are checked; a path approved earlier in that
+  same batch is not re-checked before the shell call (`docs/safety-harness.md`,
+  "What it does not prove"). Never walk nor delete without going through those
+  two guards
   (walkdir descends into its root even when that root is a junction, and
   `mklink /J` requires no privilege).
 - The guards above do not see hard links: a hard link is one more name on the

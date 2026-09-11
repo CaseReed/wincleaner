@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use tempfile::TempDir;
-use wincleaner_lib::clean::{clean_rule_with_trash, CleanMode, CleanReport};
+use wincleaner_lib::clean::{clean_rule_with_trash, CleanMode, CleanReport, TRASH_BATCH};
 use wincleaner_lib::commands::{clean_rules_with, scan_rules_with, ScanProgress};
 use wincleaner_lib::rules::{load_rules_with, resolved_paths_with, Rule, RuleError, RuleKind};
 use wincleaner_lib::sandbox::Fixture;
@@ -639,6 +639,99 @@ fn a_directory_swapped_for_a_junction_after_the_scan_is_refused_at_deletion() {
         report.skipped
     );
     assert_sentinels_intact(&fx, "toctou swap");
+}
+
+/// `clean::deletable_path`, `Trash` mode. `Permanent` mode checks and deletes
+/// one file at a time, so the swap above only has to be timed against a
+/// single deletion; `Trash` mode collects up to `TRASH_BATCH` approved paths
+/// before ever calling the shell (`clean::send_to_trash`), so the swap has to
+/// be timed against a BATCH boundary instead.
+///
+/// `%TEMP%` is seeded with exactly `TRASH_BATCH` filler files whose names sort
+/// ahead of the fixture's own `windows.temp` junk (`aaa* < nested\... <
+/// stray.tmp < zz_toctou\...`, and the paths within a rule are sorted —
+/// `scan.rs`), so the rule's first batch is filled by filler alone and flushes
+/// on its own; the TOCTOU victim, sorting last, is only ever reached by
+/// `deletable_path` in the *second* batch. The swap is performed from inside
+/// the injected `trash` closure the first time it is called, i.e. exactly
+/// when the filler batch is handed to the shell: every one of ITS files has
+/// already been approved, and none of the second batch's files — the victim
+/// included — has been looked at yet.
+///
+/// This proves exactly one thing: a file whose `deletable_path` check happens
+/// *after* a swap, even one performed from inside another batch's own
+/// delivery earlier in the same rule, is still refused. It does NOT prove
+/// that no swap can ever reach a `Trash`-mode file: a path already approved
+/// and sitting in `pending`, waiting for its OWN batch to fill up to
+/// `TRASH_BATCH` or for the rule to end, is never re-checked before that
+/// batch reaches the shell — there is no injection point between one file's
+/// approval and its own batch's flush to exercise that window from here. See
+/// `docs/safety-harness.md`, "What it does not prove".
+#[test]
+fn a_directory_swapped_for_a_junction_between_trash_batches_is_refused_in_the_next_one() {
+    let fx = fixture();
+    let victim = fx.outside4.join("victim.txt");
+    let scanned_victim = fx.toctou_victim_path();
+    assert!(victim.exists() && scanned_victim.exists(), "fixture");
+
+    let temp_dir = fx.profile.join(r"AppData\Local\Temp");
+    for n in 0..TRASH_BATCH {
+        std::fs::write(temp_dir.join(format!("aaa{n:05}.tmp")), b"filler").unwrap();
+    }
+
+    let rules = native_rules(&fx);
+    let scans = scan_all(&fx, &rules);
+    assert_no_path_crosses_a_junction(&fx, &scans);
+
+    // Every path actually handed to the shell, across every rule and every
+    // batch: the claim is that the victim's path is never among them, not
+    // merely that a non-deleting stand-in happens to leave it alone.
+    let handed_to_trash: std::cell::RefCell<Vec<PathBuf>> = std::cell::RefCell::new(Vec::new());
+    let swapped = std::cell::Cell::new(false);
+    let trash = |paths: &[PathBuf]| {
+        if !swapped.get() {
+            swapped.set(true);
+            assert_eq!(
+                paths.len(),
+                TRASH_BATCH,
+                "the swap must fire on the filler-only first batch"
+            );
+            fx.swap_toctou_dir_for_junction();
+        }
+        handed_to_trash.borrow_mut().extend(paths.iter().cloned());
+        Ok(())
+    };
+
+    let report = clean_all_with_trash(&fx, &rules, CleanMode::Trash, &trash);
+    assert!(swapped.get(), "the swap must have been performed");
+
+    let victim_key = key(&scanned_victim);
+    assert!(
+        !handed_to_trash.borrow().iter().any(|p| key(p) == victim_key),
+        "the victim's path must never reach the shell: {:?}",
+        handed_to_trash.borrow()
+    );
+    assert!(
+        victim.exists(),
+        "VICTIM DELETED through a junction swapped in between trash batches: {}",
+        victim.display()
+    );
+    assert_eq!(
+        std::fs::read(&victim).unwrap(),
+        Fixture::sentinel_content(&victim),
+        "the victim was rewritten"
+    );
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| key(Path::new(&s.path)) == victim_key
+                && s.reason.contains("outside the user profile")),
+        "the report must carry the refusal for {}: {:?}",
+        scanned_victim.display(),
+        report.skipped
+    );
+    assert_sentinels_intact(&fx, "toctou swap between trash batches");
 }
 
 /// `rules::normalize`. The `..` refusal lives at rule load, so it is proved

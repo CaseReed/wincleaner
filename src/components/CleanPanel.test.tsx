@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -94,6 +94,13 @@ describe("CleanPanel", () => {
       winapp2_detected: 42,
       winapp2_dropped: 900,
     });
+  });
+
+  // A test that switches to fake timers and fails before its own `finally`
+  // would otherwise leave every later test hanging on a timer that never
+  // fires.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows the rules grouped by category", async () => {
@@ -846,8 +853,9 @@ describe("CleanPanel", () => {
   });
 
   /// A live region fed by every event would read the same sentence hundreds of
-  /// times over a thirty-second walk. Every tenth rule, and the last one.
-  it("announces the scan every ten rules and on completion", async () => {
+  /// times over a thirty-second walk. `done % 10` used to gate this, but never
+  /// fires at all below ten rules; time is what actually bounds the silence.
+  it("announces the scan at most once every five seconds, and on completion", async () => {
     const user = userEvent.setup();
     let release: (results: unknown[]) => void = () => {};
     api.scan.mockImplementation(
@@ -861,20 +869,42 @@ describe("CleanPanel", () => {
     const live = screen.getByTestId("scan-announcement");
     expect(live).toHaveAttribute("aria-live", "polite");
 
-    act(() =>
-      emitProgress({ done: 3, total: 25, rule_id: "a", label: "A", total_bytes: 1024 })
-    );
-    expect(live).toHaveTextContent("Analyzing…");
+    // Fake timers only from here: rendering and `userEvent` above need real
+    // ones to resolve their own internal waits.
+    vi.useFakeTimers();
+    try {
 
-    act(() =>
-      emitProgress({ done: 10, total: 25, rule_id: "b", label: "B", total_bytes: 2048 })
-    );
-    expect(live).toHaveTextContent("Analyzing: 10 of 25 rules, 2 KB so far");
+      // Three events inside one second: only the first is announced.
+      act(() =>
+        emitProgress({ done: 1, total: 25, rule_id: "a", label: "A", total_bytes: 1024 })
+      );
+      expect(live).toHaveTextContent("Analyzing: 1 of 25 rules, 1 KB so far");
+      act(() => {
+        vi.advanceTimersByTime(400);
+        emitProgress({ done: 2, total: 25, rule_id: "b", label: "B", total_bytes: 2048 });
+      });
+      expect(live).toHaveTextContent("Analyzing: 1 of 25 rules, 1 KB so far");
+      act(() => {
+        vi.advanceTimersByTime(400);
+        emitProgress({ done: 3, total: 25, rule_id: "c", label: "C", total_bytes: 3072 });
+      });
+      expect(live).toHaveTextContent("Analyzing: 1 of 25 rules, 1 KB so far");
 
-    act(() =>
-      emitProgress({ done: 25, total: 25, rule_id: "c", label: "C", total_bytes: 4096 })
-    );
-    expect(live).toHaveTextContent("Analyzing: 25 of 25 rules, 4 KB so far");
+      // Five seconds after the last announcement, the next event is spoken.
+      act(() => {
+        vi.advanceTimersByTime(4200);
+        emitProgress({ done: 4, total: 25, rule_id: "d", label: "D", total_bytes: 4096 });
+      });
+      expect(live).toHaveTextContent("Analyzing: 4 of 25 rules, 4 KB so far");
+
+      // The final event is always announced, throttle or not.
+      act(() =>
+        emitProgress({ done: 25, total: 25, rule_id: "z", label: "Z", total_bytes: 5120 })
+      );
+      expect(live).toHaveTextContent("Analyzing: 25 of 25 rules, 5 KB so far");
+    } finally {
+      vi.useRealTimers();
+    }
 
     release([
       { rule_id: "windows.temp", file_count: 1, total_bytes: 4096, paths: [], skipped: 0 },
@@ -964,32 +994,50 @@ describe("CleanPanel", () => {
     expect(screen.getByRole("button", { name: /Cleaning/ })).toBeDisabled();
   });
 
-  /// One rule reporting every 500 files must not read that rule's name out
-  /// again each time: the live region follows the rules, like the scan's.
-  it("announces the clean every ten rules and on completion", async () => {
+  /// `done_rules % 10` never fires below ten rules, and a rule reporting every
+  /// 500 files never moves `done_rules` at all in between: time is what
+  /// actually bounds how long the live region stays silent.
+  it("announces the clean at most once every five seconds, and on completion", async () => {
     await startPendingClean();
-    const live = screen.getByTestId("scan-announcement");
+    // Fake timers only from here: `startPendingClean` drives `userEvent`,
+    // which needs real ones to resolve its own internal delays.
+    vi.useFakeTimers();
+    try {
+      const live = screen.getByTestId("scan-announcement");
 
-    act(() =>
-      emitClean({ done_rules: 3, total_rules: 25, rule_id: "a", label: "A", files_deleted: 1, bytes_freed: 1024 })
-    );
-    expect(live).toHaveTextContent("Cleaning…");
+      // Three events inside one second, same rule still running: only the
+      // first is announced.
+      act(() =>
+        emitClean({ done_rules: 1, total_rules: 25, rule_id: "a", label: "A", files_deleted: 500, bytes_freed: 1024 })
+      );
+      expect(live).toHaveTextContent("Cleaning: 1 of 25 rules, 1 KB freed so far");
+      act(() => {
+        vi.advanceTimersByTime(400);
+        emitClean({ done_rules: 1, total_rules: 25, rule_id: "a", label: "A", files_deleted: 1000, bytes_freed: 2048 });
+      });
+      expect(live).toHaveTextContent("Cleaning: 1 of 25 rules, 1 KB freed so far");
+      act(() => {
+        vi.advanceTimersByTime(400);
+        emitClean({ done_rules: 1, total_rules: 25, rule_id: "a", label: "A", files_deleted: 1500, bytes_freed: 3072 });
+      });
+      expect(live).toHaveTextContent("Cleaning: 1 of 25 rules, 1 KB freed so far");
 
-    act(() =>
-      emitClean({ done_rules: 10, total_rules: 25, rule_id: "b", label: "B", files_deleted: 500, bytes_freed: 2048 })
-    );
-    expect(live).toHaveTextContent("Cleaning: 10 of 25 rules, 2 KB freed so far");
+      // Five seconds after the last announcement, the next event is spoken —
+      // even though it is still the very same rule.
+      act(() => {
+        vi.advanceTimersByTime(4200);
+        emitClean({ done_rules: 1, total_rules: 25, rule_id: "a", label: "A", files_deleted: 2000, bytes_freed: 4096 });
+      });
+      expect(live).toHaveTextContent("Cleaning: 1 of 25 rules, 4 KB freed so far");
 
-    // Same rule again, 500 files later: nothing new is said.
-    act(() =>
-      emitClean({ done_rules: 10, total_rules: 25, rule_id: "b", label: "B", files_deleted: 1000, bytes_freed: 3072 })
-    );
-    expect(live).toHaveTextContent("Cleaning: 10 of 25 rules, 2 KB freed so far");
-
-    act(() =>
-      emitClean({ done_rules: 25, total_rules: 25, rule_id: "c", label: "C", files_deleted: 2000, bytes_freed: 4096 })
-    );
-    expect(live).toHaveTextContent("Cleaning: 25 of 25 rules, 4 KB freed so far");
+      // The final event is always announced, throttle or not.
+      act(() =>
+        emitClean({ done_rules: 25, total_rules: 25, rule_id: "z", label: "Z", files_deleted: 3000, bytes_freed: 5120 })
+      );
+      expect(live).toHaveTextContent("Cleaning: 25 of 25 rules, 5 KB freed so far");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /// An event arriving outside a clean (a previous run finishing late) must not
