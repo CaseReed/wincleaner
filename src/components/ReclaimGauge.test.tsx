@@ -75,6 +75,37 @@ describe("ReclaimGauge", () => {
     expect(legend[2]).toHaveTextContent("Google Chrome cache");
   });
 
+  /// A stack of coloured widths is the one thing a screen reader gets nothing
+  /// from: the bar says in words what it draws.
+  it("reads the bar out as its total and its largest contributors", () => {
+    render(
+      <ReclaimGauge
+        rules={RULES}
+        results={[
+          result("windows.temp", 100),
+          result("windows.recycle-bin", 400),
+          result("edge.cache", 300),
+          result("chrome.cache", 200),
+        ]}
+      />
+    );
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      "Reclaimable 1000 B: Recycle Bin 400 B, Microsoft Edge cache 300 B, Google Chrome cache 200 B, and 1 smaller rule"
+    );
+  });
+
+  it("names every segment when there are no more than three", () => {
+    render(
+      <ReclaimGauge
+        rules={RULES}
+        results={[result("windows.temp", 750), result("edge.cache", 250)]}
+      />
+    );
+    expect(screen.getByRole("img")).toHaveAccessibleName(
+      "Reclaimable 1000 B: Temporary files 750 B, Microsoft Edge cache 250 B"
+    );
+  });
+
   it("animates the width by default", () => {
     stubReducedMotion(false);
     render(<ReclaimGauge rules={RULES} results={[result("windows.temp", 1024)]} />);

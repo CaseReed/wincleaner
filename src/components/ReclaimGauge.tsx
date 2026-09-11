@@ -49,6 +49,21 @@ export function prefersReducedMotion(): boolean {
   );
 }
 
+/// What the bar says, in words: the total, then the segments that carry it,
+/// biggest first. A stack of coloured widths is the one thing a screen reader
+/// gets nothing from, so it is spelled out instead of described.
+export function describeSegments(segments: GaugeSegment[], total: number): string {
+  const ranked = [...segments].sort((a, b) => b.bytes - a.bytes);
+  const named = ranked
+    .slice(0, 3)
+    .map((s) => `${s.label} ${formatBytes(s.bytes)}`)
+    .join(", ");
+  const rest = ranked.length - 3;
+  const tail =
+    rest > 0 ? `, and ${rest} smaller ${rest === 1 ? "rule" : "rules"}` : "";
+  return `Reclaimable ${formatBytes(total)}: ${named}${tail}`;
+}
+
 export function ReclaimGauge({
   rules,
   results,
@@ -71,7 +86,11 @@ export function ReclaimGauge({
 
   return (
     <div data-testid="reclaim-gauge" className="flex flex-col gap-3">
-      <div className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-[5px] bg-muted">
+      <div
+        role="img"
+        aria-label={describeSegments(segments, total)}
+        className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-[5px] bg-muted"
+      >
         {segments.map((segment) => (
           <div
             key={segment.id}
