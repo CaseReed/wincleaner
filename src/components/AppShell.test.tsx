@@ -55,6 +55,58 @@ describe("AppShell", () => {
     expect(screen.getByTestId("theme-toggle")).toHaveAccessibleName("Switch to dark theme");
   });
 
+  /// A screen reader lands on the sidebar by landmark, not by hunting for the
+  /// first button of the page.
+  it("names the sidebar as the main navigation landmark", () => {
+    renderShell();
+    expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
+  });
+
+  /// One Tab stop for the whole sidebar: the active entry is the only one in
+  /// the tab order, the arrows reach the other two.
+  it("keeps a single tab stop in the sidebar", () => {
+    renderShell({ screen: "startup" });
+    expect(screen.getByRole("button", { name: "Startup" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "Cleanup" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("moves between the entries with the arrow keys", async () => {
+    const user = userEvent.setup();
+    const { onScreenChange } = renderShell();
+    screen.getByRole("button", { name: "Cleanup" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(onScreenChange).toHaveBeenCalledWith("startup");
+    expect(screen.getByRole("button", { name: "Startup" })).toHaveFocus();
+  });
+
+  it("wraps around from the first entry to the last with ArrowUp", async () => {
+    const user = userEvent.setup();
+    const { onScreenChange } = renderShell();
+    screen.getByRole("button", { name: "Cleanup" }).focus();
+    await user.keyboard("{ArrowUp}");
+    expect(onScreenChange).toHaveBeenCalledWith("settings");
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveFocus();
+  });
+
+  it("jumps to the first and the last entry with Home and End", async () => {
+    const user = userEvent.setup();
+    const { onScreenChange } = renderShell({ screen: "startup" });
+    screen.getByRole("button", { name: "Startup" }).focus();
+    await user.keyboard("{End}");
+    expect(onScreenChange).toHaveBeenCalledWith("settings");
+    await user.keyboard("{Home}");
+    expect(onScreenChange).toHaveBeenCalledWith("clean");
+  });
+
+  /// The label says what the press does; `aria-pressed` says what is on now.
+  it("announces the theme toggle state", () => {
+    renderShell();
+    expect(screen.getByTestId("theme-toggle")).toHaveAttribute("aria-pressed", "false");
+    renderShell({ dark: true });
+    expect(screen.getAllByTestId("theme-toggle")[1]).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("shows no sandbox banner while the engine runs against the real profile", () => {
     renderShell();
     expect(screen.queryByTestId("sandbox-banner")).not.toBeInTheDocument();
@@ -65,6 +117,13 @@ describe("AppShell", () => {
     const banner = screen.getByTestId("sandbox-banner");
     expect(banner).toHaveTextContent("Sandbox mode");
     expect(banner).toHaveTextContent(SANDBOX.root);
+  });
+
+  /// Entering the sandbox moves the engine off the real profile: the banner
+  /// has to reach a screen reader on its own.
+  it("announces the sandbox banner", () => {
+    renderShell({ sandbox: SANDBOX });
+    expect(screen.getByTestId("sandbox-banner")).toHaveAttribute("role", "status");
   });
 
   it("leaves the sandbox from the banner", async () => {
