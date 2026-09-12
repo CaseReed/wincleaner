@@ -11,7 +11,7 @@
 /// `tn`/`txn` pick between.
 export const en = {
   // Shell and navigation
-  "nav.label": "Main",
+  "nav.label": "Main navigation",
   "nav.clean": "Cleanup",
   "nav.startup": "Startup",
   "nav.settings": "Settings",
