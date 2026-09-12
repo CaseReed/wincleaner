@@ -7,6 +7,7 @@ import { CleanPanel } from "@/components/CleanPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { StartupPanel } from "@/components/StartupPanel";
 import whatsNew from "@/generated/whats-new.json";
+import { I18nProvider, useI18n } from "@/i18n";
 import {
   checkForUpdates,
   sandboxEnter,
@@ -47,6 +48,15 @@ function syncWindowTheme(dark: boolean) {
 }
 
 export default function App() {
+  return (
+    <I18nProvider>
+      <AppBody />
+    </I18nProvider>
+  );
+}
+
+function AppBody() {
+  const { t } = useI18n();
   const [screen, setScreen] = useState<Screen>("clean");
   const [dark, setDark] = useState(initialDark);
   /// The active sandbox, or null when the engine runs against the real
@@ -71,7 +81,7 @@ export default function App() {
     try {
       const summary = await sandboxEnter();
       setSandbox(summary);
-      toast.success("Sandbox profile created");
+      toast.success(t("sandbox.created"));
     } catch (err) {
       toast.error(String(err));
     } finally {
@@ -89,7 +99,7 @@ export default function App() {
     try {
       await sandboxLeave();
       setSandbox(null);
-      toast.success("Sandbox removed");
+      toast.success(t("sandbox.removed"));
     } catch (err) {
       toast.error(String(err));
       try {
@@ -117,8 +127,8 @@ export default function App() {
   /// explain what moved under the user's feet, not to greet them.
   useEffect(() => {
     if (shouldAnnounce(readLastSeen(), whatsNew.version)) {
-      toast.info(`What's new in ${whatsNew.version}`, {
-        action: { label: "View", onClick: () => setScreen("settings") },
+      toast.info(t("settings.whatsNew", { version: whatsNew.version }), {
+        action: { label: t("common.view"), onClick: () => setScreen("settings") },
       });
     }
     markSeen(whatsNew.version);
@@ -136,8 +146,8 @@ export default function App() {
         if (!check.is_newer || latest === null) return;
         if (!shouldNotify(readLastNotified(), latest)) return;
         markNotified(latest);
-        toast.info(`WinCleaner ${latest} is available`, {
-          action: { label: "View", onClick: () => setScreen("settings") },
+        toast.info(t("updates.available", { version: latest }), {
+          action: { label: t("common.view"), onClick: () => setScreen("settings") },
         });
       })
       .catch(() => {});

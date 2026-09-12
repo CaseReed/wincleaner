@@ -987,7 +987,7 @@ describe("CleanPanel", () => {
   it("draws the progress of the clean rule by rule", async () => {
     await startPendingClean();
 
-    expect(screen.getByTestId("hero-status")).toHaveTextContent("Cleaning 1 rules");
+    expect(screen.getByTestId("hero-status")).toHaveTextContent("Cleaning 1 rule");
 
     act(() =>
       emitClean({

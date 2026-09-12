@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable resolves there. `risk = medium`, `default_checked = false`, same
   category and voice as `windows.crash-dumps`.
 
+- **The interface speaks English and French.** Every string the application
+  writes itself now goes through a small typed dictionary (`src/i18n/en.ts`,
+  `src/i18n/fr.ts`, keys typed from the English one, so a missing translation
+  fails `tsc`): labels, buttons, toasts, the confirmation, the progress lines,
+  the sandbox banner and every accessibility string. Settings gains a Language
+  selector — System, English, Français — that follows `navigator.language`
+  until it is touched, applies without a reload, is remembered in
+  `localStorage` beside the theme and the update-check consent, and sets
+  `document.documentElement.lang`. Sizes and counters are formatted for the
+  locale (`1.5 KB` / `1,5 Ko`). What stays English whatever the setting: the
+  rule labels and descriptions, which come from `rules.toml` and from Winapp2,
+  the "What's new" body extracted from `CHANGELOG.md`, the release notes
+  GitHub returns, and this changelog.
+
 ### Changed
 
 - **Measured the Recycle Bin batching gain: about 2.6x.** The new opt-in

@@ -1,15 +1,16 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
 import { FlaskConical, Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { SandboxSummary } from "@/lib/api";
 
 export type Screen = "clean" | "startup" | "settings";
 
-const SCREENS: { id: Screen; label: string; icon: typeof Sparkles }[] = [
-  { id: "clean", label: "Cleanup", icon: Sparkles },
-  { id: "startup", label: "Startup", icon: Power },
-  { id: "settings", label: "Settings", icon: Settings },
+const SCREENS: { id: Screen; label: TranslationKey; icon: typeof Sparkles }[] = [
+  { id: "clean", label: "nav.clean", icon: Sparkles },
+  { id: "startup", label: "nav.startup", icon: Power },
+  { id: "settings", label: "nav.settings", icon: Settings },
 ];
 
 function NavItem({
@@ -72,6 +73,7 @@ export function AppShell({
   onLeaveSandbox?: () => void;
   children: ReactNode;
 }) {
+  const { t, tx } = useI18n();
   const items = useRef<(HTMLButtonElement | null)[]>([]);
 
   /// Arrow keys move the focus and the screen together: the sidebar is a list
@@ -106,7 +108,7 @@ export function AppShell({
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">
       <nav
-        aria-label="Main"
+        aria-label={t("nav.label")}
         className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar px-4 py-4"
       >
         <p className="mb-6 px-2.5 text-sm font-semibold tracking-tight">
@@ -117,7 +119,7 @@ export function AppShell({
             <NavItem
               key={id}
               active={screen === id}
-              label={label}
+              label={t(label)}
               icon={icon}
               onClick={() => onScreenChange(id)}
               onKeyDown={(event) => onNavKeyDown(index, event)}
@@ -134,12 +136,12 @@ export function AppShell({
           /// reader which theme is on right now, and the label says what the
           /// press will do.
           aria-pressed={dark}
-          aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
+          aria-label={dark ? t("theme.toLight") : t("theme.toDark")}
           onClick={onToggleTheme}
           className="mt-auto flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
         >
           {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          {dark ? "Light theme" : "Dark theme"}
+          {dark ? t("theme.light") : t("theme.dark")}
         </button>
       </nav>
       {/* `relative`: the pane becomes the containing block for
@@ -156,8 +158,11 @@ export function AppShell({
           >
             <FlaskConical className="size-4 shrink-0 text-warning" aria-hidden="true" />
             <p className="min-w-0 flex-1">
-              Sandbox mode — cleaning affects only the test profile at{" "}
-              <span className="font-mono text-xs break-all">{sandbox.root}</span>
+              {tx("sandbox.banner", {
+                root: (
+                  <span className="font-mono text-xs break-all">{sandbox.root}</span>
+                ),
+              })}
             </p>
             <Button
               variant="outline"
@@ -165,7 +170,7 @@ export function AppShell({
               className="shrink-0"
               onClick={onLeaveSandbox}
             >
-              Leave
+              {t("sandbox.leave")}
             </Button>
           </div>
         )}

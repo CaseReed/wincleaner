@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatBytes } from "@/lib/format";
+import { useI18n, type I18n } from "@/i18n";
 import type { RuleSummary, ScanResult } from "@/lib/api";
 
 /// Three lightness levels of `--primary` for the categories (the first is the
@@ -52,16 +52,19 @@ export function prefersReducedMotion(): boolean {
 /// What the bar says, in words: the total, then the segments that carry it,
 /// biggest first. A stack of coloured widths is the one thing a screen reader
 /// gets nothing from, so it is spelled out instead of described.
-export function describeSegments(segments: GaugeSegment[], total: number): string {
+export function describeSegments(
+  segments: GaugeSegment[],
+  total: number,
+  { t, tn, formatBytes }: I18n,
+): string {
   const ranked = [...segments].sort((a, b) => b.bytes - a.bytes);
   const named = ranked
     .slice(0, 3)
     .map((s) => `${s.label} ${formatBytes(s.bytes)}`)
     .join(", ");
   const rest = ranked.length - 3;
-  const tail =
-    rest > 0 ? `, and ${rest} smaller ${rest === 1 ? "rule" : "rules"}` : "";
-  return `Reclaimable ${formatBytes(total)}: ${named}${tail}`;
+  const tail = rest > 0 ? tn("gauge.more", rest) : "";
+  return t("gauge.description", { bytes: formatBytes(total), named }) + tail;
 }
 
 export function ReclaimGauge({
@@ -71,6 +74,8 @@ export function ReclaimGauge({
   rules: RuleSummary[];
   results: ScanResult[];
 }) {
+  const i18n = useI18n();
+  const { t, formatBytes } = i18n;
   const segments = buildSegments(rules, results);
   const total = segments.reduce((sum, s) => sum + s.bytes, 0);
   const still = prefersReducedMotion();
@@ -88,14 +93,14 @@ export function ReclaimGauge({
     <div data-testid="reclaim-gauge" className="flex flex-col gap-3">
       <div
         role="img"
-        aria-label={describeSegments(segments, total)}
+        aria-label={describeSegments(segments, total, i18n)}
         className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-[5px] bg-muted"
       >
         {segments.map((segment) => (
           <div
             key={segment.id}
             data-testid="gauge-segment"
-            title={`${segment.label} — ${formatBytes(segment.bytes)}`}
+            title={t("gauge.segment", { label: segment.label, bytes: formatBytes(segment.bytes) })}
             style={{
               width: grown ? `${(segment.bytes / total) * 100}%` : "0%",
               background: segment.color,

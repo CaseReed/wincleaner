@@ -11,11 +11,11 @@ import {
   type SandboxSummary,
   type UpdateCheck,
 } from "@/lib/api";
-import { formatBytes, formatCount } from "@/lib/format";
+import { useI18n, type LanguagePreference, type TranslationKey } from "@/i18n";
 import {
   readAutoCheck,
   toPlainText,
-  updateErrorMessage,
+  updateErrorKey,
   writeAutoCheck,
 } from "@/lib/updates";
 import whatsNew from "@/generated/whats-new.json";
@@ -59,6 +59,7 @@ type UpdateState =
 /// click: the switch below arms a check for the *next* start, it never fires
 /// one here.
 function UpdatesSection() {
+  const { t } = useI18n();
   const [state, setState] = useState<UpdateState>({ kind: "idle" });
   const [autoCheck, setAutoCheck] = useState(readAutoCheck);
   const [copied, setCopied] = useState(false);
@@ -79,11 +80,11 @@ function UpdatesSection() {
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
-      toast.success("Release link copied");
+      toast.success(t("updates.copied"));
     } catch {
       // No clipboard permission, or no clipboard at all: the URL is on screen
       // as text and can be selected by hand.
-      toast.error("Could not copy the link");
+      toast.error(t("updates.copyFailed"));
     }
   }
 
@@ -110,36 +111,36 @@ function UpdatesSection() {
           {checking ? (
             <>
               <Loader2 className="size-4 animate-spin" />
-              Checking…
+              {t("updates.checking")}
             </>
           ) : (
-            "Check for updates"
+            t("updates.check")
           )}
         </Button>
       </div>
 
       {state.kind === "error" && (
         <p data-testid="update-status" role="status" className="text-muted-foreground">
-          {updateErrorMessage(state.code)}
+          {t(updateErrorKey(state.code))}
         </p>
       )}
 
       {state.kind === "result" && !state.check.is_newer && (
         <p data-testid="update-status" role="status" className="text-muted-foreground">
-          You&rsquo;re up to date ({state.check.current})
+          {t("updates.upToDate", { version: state.check.current })}
         </p>
       )}
 
       {state.kind === "result" && state.check.is_newer && (
         <div className="flex flex-col gap-2">
           <p data-testid="update-status" role="status" className="font-medium">
-            WinCleaner {state.check.latest} is available
+            {t("updates.available", { version: state.check.latest ?? "" })}
           </p>
           {state.check.published_at && (
             // Display only, and deliberately not localised: the first ten
             // characters of the ISO timestamp GitHub returns.
             <p data-testid="update-published" className="text-muted-foreground">
-              Published {state.check.published_at.slice(0, 10)}
+              {t("updates.published", { date: state.check.published_at.slice(0, 10) })}
             </p>
           )}
           {state.check.notes && (
@@ -165,7 +166,7 @@ function UpdatesSection() {
                 onClick={() => void onCopy(state.check.url!)}
               >
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                Copy link
+                {t("updates.copyLink")}
               </Button>
             </div>
           )}
@@ -175,21 +176,18 @@ function UpdatesSection() {
       <label className="mt-2 flex items-center gap-3">
         <Switch
           data-testid="auto-check"
-          aria-label="Check automatically at startup"
+          aria-label={t("updates.autoCheck")}
           checked={autoCheck}
           onCheckedChange={onToggleAuto}
         />
-        <span>Check automatically at startup</span>
+        <span>{t("updates.autoCheck")}</span>
       </label>
       <p data-testid="auto-check-privacy" className="text-xs text-muted-foreground">
-        When enabled, WinCleaner sends one request to api.github.com at startup
-        with no identifiers other than the app version in the User-Agent.
+        {t("updates.autoCheckPrivacy")}
       </p>
     </>
   );
 }
-
-const RULE_COUNT = new Intl.NumberFormat("en-US");
 
 /// The one screen that can switch the whole engine off the user's own profile.
 /// Fully controlled: entering and leaving are the parent's business, because
@@ -208,18 +206,11 @@ function SandboxSection({
   onEnterSandbox?: () => void;
   onLeaveSandbox?: () => void;
 }) {
+  const { t, tx, formatCount } = useI18n();
   return (
     <>
-      <p className="text-muted-foreground">
-        A sandbox is a synthetic Windows profile WinCleaner builds under your
-        temporary directory: junk files every rule is meant to remove, plus
-        decoy documents, keys and caches that must survive.
-      </p>
-      <p className="text-muted-foreground">
-        While it is active, Analyze and Clean run for real against that profile
-        and nothing else — nothing in your real profile is touched, and the
-        Recycle Bin and the startup registry keys stay out of reach.
-      </p>
+      <p className="text-muted-foreground">{t("sandboxSection.what")}</p>
+      <p className="text-muted-foreground">{t("sandboxSection.active")}</p>
 
       {sandbox ? (
         <>
@@ -227,28 +218,27 @@ function SandboxSection({
             {sandbox.root}
           </p>
           <p className="text-muted-foreground">
-            <span className="font-mono tnum">
-              {RULE_COUNT.format(sandbox.junk)}
-            </span>{" "}
-            junk files ·{" "}
-            <span className="font-mono tnum">
-              {RULE_COUNT.format(sandbox.sentinels)}
-            </span>{" "}
-            files that must survive ·{" "}
-            <span className="font-mono tnum">
-              {RULE_COUNT.format(sandbox.winapp2_rules)}
-            </span>{" "}
-            Winapp2 rules detected
+            {tx("sandboxSection.counts", {
+              junk: <span className="font-mono tnum">{formatCount(sandbox.junk)}</span>,
+              sentinels: (
+                <span className="font-mono tnum">{formatCount(sandbox.sentinels)}</span>
+              ),
+              rules: (
+                <span className="font-mono tnum">
+                  {formatCount(sandbox.winapp2_rules)}
+                </span>
+              ),
+            })}
           </p>
           <div className="mt-1 flex items-center gap-3">
             <Button variant="outline" onClick={onLeaveSandbox} aria-busy={busy} disabled={busy}>
               {busy ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Removing…
+                  {t("sandboxSection.removing")}
                 </>
               ) : (
-                "Leave the sandbox"
+                t("sandboxSection.leave")
               )}
             </Button>
           </div>
@@ -259,10 +249,10 @@ function SandboxSection({
             {busy ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                Creating…
+                {t("sandboxSection.creating")}
               </>
             ) : (
-              "Create a sandbox profile"
+              t("sandboxSection.create")
             )}
           </Button>
         </div>
@@ -279,6 +269,7 @@ function SandboxSection({
 /// Absent, not empty, when there is nothing to clean up: a permanent "0 old
 /// sandbox folders" would be a scab on a screen most users open once.
 function SandboxOrphansLine() {
+  const { t, tn, txn, formatBytes, formatCount } = useI18n();
   const [orphans, setOrphans] = useState<SandboxOrphan[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -297,9 +288,7 @@ function SandboxOrphansLine() {
       // The back end is asked again rather than assumed empty: a directory it
       // could not remove must stay on screen.
       setOrphans(await sandboxOrphans());
-      toast.success(
-        removed === 1 ? "1 old sandbox folder removed" : `${removed} old sandbox folders removed`,
-      );
+      toast.success(tn("sandboxSection.orphansRemoved", removed));
     } catch (err) {
       toast.error(String(err));
     } finally {
@@ -314,21 +303,55 @@ function SandboxOrphansLine() {
   return (
     <div data-testid="sandbox-orphans" className="mt-1 flex items-center gap-3">
       <p className="text-muted-foreground">
-        <span className="font-mono tnum">{formatCount(orphans.length)}</span> old sandbox
-        folder{orphans.length === 1 ? "" : "s"} (
-        <span className="font-mono tnum">{formatBytes(bytes)}</span>)
+        {txn("sandboxSection.orphans", orphans.length, {
+          count: <span className="font-mono tnum">{formatCount(orphans.length)}</span>,
+          bytes: <span className="font-mono tnum">{formatBytes(bytes)}</span>,
+        })}
       </p>
       <Button variant="outline" size="sm" aria-busy={busy} disabled={busy} onClick={() => void onRemove()}>
         {busy ? (
           <>
             <Loader2 className="size-4 animate-spin" />
-            Removing…
+            {t("sandboxSection.removing")}
           </>
         ) : (
-          "Remove"
+          t("common.remove")
         )}
       </Button>
     </div>
+  );
+}
+
+const LANGUAGE_OPTIONS: { value: LanguagePreference; label: TranslationKey }[] = [
+  { value: "system", label: "settings.languageSystem" },
+  { value: "en", label: "settings.languageEn" },
+  { value: "fr", label: "settings.languageFr" },
+];
+
+/// The interface language. It covers the UI chrome only: rule labels and
+/// descriptions come from `src-tauri/rules.toml` and from Winapp2, the
+/// "What's new" body is extracted from CHANGELOG.md at build time, and the
+/// release notes come from GitHub — all four stay in English whatever is
+/// picked here.
+function LanguageSection() {
+  const { t, preference, setPreference } = useI18n();
+  return (
+    <>
+      <select
+        data-testid="language"
+        aria-label={t("settings.language")}
+        className="h-8 w-48 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring"
+        value={preference}
+        onChange={(e) => setPreference(e.target.value as LanguagePreference)}
+      >
+        {LANGUAGE_OPTIONS.map(({ value, label }) => (
+          <option key={value} value={value}>
+            {t(label)}
+          </option>
+        ))}
+      </select>
+      <p className="text-xs text-muted-foreground">{t("settings.languageNote")}</p>
+    </>
   );
 }
 
@@ -343,29 +366,24 @@ export function SettingsPanel({
   onEnterSandbox?: () => void;
   onLeaveSandbox?: () => void;
 } = {}) {
+  const { t, tx } = useI18n();
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
-        <h1 className="screen-title">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          What this build is, what changed, and what it is made of.
-        </p>
+        <h1 className="screen-title">{t("settings.title")}</h1>
+        <p className="mt-1 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">
         <div className="flex flex-col gap-4">
-          <Section title="About" testId="about">
+          <Section title={t("settings.about")} testId="about">
             <p className="font-medium">
               WinCleaner <span data-testid="app-version">{whatsNew.version}</span>
             </p>
-            <p className="text-muted-foreground">
-              Open source, MIT. No telemetry, and no network access except one
-              request to GitHub when you click Check for updates or enable
-              automatic checks (off by default).
-            </p>
+            <p className="text-muted-foreground">{t("settings.aboutBody")}</p>
             <p className="font-mono text-xs text-muted-foreground">{GITHUB_URL}</p>
           </Section>
 
-          <Section title={`What's new in ${whatsNew.version}`}>
+          <Section title={t("settings.whatsNew", { version: whatsNew.version })}>
             {/* Plain text, deliberately: no markdown renderer and no HTML, so
                 release notes can never become an injection surface (see
                 docs/design-updater.md §3). Bullets stay as "- " text. */}
@@ -377,11 +395,15 @@ export function SettingsPanel({
             </p>
           </Section>
 
-          <Section title="Updates">
+          <Section title={t("settings.language")}>
+            <LanguageSection />
+          </Section>
+
+          <Section title={t("settings.updates")}>
             <UpdatesSection />
           </Section>
 
-          <Section title="Sandbox" testId="sandbox">
+          <Section title={t("settings.sandbox")} testId="sandbox">
             <SandboxSection
               sandbox={sandbox}
               busy={sandboxBusy}
@@ -391,15 +413,14 @@ export function SettingsPanel({
             <SandboxOrphansLine />
           </Section>
 
-          <Section title="Notices" testId="notices">
-            <p className="text-muted-foreground">WinCleaner is released under the MIT licence.</p>
+          <Section title={t("settings.notices")} testId="notices">
+            <p className="text-muted-foreground">{t("notices.mit")}</p>
             <p className="text-muted-foreground">
-              Community rules from Winapp2 (CC-BY-SA 4.0) —{" "}
-              <span className="font-mono text-xs">{WINAPP2_URL}</span>
+              {tx("notices.winapp2", {
+                url: <span className="font-mono text-xs">{WINAPP2_URL}</span>,
+              })}
             </p>
-            <p className="text-muted-foreground">
-              Fonts and icons are bundled with the application; nothing is fetched at runtime.
-            </p>
+            <p className="text-muted-foreground">{t("notices.bundled")}</p>
           </Section>
         </div>
       </div>

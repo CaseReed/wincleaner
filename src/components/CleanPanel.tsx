@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ReclaimGauge, prefersReducedMotion } from "@/components/ReclaimGauge";
 import { RuleCategory } from "@/components/RuleCategory";
-import { formatBytes, formatCount } from "@/lib/format";
+import { useI18n, type I18n, type TranslationKey } from "@/i18n";
 import {
   clean,
   filterRules,
@@ -31,10 +31,10 @@ import {
   type ScanResult,
 } from "@/lib/api";
 
-const MODE_LABEL: Record<CleanMode, string> = {
-  auto: "Auto",
-  trash: "Recycle Bin",
-  permanent: "Permanent",
+const MODE_LABEL: Record<CleanMode, TranslationKey> = {
+  auto: "mode.auto",
+  trash: "mode.trash",
+  permanent: "mode.permanent",
 };
 
 /// Categories that start folded: `Applications` is hundreds of rows, almost all
@@ -67,8 +67,6 @@ function writeFlag(key: string, value: boolean) {
   }
 }
 
-const RULE_COUNT = new Intl.NumberFormat("en-US");
-
 /// How often the live region is allowed to speak while a walk is still going,
 /// besides its final event. `done % 10` never fires at all below ten rules —
 /// which is the common case with a handful of rules selected — and is silent
@@ -98,19 +96,22 @@ export function isIrreversible(rule: RuleSummary, mode: CleanMode): boolean {
 /// — is not actually "open" from the user's point of view, so the banner
 /// says where to actually quit it from instead of implying a window is
 /// still there.
-export function browserWarningLine(browser: RunningBrowser): string {
+export function browserWarningLine(browser: RunningBrowser, { t, tn }: I18n): string {
   if (browser.has_window) {
-    return `${browser.name} is open: its cache files in use will be skipped. Close it for a complete cleanup.`;
+    return t("browser.open", { name: browser.name });
   }
-  const count = browser.processes === 1 ? "1 process" : `${browser.processes} processes`;
-  return `${browser.name} is still running in the background (${count}): quit it from the notification area, or its cache files in use will be skipped.`;
+  return t("browser.background", {
+    name: browser.name,
+    processes: tn("browser.processes", browser.processes),
+  });
 }
 
 function Screen({ children }: { children: React.ReactNode }) {
+  const { t } = useI18n();
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
-        <h1 className="screen-title">Cleanup</h1>
+        <h1 className="screen-title">{t("clean.title")}</h1>
       </header>
       {children}
     </>
@@ -141,6 +142,7 @@ function VerdictLine({
   of: number;
   scope?: string;
 }) {
+  const { formatCount } = useI18n();
   return (
     <li>
       {label}{" "}
@@ -155,6 +157,7 @@ function VerdictLine({
 /// What the sandbox looked like after the clean, read back off the disk. Shown
 /// only in sandbox mode: outside it there is no manifest to compare against.
 function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
+  const { t, tn } = useI18n();
   const passed = verdictPasses(verdict);
   const titleId = useId();
   return (
@@ -179,40 +182,38 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
         ) : (
           <ShieldX className="size-4 text-destructive" aria-hidden="true" />
         )}
-        Sandbox verdict
+        {t("verdict.title")}
         {/* The colour of the card is the whole verdict for a sighted user;
             without this it is the one thing a screen reader cannot read. */}
-        <span className="sr-only">: {passed ? "passed" : "failed"}</span>
+        <span className="sr-only">: {t(passed ? "verdict.passed" : "verdict.failed")}</span>
       </h2>
       <ul className="mt-2.5 flex flex-col gap-1 text-sm">
         <VerdictLine
-          label="Sentinels intact"
+          label={t("verdict.sentinels")}
           got={verdict.sentinels_intact}
           of={verdict.sentinels_total}
         />
         <VerdictLine
-          label="Junk removed"
+          label={t("verdict.junk")}
           got={verdict.junk_removed}
           of={verdict.junk_total}
-          scope={`for the ${formatCount(verdict.rules_cleaned)} ${
-            verdict.rules_cleaned === 1 ? "rule" : "rules"
-          } cleaned`}
+          scope={tn("verdict.junkScope", verdict.rules_cleaned)}
         />
         <VerdictLine
-          label="Junction baits untouched"
+          label={t("verdict.junctions")}
           got={verdict.outside_intact}
           of={verdict.outside_total}
         />
         {!verdict.junctions_refused && (
           <li className="text-destructive-foreground">
-            A junction the sandbox planted no longer stands.
+            {t("verdict.junctionBroken")}
           </li>
         )}
       </ul>
       {verdict.sentinels_damaged.length > 0 && (
         <>
           <h3 className="mt-4 text-xs font-medium text-muted-foreground">
-            Deleted or rewritten, and should not have been
+            {t("verdict.damaged")}
           </h3>
           <ul className="mt-1.5 max-h-40 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
             {verdict.sentinels_damaged.map((p) => (
@@ -226,7 +227,7 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
       {verdict.junk_remaining.length > 0 && (
         <>
           <h3 className="mt-4 text-xs font-medium text-muted-foreground">
-            Junk still on disk
+            {t("verdict.remaining")}
           </h3>
           <ul className="mt-1.5 max-h-40 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
             {verdict.junk_remaining.map((p) => (
@@ -249,6 +250,8 @@ export function CleanPanel({
   /// disk.
   sandbox?: SandboxSummary | null;
 } = {}) {
+  const i18n = useI18n();
+  const { t, tn, tx, formatBytes, formatCount } = i18n;
   const [rules, setRules] = useState<RuleSummary[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -352,9 +355,11 @@ export function CleanPanel({
       if (shouldAnnounce(lastScanAnnounce.current, now, step.done, step.total)) {
         lastScanAnnounce.current = now;
         setAnnouncement(
-          `Analyzing: ${RULE_COUNT.format(step.done)} of ${RULE_COUNT.format(
-            step.total
-          )} rules, ${formatBytes(step.total_bytes)} so far`
+          t("announce.scanProgress", {
+            done: formatCount(step.done),
+            total: formatCount(step.total),
+            bytes: formatBytes(step.total_bytes),
+          })
         );
       }
     })
@@ -390,9 +395,11 @@ export function CleanPanel({
       if (shouldAnnounce(lastCleanAnnounce.current, now, step.done_rules, step.total_rules)) {
         lastCleanAnnounce.current = now;
         setAnnouncement(
-          `Cleaning: ${RULE_COUNT.format(step.done_rules)} of ${RULE_COUNT.format(
-            step.total_rules
-          )} rules, ${formatBytes(step.bytes_freed)} freed so far`
+          t("announce.cleanProgress", {
+            done: formatCount(step.done_rules),
+            total: formatCount(step.total_rules),
+            bytes: formatBytes(step.bytes_freed),
+          })
         );
       }
     })
@@ -539,7 +546,7 @@ export function CleanPanel({
     setVerdictError(null);
     setConfirming(false);
     setProgress(null);
-    setAnnouncement("Analyzing…");
+    setAnnouncement(t("announce.analyzing"));
     lastScanAnnounce.current = 0;
     scanPending.current = true;
     // A new scan re-decides which categories are worth showing: the previous
@@ -555,11 +562,9 @@ export function CleanPanel({
       setResults(measured);
       const checked = measured.filter((r) => selected.has(r.rule_id));
       setAnnouncement(
-        `Analysis complete: ${formatBytes(
-          checked.reduce((sum, r) => sum + r.total_bytes, 0)
-        )} reclaimable in ${RULE_COUNT.format(checked.length)} selected ${
-          checked.length === 1 ? "rule" : "rules"
-        }`
+        tn("announce.scanDone", checked.length, {
+          bytes: formatBytes(checked.reduce((sum, r) => sum + r.total_bytes, 0)),
+        })
       );
     } catch (err) {
       setRulesError(String(err));
@@ -575,7 +580,7 @@ export function CleanPanel({
     setVerdict(null);
     setVerdictError(null);
     setCleanProgress(null);
-    setAnnouncement("Cleaning…");
+    setAnnouncement(t("announce.cleaning"));
     lastCleanAnnounce.current = 0;
     cleanPending.current = true;
     // What was cleaned, captured before `results` is dropped: the verdict is
@@ -586,11 +591,12 @@ export function CleanPanel({
       setReport(done);
       setResults(null);
       setAnnouncement(
-        `Cleanup complete: ${formatBytes(done.freed_bytes)} freed, ${formatCount(
-          done.deleted
-        )} files deleted`
+        t("announce.cleanDone", {
+          bytes: formatBytes(done.freed_bytes),
+          count: formatCount(done.deleted),
+        })
       );
-      toast.success(`Cleaned: ${formatBytes(done.freed_bytes)} freed`);
+      toast.success(t("toast.cleaned", { bytes: formatBytes(done.freed_bytes) }));
       // The whole point of the sandbox: read the disk back against what it
       // promised, instead of trusting the report the cleaner just wrote. In
       // its own try: a verify that fails says nothing about the clean that
@@ -621,7 +627,7 @@ export function CleanPanel({
             role="alert"
             className="flex max-w-xl flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
           >
-            <p className="font-medium">Could not load the rules.</p>
+            <p className="font-medium">{t("clean.rulesError")}</p>
             <p className="font-mono text-xs text-muted-foreground">{rulesError}</p>
             <Button
               variant="outline"
@@ -631,7 +637,7 @@ export function CleanPanel({
                 setReloadKey((k) => k + 1);
               }}
             >
-              Retry
+              {t("common.retry")}
             </Button>
           </div>
         </div>
@@ -648,17 +654,14 @@ export function CleanPanel({
             className="flex items-center gap-2.5 rounded-lg border bg-card px-4 py-2.5 text-sm text-muted-foreground"
           >
             <Info className="size-4 shrink-0 text-muted-foreground" />
-            <p className="min-w-0 flex-1">
-              Auto mode deletes low-risk items permanently and sends the rest to
-              the Recycle Bin. Change the mode in the bottom bar before cleaning.
-            </p>
+            <p className="min-w-0 flex-1">{t("clean.hint")}</p>
             <Button
               variant="ghost"
               size="sm"
               className="shrink-0 cursor-pointer"
               onClick={dismissHint}
             >
-              Got it
+              {t("clean.hintDismiss")}
             </Button>
           </div>
         )}
@@ -671,7 +674,7 @@ export function CleanPanel({
             <TriangleAlert className="mt-px size-4 shrink-0 text-warning" />
             <div className="flex flex-col gap-1">
               {browsers.map((browser) => (
-                <p key={browser.process}>{browserWarningLine(browser)}</p>
+                <p key={browser.process}>{browserWarningLine(browser, i18n)}</p>
               ))}
             </div>
           </div>
@@ -700,7 +703,7 @@ export function CleanPanel({
                   belongs to the rule categories, and an extra one here would
                   put "Reclaimable" in the document outline above them. */}
               <p id={heroTitleId} className="eyebrow text-muted-foreground">
-                {busyAction === "clean" ? "Freed" : "Reclaimable"}
+                {t(busyAction === "clean" ? "clean.freed" : "clean.reclaimable")}
               </p>
               {busyAction === "clean" ? (
                 // What the clean has actually freed so far. A Recycle Bin
@@ -717,10 +720,13 @@ export function CleanPanel({
                     data-testid="clean-progress-files"
                     className="mt-1.5 text-sm text-muted-foreground"
                   >
-                    <span className="font-mono tnum">
-                      {formatCount(cleanProgress?.files_deleted ?? 0)}
-                    </span>{" "}
-                    files deleted
+                    {tx("clean.filesDeleted", {
+                      count: (
+                        <span className="font-mono tnum">
+                          {formatCount(cleanProgress?.files_deleted ?? 0)}
+                        </span>
+                      ),
+                    })}
                   </p>
                 </>
               ) : busyAction === "scan" ? (
@@ -745,10 +751,13 @@ export function CleanPanel({
                       data-testid="unchecked-bytes"
                       className="mt-1.5 text-sm text-muted-foreground"
                     >
-                      <span className="font-mono tnum">
-                        {formatBytes(uncheckedTotal)}
-                      </span>{" "}
-                      more in unchecked rules
+                      {tx("clean.moreUnchecked", {
+                        bytes: (
+                          <span className="font-mono tnum">
+                            {formatBytes(uncheckedTotal)}
+                          </span>
+                        ),
+                      })}
                     </p>
                   )}
                 </>
@@ -762,12 +771,12 @@ export function CleanPanel({
               <span className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox
                   data-testid="sort-by-size"
-                  aria-label="Sort by size"
+                  aria-label={t("clean.sortBySize")}
                   checked={sortBySize}
                   disabled={!results}
                   onCheckedChange={toggleSortBySize}
                 />
-                <span aria-hidden="true">Sort by size</span>
+                <span aria-hidden="true">{t("clean.sortBySize")}</span>
               </span>
               <Button
                 size="lg"
@@ -778,10 +787,10 @@ export function CleanPanel({
                 {busyAction === "scan" ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Analyzing…
+                    {t("clean.analyzing")}
                   </>
                 ) : (
-                  "Analyze"
+                  t("clean.analyze")
                 )}
               </Button>
             </div>
@@ -805,40 +814,43 @@ export function CleanPanel({
                 {busyAction === "clean" ? (
                   cleanProgress ? (
                     <span data-testid="clean-progress">
-                      Cleaning{" "}
-                      <span className="font-mono tnum">
-                        {RULE_COUNT.format(cleanProgress.done_rules)} /{" "}
-                        {RULE_COUNT.format(cleanProgress.total_rules)}
-                      </span>{" "}
-                      · {cleanProgress.label}
+                      {tx("clean.progressCleaning", {
+                        counter: (
+                          <span className="font-mono tnum">
+                            {formatCount(cleanProgress.done_rules)} /{" "}
+                            {formatCount(cleanProgress.total_rules)}
+                          </span>
+                        ),
+                        label: cleanProgress.label,
+                      })}
                     </span>
                   ) : (
                     // Between the click and the first event: the recycle bin
                     // goes first, and nothing has been deleted yet.
-                    `Cleaning ${RULE_COUNT.format(cleanIds.length)} rules…`
+                    tn("clean.cleaningRules", cleanIds.length)
                   )
                 ) : progress ? (
                   <span data-testid="scan-progress">
-                    Analyzing{" "}
-                    <span className="font-mono tnum">
-                      {RULE_COUNT.format(progress.done)} /{" "}
-                      {RULE_COUNT.format(progress.total)}
-                    </span>{" "}
-                    · {progress.label}
+                    {tx("clean.progressAnalyzing", {
+                      counter: (
+                        <span className="font-mono tnum">
+                          {formatCount(progress.done)} / {formatCount(progress.total)}
+                        </span>
+                      ),
+                      label: progress.label,
+                    })}
                   </span>
                 ) : (
                   // Between the click and the first event: the total is only
                   // known once Rust has counted the rules it was sent.
-                  `Analyzing ${RULE_COUNT.format(availableRules.length)} rules…`
+                  tn("clean.analyzingRules", availableRules.length)
                 )}
               </p>
             </div>
           ) : results ? (
             <ReclaimGauge rules={rules} results={checkedResults} />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              Analyze to measure what can be freed.
-            </p>
+            <p className="text-sm text-muted-foreground">{t("clean.empty")}</p>
           )}
         </section>
 
@@ -846,35 +858,41 @@ export function CleanPanel({
           <input
             data-testid="rule-search"
             type="search"
-            aria-label="Search rules"
-            placeholder="Search rules"
+            aria-label={t("clean.search")}
+            placeholder={t("clean.search")}
             className="h-9 w-full rounded-md border bg-card px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           {summary && (
             <p data-testid="rules-summary" className="px-1 text-xs text-muted-foreground">
-              <span className="font-mono tnum">{RULE_COUNT.format(summary.native)}</span>{" "}
-              built-in rules ·{" "}
-              <span className="font-mono tnum">
-                {RULE_COUNT.format(summary.winapp2_detected)}
-              </span>{" "}
-              Winapp2 rules detected out of{" "}
-              <span className="font-mono tnum">
-                {RULE_COUNT.format(summary.winapp2_retained)}
-              </span>{" "}
-              converted (
-              <span className="font-mono tnum">
-                {RULE_COUNT.format(summary.winapp2_dropped)}
-              </span>{" "}
-              entries not supported)
+              {tx("clean.summary", {
+                native: (
+                  <span className="font-mono tnum">{formatCount(summary.native)}</span>
+                ),
+                detected: (
+                  <span className="font-mono tnum">
+                    {formatCount(summary.winapp2_detected)}
+                  </span>
+                ),
+                retained: (
+                  <span className="font-mono tnum">
+                    {formatCount(summary.winapp2_retained)}
+                  </span>
+                ),
+                dropped: (
+                  <span className="font-mono tnum">
+                    {formatCount(summary.winapp2_dropped)}
+                  </span>
+                ),
+              })}
             </p>
           )}
         </div>
 
         {searching && grouped.length === 0 && (
           <p data-testid="search-empty" className="px-1 text-sm text-muted-foreground">
-            No rules match your search.
+            {t("clean.searchEmpty")}
           </p>
         )}
 
@@ -916,11 +934,8 @@ export function CleanPanel({
             role="status"
             className="rounded-lg border border-warning/40 bg-warning/12 p-5 text-sm"
           >
-            <h2 className="eyebrow text-muted-foreground">Sandbox verdict</h2>
-            <p className="mt-2">
-              The cleanup ran; reading the sandbox back failed, so there is no
-              verdict this time.
-            </p>
+            <h2 className="eyebrow text-muted-foreground">{t("verdict.title")}</h2>
+            <p className="mt-2">{t("verdict.unreadable")}</p>
             <p className="mt-1 font-mono text-xs text-muted-foreground">
               {verdictError}
             </p>
@@ -937,18 +952,28 @@ export function CleanPanel({
             className="rounded-lg border bg-card p-5"
           >
             <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
-              Last cleanup
+              {t("report.title")}
             </h2>
             <p className="mt-2 text-sm">
-              <span className="font-mono tnum">{formatBytes(report.freed_bytes)}</span>{" "}
-              freed ·{" "}
-              <span className="font-mono tnum">{formatCount(report.deleted)}</span>{" "}
-              files deleted
+              {tx("report.summary", {
+                bytes: (
+                  <span className="font-mono tnum">{formatBytes(report.freed_bytes)}</span>
+                ),
+                count: (
+                  <span className="font-mono tnum">{formatCount(report.deleted)}</span>
+                ),
+              })}
             </p>
             {report.skipped.length > 0 && (
               <>
                 <h3 className="mt-4 text-xs font-medium text-muted-foreground">
-                  Skipped (<span className="font-mono tnum">{formatCount(report.skipped.length)}</span>)
+                  {tx("report.skipped", {
+                    count: (
+                      <span className="font-mono tnum">
+                        {formatCount(report.skipped.length)}
+                      </span>
+                    ),
+                  })}
                 </h3>
                 <ul className="mt-1.5 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                   {report.skipped.map((s) => (
@@ -979,26 +1004,24 @@ export function CleanPanel({
               className="min-w-0 flex-1 outline-none focus-visible:ring-3 focus-visible:ring-ring"
             >
               <p id={confirmTitleId} className="text-sm font-medium">
-                Clean{" "}
-                <span className="font-mono tnum">{formatBytes(total)}</span> in{" "}
-                {MODE_LABEL[mode]} mode?
+                {tx("confirm.title", {
+                  bytes: <span className="font-mono tnum">{formatBytes(total)}</span>,
+                  mode: t(MODE_LABEL[mode]),
+                })}
               </p>
               <p id={confirmDetailId} className="mt-0.5 text-xs text-muted-foreground">
-                {irreversibleRules.length > 0 ? (
-                  <>
-                    No way back:{" "}
-                    {irreversibleRules.map((r) => r.label).join(", ")}.
-                  </>
-                ) : (
-                  <>Everything goes to the recycle bin and stays recoverable.</>
-                )}
+                {irreversibleRules.length > 0
+                  ? t("confirm.irreversible", {
+                      rules: irreversibleRules.map((r) => r.label).join(", "),
+                    })
+                  : t("confirm.reversible")}
               </p>
             </div>
             <Button variant="outline" onClick={cancelConfirm}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button size="lg" variant="destructive" onClick={onClean} disabled={busy}>
-              Confirm cleanup
+              {t("confirm.confirm")}
             </Button>
           </>
         ) : (
@@ -1006,31 +1029,22 @@ export function CleanPanel({
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <select
                 id="clean-mode"
-                aria-label="Deletion mode"
+                aria-label={t("mode.label")}
                 className="h-8 shrink-0 rounded-md border bg-card px-2 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring"
                 value={mode}
                 onChange={(e) => setMode(e.target.value as CleanMode)}
               >
-                <option value="auto">Auto</option>
-                <option value="trash">Recycle Bin</option>
-                <option value="permanent">Permanent</option>
+                <option value="auto">{t("mode.auto")}</option>
+                <option value="trash">{t("mode.trash")}</option>
+                <option value="permanent">{t("mode.permanent")}</option>
               </select>
               <p data-testid="mode-help" className="min-w-0 text-xs text-muted-foreground">
                 {recycleBinChecked ? (
-                  <span data-testid="recycle-order-note">
-                    The Recycle Bin is emptied first: whatever the other rules
-                    drop into it during the same pass is not swept away.
-                  </span>
+                  <span data-testid="recycle-order-note">{t("mode.recycleFirst")}</span>
                 ) : (
-                  <>
-                    Auto: permanent deletion for low-risk items, recycle bin for
-                    the rest.
-                  </>
+                  t("mode.autoHelp")
                 )}{" "}
-                <span data-testid="empty-dirs-note">
-                  Directories a rule empties are removed whatever the mode: an
-                  empty directory holds no data.
-                </span>
+                <span data-testid="empty-dirs-note">{t("mode.emptyDirs")}</span>
               </p>
             </div>
             <Button
@@ -1044,11 +1058,11 @@ export function CleanPanel({
               {busyAction === "clean" ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Cleaning…
+                  {t("clean.cleaning")}
                 </>
               ) : (
                 <>
-                  Clean
+                  {t("clean.clean")}
                   {results && total > 0 && (
                     <span className="font-mono tnum">{formatBytes(total)}</span>
                   )}
