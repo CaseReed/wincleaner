@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The last cleanup report can be copied to the clipboard.** "Copy report"
+  puts a readable summary on the clipboard — app version, date, deletion mode,
+  each rule's files deleted, bytes freed and skipped count, a total line, and
+  the skipped paths if any — in the current interface language. "Copy as
+  JSON" puts the same data on the clipboard as a stable, language-neutral
+  object (`version`, `generated_at`, `mode`, `rules[]`, `totals`, `skipped[]`).
+  Both reuse the clipboard mechanism already behind "Copy link" in Settings
+  (`navigator.clipboard.writeText`, a success or failure toast), build off a
+  pure `src/lib/report.ts`, and write no file: `Clean` only ever returns
+  aggregate totals, so the per-rule breakdown is the same Analyze measurement
+  the confirmation and the hero total already showed before the click.
+
 ## [0.7.0] - 2026-09-12
 
 ### Added

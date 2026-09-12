@@ -95,6 +95,16 @@ export const fr: Dictionary = {
   "report.title": "Dernier nettoyage",
   "report.summary": "{bytes} libérés · {count} fichiers supprimés",
   "report.skipped": "Ignorés ({count})",
+  "report.copy": "Copier le rapport",
+  "report.copyJson": "Copier en JSON",
+  "report.copied": "Rapport copié",
+  "report.copyFailed": "Impossible de copier le rapport",
+  "report.text.header": "WinCleaner {version} — {date}",
+  "report.text.mode": "Mode : {mode}",
+  "report.text.rule": "{label} — {files} fichiers, {bytes} libérés",
+  "report.text.ruleSkipped": "{label} — {files} fichiers, {bytes} libérés ({skipped} ignorés)",
+  "report.text.total": "Total : {files} fichiers, {bytes} libérés",
+  "report.text.skippedHeader": "Ignorés :",
 
   // Lignes de règles
   "rules.count.one": "{count} règle",

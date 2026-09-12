@@ -98,6 +98,16 @@ export const en = {
   "report.title": "Last cleanup",
   "report.summary": "{bytes} freed · {count} files deleted",
   "report.skipped": "Skipped ({count})",
+  "report.copy": "Copy report",
+  "report.copyJson": "Copy as JSON",
+  "report.copied": "Report copied",
+  "report.copyFailed": "Could not copy the report",
+  "report.text.header": "WinCleaner {version} — {date}",
+  "report.text.mode": "Mode: {mode}",
+  "report.text.rule": "{label} — {files} files, {bytes} freed",
+  "report.text.ruleSkipped": "{label} — {files} files, {bytes} freed ({skipped} skipped)",
+  "report.text.total": "Total: {files} files, {bytes} freed",
+  "report.text.skippedHeader": "Skipped:",
 
   // Rule rows
   "rules.count.one": "{count} rule",
