@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A file or a folder can be kept out of a rule for good, picked from the
+  paths that rule actually found.** "Show the paths" gains two actions on every
+  line — Exclude this file, Exclude its folder — and Settings gains an
+  Exclusions section listing what was kept out, with the rule it belongs to,
+  the date, and a way to drop it again. The back end never receives a path: the
+  command takes an index into the last analysis of that rule, the same reason
+  `scan` and `clean` take only rule ids, and the same reason there is no
+  free-form glob editor. What gets stored is a pattern written with the rule
+  variables — `%TEMP%\a\b.log` for a file, `%TEMP%\a\**` for a folder — so the
+  file carries no account name and survives a profile that moves; a path under
+  none of the four allowed variables is refused. The list lives in
+  `%APPDATA%\WinCleaner\exclusions.toml`, written through a temporary file and
+  a rename so an interrupted write cannot leave a half-file behind, and under
+  the sandbox root instead while a sandbox is active, so the sandbox stays
+  isolated. The patterns are merged into the rule's own `exclude` list before
+  the scan and again before the clean, and go through the validation any
+  `rules.toml` exclude goes through — a stored pattern that is not a valid glob
+  is refused exactly like a bad rule. Because `clean` re-walks each rule rather
+  than trusting the paths the window is holding, a file excluded after the last
+  Analyze is already spared by the clean that follows. A store that exists but
+  cannot be read or parsed fails the scan and the clean outright rather than
+  proceeding as though nothing were excluded.
+
 ## [0.7.0] - 2026-09-12
 
 ### Added

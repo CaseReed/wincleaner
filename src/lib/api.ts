@@ -236,6 +236,44 @@ export function sandboxRemoveOrphans(): Promise<number> {
   return invoke<number>("sandbox_remove_orphans");
 }
 
+/// What the user pointed at in "Show the paths": the file itself, or the
+/// directory holding it.
+export type ExclusionScope = "file" | "folder";
+
+/// Mirrors `src-tauri/src/commands.rs::ExclusionView`. `pattern` is always in
+/// `%VAR%\…` form — the back end folds the resolved profile back into the
+/// variable, so nothing here carries an account name.
+export interface Exclusion {
+  rule_id: string;
+  rule_label: string;
+  pattern: string;
+  /// `YYYY-MM-DD`.
+  added: string;
+}
+
+/// Excludes one entry of the last analysis of `ruleId` from that rule, for
+/// good.
+///
+/// `index` is the position in the `paths` array the last `scan` returned — the
+/// path itself is never sent. That is the same invariant `scan` and `clean`
+/// obey (`CLAUDE.md`): no Tauri command takes a path, which is also why there
+/// is no free-form glob editor.
+export function addExclusion(
+  ruleId: string,
+  index: number,
+  scope: ExclusionScope,
+): Promise<Exclusion> {
+  return invoke<Exclusion>("add_exclusion", { ruleId, index, scope });
+}
+
+export function listExclusions(): Promise<Exclusion[]> {
+  return invoke<Exclusion[]>("list_exclusions");
+}
+
+export function removeExclusion(ruleId: string, pattern: string): Promise<void> {
+  return invoke<void>("remove_exclusion", { ruleId, pattern });
+}
+
 /// Groups rules by category, preserving the order of rules.toml.
 export function groupByCategory(rules: RuleSummary[]): [string, RuleSummary[]][] {
   const order: string[] = [];

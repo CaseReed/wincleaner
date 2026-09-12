@@ -18,7 +18,32 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
 
 ## Invariants not to break
 - No Tauri command takes a path: the front end only sends `rule_ids` and a
-  mode. `clean` re-scans before deleting.
+  mode. `clean` re-scans before deleting. `add_exclusion` obeys the same rule:
+  it takes an **index** into the last scan of that rule (`commands::LastPaths`,
+  rewritten at every Analyze), never a path — which is also why there is no
+  free-form glob editor (`docs/roadmap.md`).
+- A user exclusion is stored as a **variable pattern**, never an absolute path
+  (`src-tauri/src/exclusions.rs`): the longest resolved prefix among `%TEMP%`,
+  `%LOCALAPPDATA%`, `%APPDATA%`, `%USERPROFILE%` is folded back into the
+  variable (ASCII-case-insensitive, on the long-path form the scanner uses), a
+  file becoming `%VAR%\rel\file.ext` and a folder `%VAR%\rel\dir\**`. The
+  relative part goes through `globset::escape` segment by segment, exactly as a
+  variable's value does in `expand_env_with`, so a file named `report[1].txt`
+  matches itself and not a character class. A path under none of the four is
+  refused, so the stored file carries no account name and survives a moved
+  profile.
+- Exclusions are **merged into the rule's own `exclude` list** before the scan
+  AND before the clean (`exclusions::apply`), so they go through
+  `resolved_excludes_with` like any `rules.toml` exclude and an invalid stored
+  pattern is refused like a bad rule. Merging at clean time is what makes an
+  exclusion added after the last Analyze effective: `clean_rule_with_trash`
+  re-walks the rule rather than trusting front-end paths.
+- The exclusions store **fails closed**: `%APPDATA%\WinCleaner\exclusions.toml`
+  (or `<sandbox root>\exclusions.toml` while a sandbox is active, so a sandbox
+  never reads the user's real list) that is absent is an empty list, but one
+  that exists and cannot be read or parsed makes scan and clean **error**, never
+  proceed as if nothing were excluded. Written atomically: temporary file, then
+  rename over the target.
 - Every rule lives in `src-tauri/rules.toml`; allowed variables: TEMP,
   LOCALAPPDATA, APPDATA, USERPROFILE; the resolved path must be under the
   profile. Variable values go through `globset::escape` (a `[` in an account

@@ -1,7 +1,8 @@
 use crate::clean::{
     clean_rule, clean_rule_with_trash, CleanMode, CleanReport, CleanTick, SkippedItem,
 };
-use crate::rules::{embedded_rules, Risk, Rule, RuleKind};
+use crate::exclusions::{self, Exclusion, Scope};
+use crate::rules::{embedded_rules, system_env, Risk, Rule, RuleKind};
 use crate::sandbox::{
     full_catalogue, orphaned_sandboxes, remove_orphan, resolved_patterns, sandbox_recycle_empty,
     sandbox_recycle_query, sandbox_trash, verify, Fixture, Orphan, SandboxManifest, SandboxSummary,
@@ -399,17 +400,6 @@ pub fn scan_rules_with(
         .collect())
 }
 
-fn scan_rules(
-    rule_ids: &[String],
-    progress: &mut (dyn FnMut(ScanProgress) + Send),
-) -> Result<Vec<ScanResult>, String> {
-    scan_rules_with(
-        &find_rules(rule_ids)?,
-        |r| scan_rule(r).map_err(|e| e.to_string()),
-        progress,
-    )
-}
-
 /// Emits `scan-progress` after each rule. The event goes out from inside the
 /// blocking closure — the point is to reach the window *while* the walk runs,
 /// not once it has returned. An emit that fails (window already gone) must
@@ -418,11 +408,13 @@ fn scan_rules(
 pub async fn scan(
     app: tauri::AppHandle,
     state: tauri::State<'_, SandboxState>,
+    last: tauri::State<'_, LastPaths>,
     rule_ids: Vec<String>,
 ) -> Result<Vec<ScanResult>, String> {
     let state = state.inner().clone();
+    let last = last.inner().clone();
     blocking(move || {
-        scan_rules_in(&state, &rule_ids, &mut |step| {
+        scan_rules_in(&state, &last, &rule_ids, &mut |step| {
             let _ = app.emit("scan-progress", step);
         })
     })
@@ -503,19 +495,6 @@ pub fn clean_rules_with(
         progress(step(files, bytes));
     }
     report
-}
-
-fn clean_rules(
-    rule_ids: &[String],
-    mode: CleanMode,
-    progress: &mut dyn FnMut(CleanProgress),
-) -> Result<CleanReport, String> {
-    Ok(clean_rules_with(
-        find_rules(rule_ids)?,
-        mode,
-        |rule, mode, tick| clean_rule(rule, mode, tick).map_err(|e| e.to_string()),
-        progress,
-    ))
 }
 
 /// Emits `clean-progress` while it deletes, for the same reason `scan` emits
@@ -937,7 +916,83 @@ pub fn rules_summary_in(state: &SandboxState) -> Result<RulesSummary, String> {
     Ok(catalogue()?.summary)
 }
 
+/// Absolute paths of the last analysis, per rule id.
+///
+/// This is what lets `add_exclusion` take an index instead of a path: the
+/// front end names the file by its position in the list it was handed, and the
+/// path itself is read back here, on the Rust side. Rewritten wholesale at
+/// every analysis — an index only ever means something against the result the
+/// user is actually looking at.
+#[derive(Clone, Default)]
+pub struct LastPaths(Arc<Mutex<HashMap<String, Vec<String>>>>);
+
+impl LastPaths {
+    fn record(&self, results: &[ScanResult]) {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        for result in results {
+            guard.insert(result.rule_id.clone(), result.paths.clone());
+        }
+    }
+
+    fn path_at(&self, rule_id: &str, index: usize) -> Option<String> {
+        let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(rule_id)?.get(index).cloned()
+    }
+}
+
+/// One exclusion as Settings shows it: the stored entry plus the rule's label,
+/// resolved here so the Settings screen does not have to pull the whole
+/// catalogue (thousands of Winapp2 rules) just to name one rule.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ExclusionView {
+    pub rule_id: String,
+    pub rule_label: String,
+    pub pattern: String,
+    pub added: String,
+}
+
+/// Store to use for whichever engine is live. The sandbox keeps its own store
+/// under its root, so entering a sandbox never reads — nor writes — the user's
+/// real exclusions.
+fn store_for(state: &SandboxState) -> Result<std::path::PathBuf, String> {
+    let root = lock(state).as_ref().map(|a| a.manifest.root.clone());
+    exclusions::store_path(root.as_deref())
+}
+
+fn label_map(rules: &[Rule]) -> HashMap<String, String> {
+    rules
+        .iter()
+        .map(|r| (r.id.clone(), r.label.clone()))
+        .collect()
+}
+
+/// Rule id to label, for the live catalogue. Only the two strings are copied:
+/// a full Winapp2 catalogue is thousands of rules, and cloning them whole to
+/// read a label would be the expensive way to write this.
+fn rule_labels(state: &SandboxState) -> Result<HashMap<String, String>, String> {
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            return Ok(label_map(&active.catalogue.rules));
+        }
+    }
+    Ok(label_map(&catalogue()?.rules))
+}
+
 pub fn scan_rules_in(
+    state: &SandboxState,
+    last: &LastPaths,
+    rule_ids: &[String],
+    progress: &mut (dyn FnMut(ScanProgress) + Send),
+) -> Result<Vec<ScanResult>, String> {
+    let results = scan_rules_resolved(state, rule_ids, progress)?;
+    last.record(&results);
+    Ok(results)
+}
+
+/// The scan itself. Split out so `scan_rules_in` records the paths on one
+/// path out of the function rather than on each branch.
+fn scan_rules_resolved(
     state: &SandboxState,
     rule_ids: &[String],
     progress: &mut (dyn FnMut(ScanProgress) + Send),
@@ -945,7 +1000,9 @@ pub fn scan_rules_in(
     {
         let guard = lock(state);
         if let Some(active) = guard.as_ref() {
-            let rules = pick_rules(&active.catalogue, rule_ids)?;
+            let mut rules = pick_rules(&active.catalogue, rule_ids)?;
+            let store = exclusions::store_path(Some(&active.manifest.root))?;
+            exclusions::apply(&mut rules, &exclusions::load(&store)?);
             let lookup = |n: &str| active.fixture.lookup(n);
             return scan_rules_with(
                 &rules,
@@ -956,7 +1013,12 @@ pub fn scan_rules_in(
             );
         }
     }
-    scan_rules(rule_ids, progress)
+    // Fail closed: a store that exists but cannot be read or parsed aborts the
+    // analysis. Carrying on would silently scan — and then offer to delete —
+    // the very files the user asked to keep.
+    let mut rules = find_rules(rule_ids)?;
+    exclusions::apply(&mut rules, &exclusions::load(&exclusions::store_path(None)?)?);
+    scan_rules_with(&rules, |r| scan_rule(r).map_err(|e| e.to_string()), progress)
 }
 
 pub fn clean_rules_in(
@@ -968,7 +1030,9 @@ pub fn clean_rules_in(
     {
         let guard = lock(state);
         if let Some(active) = guard.as_ref() {
-            let rules = pick_rules(&active.catalogue, rule_ids)?;
+            let mut rules = pick_rules(&active.catalogue, rule_ids)?;
+            let store = exclusions::store_path(Some(&active.manifest.root))?;
+            exclusions::apply(&mut rules, &exclusions::load(&store)?);
             let lookup = |n: &str| active.fixture.lookup(n);
             let root = active.manifest.root.clone();
             // The sandbox bin is a directory, not a shell operation: a batch is
@@ -996,7 +1060,135 @@ pub fn clean_rules_in(
             ));
         }
     }
-    clean_rules(rule_ids, mode, progress)
+    // Merged before the clean as well as before the scan, and for a stronger
+    // reason: `clean_rule_with_trash` re-walks the rule itself rather than
+    // trusting the paths the front end is holding, so an exclusion added after
+    // the last Analyze is honoured by the deletion that follows it.
+    let mut rules = find_rules(rule_ids)?;
+    exclusions::apply(&mut rules, &exclusions::load(&exclusions::store_path(None)?)?);
+    Ok(clean_rules_with(
+        rules,
+        mode,
+        |rule, mode, tick| clean_rule(rule, mode, tick).map_err(|e| e.to_string()),
+        progress,
+    ))
+}
+
+/// Records an exclusion for the file at `index` in the last analysis of
+/// `rule_id`. The path is never sent by the front end: it is read back from
+/// `LastPaths` here.
+pub fn add_exclusion_in(
+    state: &SandboxState,
+    last: &LastPaths,
+    rule_id: &str,
+    index: usize,
+    scope: Scope,
+) -> Result<ExclusionView, String> {
+    let path = last.path_at(rule_id, index).ok_or_else(|| {
+        format!("no path #{index} in the last analysis of \"{rule_id}\": analyze again")
+    })?;
+
+    let pattern = {
+        let guard = lock(state);
+        match guard.as_ref() {
+            Some(active) => {
+                let lookup = |n: &str| active.fixture.lookup(n);
+                exclusions::pattern_for(&path, scope, &lookup)?
+            }
+            None => exclusions::pattern_for(&path, scope, &system_env)?,
+        }
+    };
+
+    let store = store_for(state)?;
+    let mut list = exclusions::load(&store)?;
+    let entry = Exclusion {
+        rule_id: rule_id.to_string(),
+        pattern,
+        added: exclusions::today(),
+    };
+    // Excluding the same file twice (two clicks, or a file matched by a folder
+    // rule already excluded) is a no-op, not a duplicate row.
+    if !list
+        .iter()
+        .any(|e| e.rule_id == entry.rule_id && e.pattern == entry.pattern)
+    {
+        list.push(entry.clone());
+        exclusions::save(&store, &list)?;
+    }
+    Ok(view(entry, &rule_labels(state)?))
+}
+
+fn view(entry: Exclusion, labels: &HashMap<String, String>) -> ExclusionView {
+    ExclusionView {
+        rule_label: labels
+            .get(&entry.rule_id)
+            .cloned()
+            .unwrap_or_else(|| entry.rule_id.clone()),
+        rule_id: entry.rule_id,
+        pattern: entry.pattern,
+        added: entry.added,
+    }
+}
+
+pub fn list_exclusions_in(state: &SandboxState) -> Result<Vec<ExclusionView>, String> {
+    let labels = rule_labels(state)?;
+    Ok(exclusions::load(&store_for(state)?)?
+        .into_iter()
+        .map(|e| view(e, &labels))
+        .collect())
+}
+
+pub fn remove_exclusion_in(
+    state: &SandboxState,
+    rule_id: &str,
+    pattern: &str,
+) -> Result<(), String> {
+    // No label lookup here: removing an exclusion needs the store and nothing
+    // else.
+    let store = store_for(state)?;
+    let mut list = exclusions::load(&store)?;
+    let before = list.len();
+    list.retain(|e| !(e.rule_id == rule_id && e.pattern == pattern));
+    if list.len() == before {
+        return Err(format!("no such exclusion on \"{rule_id}\""));
+    }
+    exclusions::save(&store, &list)
+}
+
+/// Excludes the file at `index` in the last analysis of `rule_id`.
+///
+/// Note what this command does *not* take: a path. `index` addresses the list
+/// the front end was handed by the last `scan`, and the path is resolved on
+/// this side — the same reason `scan` and `clean` take only `rule_ids`.
+#[tauri::command]
+pub async fn add_exclusion(
+    state: tauri::State<'_, SandboxState>,
+    last: tauri::State<'_, LastPaths>,
+    rule_id: String,
+    index: usize,
+    scope: Scope,
+) -> Result<ExclusionView, String> {
+    let state = state.inner().clone();
+    let last = last.inner().clone();
+    blocking(move || add_exclusion_in(&state, &last, &rule_id, index, scope)).await
+}
+
+#[tauri::command]
+pub async fn list_exclusions(
+    state: tauri::State<'_, SandboxState>,
+) -> Result<Vec<ExclusionView>, String> {
+    let state = state.inner().clone();
+    blocking(move || list_exclusions_in(&state)).await
+}
+
+#[tauri::command]
+pub async fn remove_exclusion(
+    state: tauri::State<'_, SandboxState>,
+    rule_id: String,
+    pattern: String,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    blocking(move || remove_exclusion_in(&state, &rule_id, &pattern)).await
 }
 
 #[tauri::command]
@@ -1219,7 +1411,7 @@ mod tests {
     #[test]
     fn scanning_an_unknown_id_is_an_error() {
         let err = tauri::async_runtime::block_on(blocking(|| {
-            scan_rules(&["nonexistent".to_string()], &mut |_| {})
+            scan_rules_resolved(&SandboxState::default(), &["nonexistent".to_string()], &mut |_| {})
         }))
         .unwrap_err();
         assert!(err.contains("nonexistent"));
@@ -1658,7 +1850,7 @@ mod tests {
             .into_iter()
             .map(|r| r.id)
             .collect();
-        scan_rules_in(state, &ids, &mut |_| {}).unwrap()
+        scan_rules_in(state, &LastPaths::default(), &ids, &mut |_| {}).unwrap()
     }
 
     #[test]
@@ -1725,7 +1917,7 @@ mod tests {
             .into_iter()
             .map(|r| r.id)
             .collect();
-        let scans = scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        let scans = scan_rules_in(&state, &LastPaths::default(), &ids, &mut |_| {}).unwrap();
         assert!(scans.iter().map(|s| s.file_count).sum::<u64>() > 0);
 
         let report = clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
@@ -1767,7 +1959,7 @@ mod tests {
         let summary = enter_sandbox(&state).unwrap();
 
         let ids = vec!["windows.temp".to_string()];
-        scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        scan_rules_in(&state, &LastPaths::default(), &ids, &mut |_| {}).unwrap();
         clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
 
         let verdict = verify_sandbox(&state, &ids).unwrap();
@@ -1864,7 +2056,7 @@ mod tests {
         let bin = std::path::Path::new(&summary.root).join(crate::sandbox::SANDBOX_BIN);
 
         let ids = vec!["windows.temp".to_string()];
-        scan_rules_in(&state, &ids, &mut |_| {}).unwrap();
+        scan_rules_in(&state, &LastPaths::default(), &ids, &mut |_| {}).unwrap();
         let report = clean_rules_in(&state, &ids, CleanMode::Trash, &mut |_| {}).unwrap();
         assert!(report.deleted > 0);
 
@@ -1933,5 +2125,205 @@ mod tests {
         }))
         .unwrap_err();
         assert!(err.contains("nonexistent"));
+    }
+
+    // -- Exclusions ------------------------------------------------------
+    //
+    // All of these run inside a sandbox: the store then lives under the
+    // sandbox root, so no test ever reads or writes the real
+    // `%APPDATA%\WinCleaner\exclusions.toml`.
+
+    /// The whole point of the index-based command: what gets persisted is a
+    /// pattern built on a rule variable, never the absolute path — no account
+    /// name, no sandbox root, nothing machine-specific.
+    #[test]
+    fn an_exclusion_is_stored_as_a_variable_pattern_not_an_absolute_path() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        let added = add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap();
+
+        assert!(added.pattern.starts_with('%'), "{}", added.pattern);
+        assert!(
+            !added.pattern.contains(&summary.root),
+            "the sandbox root leaked into the stored pattern: {}",
+            added.pattern
+        );
+        assert!(
+            !added.pattern.contains(':'),
+            "an absolute path leaked into the stored pattern: {}",
+            added.pattern
+        );
+        assert_eq!(added.rule_id, "windows.temp");
+
+        // And it is readable back through the same store the UI lists.
+        let listed = list_exclusions_in(&state).unwrap();
+        assert_eq!(listed, vec![added.clone()]);
+
+        // Removing it empties the list again.
+        remove_exclusion_in(&state, "windows.temp", &added.pattern).unwrap();
+        assert!(list_exclusions_in(&state).unwrap().is_empty());
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// The guarantee that matters: `clean` re-walks the rule rather than
+    /// trusting the paths the front end holds, so an exclusion added *after*
+    /// the last Analyze still spares the file from the clean that follows.
+    #[test]
+    fn a_file_excluded_after_the_analysis_survives_the_clean() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        let before = scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        let scanned = before[0].file_count;
+        assert!(scanned >= 2, "the fixture must hold more than one junk file");
+
+        let spared = last.path_at("windows.temp", 0).unwrap();
+        let doomed = last.path_at("windows.temp", 1).unwrap();
+        assert!(std::path::Path::new(&spared).exists());
+
+        add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap();
+
+        let report = clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
+
+        assert!(
+            std::path::Path::new(&spared).exists(),
+            "the excluded file was deleted: {spared}"
+        );
+        assert!(
+            !std::path::Path::new(&doomed).exists(),
+            "the rest of the rule must still have been cleaned: {doomed}"
+        );
+        assert_eq!(
+            report.deleted,
+            scanned - 1,
+            "the counters must agree: exactly one file was spared"
+        );
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// Excluding a folder spares every file under it, not just the one the
+    /// user clicked.
+    #[test]
+    fn excluding_a_folder_spares_its_whole_subtree() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        let picked = last.path_at("windows.temp", 0).unwrap();
+        let folder = std::path::Path::new(&picked).parent().unwrap().to_path_buf();
+
+        let added = add_exclusion_in(&state, &last, "windows.temp", 0, Scope::Folder).unwrap();
+        assert!(added.pattern.ends_with(r"\**"), "{}", added.pattern);
+
+        clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();
+
+        assert!(
+            std::path::Path::new(&picked).exists(),
+            "the file under the excluded folder was deleted: {picked}"
+        );
+        // Re-scanning now reports nothing under that folder.
+        let after = scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        assert!(
+            !after[0]
+                .paths
+                .iter()
+                .any(|p| std::path::Path::new(p).starts_with(&folder)),
+            "the excluded folder still shows up in a fresh analysis"
+        );
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// Fail closed. A store that exists but cannot be parsed must stop both
+    /// the scan and the clean: proceeding as if there were no exclusions would
+    /// delete exactly the files the user asked to keep.
+    #[test]
+    fn a_corrupt_exclusions_file_fails_the_scan_and_the_clean() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        let store = std::path::Path::new(&summary.root).join(crate::exclusions::EXCLUSIONS_FILE);
+        std::fs::write(&store, "[[exclusion]]\nrule_id = = broken").unwrap();
+
+        let scan_err = scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap_err();
+        assert!(scan_err.contains("exclusions"), "{scan_err}");
+
+        let clean_err =
+            clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap_err();
+        assert!(clean_err.contains("exclusions"), "{clean_err}");
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// A stored pattern is not trusted any more than a `rules.toml` one: it
+    /// goes through the same resolution, so a pattern that is not a valid glob
+    /// is refused rather than silently dropped.
+    #[test]
+    fn an_invalid_stored_pattern_is_refused_like_a_bad_rule() {
+        let state = SandboxState::default();
+        let summary = enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        let store = std::path::Path::new(&summary.root).join(crate::exclusions::EXCLUSIONS_FILE);
+        crate::exclusions::save(
+            &store,
+            &[Exclusion {
+                rule_id: "windows.temp".to_string(),
+                // Outside the four allowed variables: the same refusal a rule
+                // written this way would get.
+                pattern: r"%WINDIR%\*".to_string(),
+                added: "2026-09-12".to_string(),
+            }],
+        )
+        .unwrap();
+
+        let err = scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap_err();
+        assert!(err.contains("WINDIR"), "{err}");
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// Excluding the same file twice is a no-op, not a second row.
+    #[test]
+    fn excluding_the_same_file_twice_stores_one_entry() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+        let ids = vec!["windows.temp".to_string()];
+
+        scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap();
+        add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap();
+
+        assert_eq!(list_exclusions_in(&state).unwrap().len(), 1);
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    /// An index with no matching path is an error naming what to do, not a
+    /// panic and not a silent success.
+    #[test]
+    fn an_index_outside_the_last_analysis_is_an_error() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let last = LastPaths::default();
+
+        let err = add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap_err();
+        assert!(err.contains("analyze again"), "{err}");
+
+        leave_sandbox(&state).unwrap();
     }
 }

@@ -112,8 +112,24 @@ export const fr: Dictionary = {
   "rules.showPathsOf": "Afficher les chemins de {label}",
   "rules.hidePathsOf": "Masquer les chemins de {label}",
   "rules.pathsOf": "Chemins de {label}",
+  "rules.excludeFile": "Exclure ce fichier",
+  "rules.excludeFolder": "Exclure son dossier",
+  "rules.excludeFileOf": "Exclure {path} de {label}",
+  "rules.excludeFolderOf": "Exclure le dossier contenant {path} de {label}",
+  "rules.excluded": "Exclu — il ne sera plus nettoyé",
+  "rules.staleCounts": "Relancez l’analyse pour actualiser les chiffres",
   "rules.winapp2Attribution":
     "Certaines règles de cette catégorie sont des règles communautaires issues de Winapp2 (CC-BY-SA 4.0) — {url}",
+
+  // Exclusions (Réglages)
+  "exclusions.empty":
+    "Aucune exclusion. Dans la liste de nettoyage, ouvrez « Afficher les chemins » sur une règle pour en écarter définitivement un fichier ou un dossier.",
+  "exclusions.loadFailed": "Les exclusions n’ont pas pu être lues.",
+  "exclusions.remove": "Ne plus exclure {pattern}",
+  "exclusions.removed": "Exclusion supprimée",
+  "exclusions.added": "{pattern} ne sera plus nettoyé",
+  "exclusions.addFailed": "Ce chemin n’a pas pu être exclu.",
+  "exclusions.addedOn": "Ajoutée le {date}",
 
   // Jauge de récupération
   "gauge.description": "Récupérable {bytes} : {named}",
@@ -171,6 +187,7 @@ export const fr: Dictionary = {
   "settings.whatsNew": "Nouveautés de la version {version}",
   "settings.updates": "Mises à jour",
   "settings.sandbox": "Bac à sable",
+  "settings.exclusions": "Exclusions",
   "settings.notices": "Mentions",
   "settings.language": "Langue",
   "settings.languageSystem": "Système",

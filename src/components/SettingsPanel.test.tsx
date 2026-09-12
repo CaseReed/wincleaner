@@ -7,6 +7,8 @@ import { SettingsPanel } from "./SettingsPanel";
 
 vi.mock("@/lib/api", () => ({
   checkForUpdates: vi.fn(),
+  listExclusions: vi.fn(),
+  removeExclusion: vi.fn(),
   sandboxOrphans: vi.fn(),
   sandboxRemoveOrphans: vi.fn(),
 }));
@@ -14,11 +16,19 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { checkForUpdates, sandboxOrphans, sandboxRemoveOrphans } from "@/lib/api";
+import {
+  checkForUpdates,
+  listExclusions,
+  removeExclusion,
+  sandboxOrphans,
+  sandboxRemoveOrphans,
+} from "@/lib/api";
 
 const mockedCheck = vi.mocked(checkForUpdates);
 const mockedOrphans = vi.mocked(sandboxOrphans);
 const mockedRemoveOrphans = vi.mocked(sandboxRemoveOrphans);
+const mockedExclusions = vi.mocked(listExclusions);
+const mockedRemoveExclusion = vi.mocked(removeExclusion);
 
 const SANDBOX = {
   root: String.raw`C:\Users\T\AppData\Local\Temp\wincleaner-sandbox-1a2b`,
@@ -47,6 +57,10 @@ beforeEach(() => {
   // renders against.
   mockedOrphans.mockReset().mockResolvedValue([]);
   mockedRemoveOrphans.mockReset().mockResolvedValue(0);
+  // No exclusion is the normal case, and the one every other test here renders
+  // against.
+  mockedExclusions.mockReset().mockResolvedValue([]);
+  mockedRemoveExclusion.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -326,6 +340,61 @@ describe("SettingsPanel — updates", () => {
 
       rerender(<SettingsPanel sandbox={SANDBOX} sandboxBusy onLeaveSandbox={vi.fn()} />);
       expect(screen.getByRole("button", { name: /Removing/ })).toBeDisabled();
+    });
+  });
+
+  describe("exclusions", () => {
+    const EXCLUSION = {
+      rule_id: "windows.temp",
+      rule_label: "Temporary files",
+      pattern: String.raw`%TEMP%\keep\**`,
+      added: "2026-09-12",
+    };
+
+    it("tells the user where exclusions come from when there are none", async () => {
+      render(<SettingsPanel />);
+      expect(await screen.findByTestId("exclusions-empty")).toHaveTextContent(
+        /Show the paths/,
+      );
+    });
+
+    /// The stored pattern is what is shown: a resolved absolute path here
+    /// would put back on screen exactly what the storage format avoids.
+    it("lists the pattern, the rule and the date", async () => {
+      mockedExclusions.mockResolvedValue([EXCLUSION]);
+      render(<SettingsPanel />);
+
+      const section = await screen.findByTestId("exclusions");
+      expect(within(section).getByText(EXCLUSION.pattern)).toBeInTheDocument();
+      expect(within(section).getByText(/Temporary files/)).toBeInTheDocument();
+      expect(within(section).getByText(/2026-09-12/)).toBeInTheDocument();
+      expect(within(section).queryByText(/C:/)).not.toBeInTheDocument();
+    });
+
+    it("removes an exclusion and re-reads the store rather than assuming", async () => {
+      mockedExclusions.mockResolvedValueOnce([EXCLUSION]).mockResolvedValueOnce([]);
+      render(<SettingsPanel />);
+
+      const remove = await screen.findByRole("button", {
+        name: new RegExp("Stop excluding"),
+      });
+      await userEvent.click(remove);
+
+      expect(mockedRemoveExclusion).toHaveBeenCalledWith(
+        EXCLUSION.rule_id,
+        EXCLUSION.pattern,
+      );
+      expect(await screen.findByTestId("exclusions-empty")).toBeInTheDocument();
+    });
+
+    it("says so when the store cannot be read, instead of showing an empty list", async () => {
+      mockedExclusions.mockRejectedValue("exclusions.toml is not a valid exclusions file");
+      render(<SettingsPanel />);
+
+      expect(
+        await screen.findByText(/exclusions could not be read/i),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("exclusions-empty")).not.toBeInTheDocument();
     });
   });
 });

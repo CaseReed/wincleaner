@@ -1,5 +1,6 @@
 pub mod clean;
 pub mod commands;
+pub mod exclusions;
 pub mod rules;
 pub mod sandbox;
 pub mod scan;
@@ -125,6 +126,9 @@ pub fn run() {
         // Empty until the user asks for a sandbox in Settings: the engine runs
         // against the real profile, as it always has.
         .manage(commands::SandboxState::default())
+        // Paths of the last analysis, per rule: what lets `add_exclusion` take
+        // an index instead of a path.
+        .manage(commands::LastPaths::default())
         .on_window_event(|window, event| {
             if matches!(
                 event,
@@ -142,6 +146,9 @@ pub fn run() {
             commands::list_startup,
             commands::set_startup_enabled,
             commands::check_for_updates,
+            commands::add_exclusion,
+            commands::list_exclusions,
+            commands::remove_exclusion,
             commands::sandbox_enter,
             commands::sandbox_leave,
             commands::sandbox_status,

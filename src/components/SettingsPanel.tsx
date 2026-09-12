@@ -1,11 +1,14 @@
 import { useEffect, useId, useState } from "react";
-import { Check, Copy, Loader2 } from "lucide-react";
+import { Check, Copy, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   checkForUpdates,
+  listExclusions,
+  removeExclusion,
   sandboxOrphans,
+  type Exclusion,
   sandboxRemoveOrphans,
   type SandboxOrphan,
   type SandboxSummary,
@@ -268,6 +271,79 @@ function SandboxSection({
 ///
 /// Absent, not empty, when there is nothing to clean up: a permanent "0 old
 /// sandbox folders" would be a scab on a screen most users open once.
+/// The exclusions the user built from "Show the paths", and the only way to
+/// undo one. Patterns are shown verbatim, in their `%VAR%\…` form: that is
+/// what is actually stored, and showing a resolved absolute path here would
+/// put back on screen the very thing the storage format avoids.
+function ExclusionsSection() {
+  const { t } = useI18n();
+  const [exclusions, setExclusions] = useState<Exclusion[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    void listExclusions()
+      .then(setExclusions)
+      .catch(() => setFailed(true));
+  }, []);
+
+  async function onRemove(exclusion: Exclusion) {
+    setBusy(exclusion.pattern);
+    try {
+      await removeExclusion(exclusion.rule_id, exclusion.pattern);
+      // Re-read rather than splice: the store on disk is the truth, and a
+      // removal the back end refused must stay on screen.
+      setExclusions(await listExclusions());
+      toast.success(t("exclusions.removed"));
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (failed) {
+    return <p className="text-muted-foreground">{t("exclusions.loadFailed")}</p>;
+  }
+  if (exclusions === null) return null;
+  if (exclusions.length === 0) {
+    return (
+      <p data-testid="exclusions-empty" className="text-muted-foreground">
+        {t("exclusions.empty")}
+      </p>
+    );
+  }
+
+  return (
+    <ul className="flex flex-col gap-2">
+      {exclusions.map((exclusion) => (
+        <li
+          key={`${exclusion.rule_id} ${exclusion.pattern}`}
+          className="flex items-center gap-3"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-xs">{exclusion.pattern}</p>
+            <p className="text-xs text-muted-foreground">
+              {exclusion.rule_label} ·{" "}
+              {t("exclusions.addedOn", { date: exclusion.added })}
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t("exclusions.remove", { pattern: exclusion.pattern })}
+            aria-busy={busy === exclusion.pattern}
+            disabled={busy !== null}
+            onClick={() => void onRemove(exclusion)}
+          >
+            <X aria-hidden="true" className="size-4" />
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function SandboxOrphansLine() {
   const { t, tn, txn, formatBytes, formatCount } = useI18n();
   const [orphans, setOrphans] = useState<SandboxOrphan[]>([]);
@@ -411,6 +487,10 @@ export function SettingsPanel({
               onLeaveSandbox={onLeaveSandbox}
             />
             <SandboxOrphansLine />
+          </Section>
+
+          <Section title={t("settings.exclusions")} testId="exclusions">
+            <ExclusionsSection />
           </Section>
 
           <Section title={t("settings.notices")} testId="notices">

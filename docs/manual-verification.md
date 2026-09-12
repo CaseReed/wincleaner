@@ -381,3 +381,56 @@ takes on a profile that is actually loaded.
     from step to step with no sliding animation, and still reach N / N.
 11. With Narrator on, clean once: it must speak the progress a few times, not
     on every batch, and state the report at the end.
+
+## VM-20 — Exclusions — to be run by the user
+
+Not run automatically: the point is that a real file the user pointed at is
+still on disk after a real clean, and that the stored file carries nothing
+machine-specific.
+
+Run it in **Sandbox mode** first (Settings > Sandbox > Create): the store then
+lives in the sandbox root and nothing real is at stake. Then repeat steps 1-5
+outside the sandbox on a rule you are happy to clean.
+
+1. Cleanup screen, **Analyze**. On a rule with several files, open **Show the
+   paths**. Each line must show two icon actions on hover — a file and a folder
+   — and they must also appear when you reach the line with <kbd>Tab</kbd>
+   alone, never only on hover.
+2. With the keyboard only, tab to the first line's file action. Narrator must
+   read **"Exclude &lt;the full path&gt; from &lt;the rule&gt;"** — not just
+   "Exclude this file", which would name nothing in particular. Press
+   <kbd>Enter</kbd>.
+3. A toast must confirm, naming the pattern in its `%VAR%\…` form. The line
+   must disappear from the list, the rule's **file count must drop by one**,
+   and a "Analyze again to refresh the figures" note must appear under the
+   rule. The byte figure must **not** change: a scan result carries no
+   per-file size, and inventing one would be worse than saying it is stale.
+4. Exclude a second file from the same rule, a few lines down. It must be that
+   line that disappears, not its neighbour — the indices of the remaining rows
+   must not have shifted.
+5. **Clean** that rule without re-analyzing. Once it finishes, look on disk:
+   the two excluded files must still be there, everything else the rule matched
+   must be gone, and the report's deleted count must be exactly the analyzed
+   count minus two. This is the item that matters most: it proves `clean`
+   re-walks the rule instead of trusting what the window was holding.
+6. Use **Exclude its folder** on a file sitting in a subdirectory. Analyze
+   again: nothing under that folder may appear in the list any more.
+7. Settings > **Exclusions**: every entry must be listed with its pattern, its
+   rule label and its date. No absolute path, and no account name, may appear
+   anywhere in that section.
+8. Open the store by hand — `%APPDATA%\WinCleaner\exclusions.toml`, or
+   `<sandbox root>\exclusions.toml` in the sandbox. Every `pattern` must start
+   with `%TEMP%`, `%LOCALAPPDATA%`, `%APPDATA%` or `%USERPROFILE%`. A drive
+   letter or your account name in that file is the bug this item exists to
+   catch.
+9. Remove one entry from the Settings list. The row must go, and a fresh
+   Analyze must count the file it was sparing again.
+10. **Fail closed.** With the application closed, replace the store's contents
+    with `garbage = = =` and relaunch. Analyze must **fail with an error
+    naming the exclusions file**, and Clean likewise — neither may quietly
+    proceed as though nothing were excluded. Restore the file (or delete it)
+    afterwards: a deleted store is a legitimate empty list and must analyze
+    normally again.
+11. Leave the sandbox and confirm the exclusions you made inside it are gone
+    from Settings: the sandbox has its own store and must never have touched
+    the real one.

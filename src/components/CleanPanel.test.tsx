@@ -11,6 +11,7 @@ const api = {
   onScanProgress: vi.fn(),
   onCleanProgress: vi.fn(),
   sandboxVerify: vi.fn(),
+  addExclusion: vi.fn(),
 };
 
 vi.mock("@/lib/api", async () => {
@@ -25,6 +26,8 @@ vi.mock("@/lib/api", async () => {
     onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
     onCleanProgress: (cb: (p: unknown) => void) => api.onCleanProgress(cb),
     sandboxVerify: (ids: string[]) => api.sandboxVerify(ids),
+    addExclusion: (ruleId: string, index: number, scope: string) =>
+      api.addExclusion(ruleId, index, scope),
   };
 });
 
@@ -88,6 +91,12 @@ describe("CleanPanel", () => {
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     api.runningBrowsers.mockReset().mockResolvedValue([]);
     api.sandboxVerify.mockReset();
+    api.addExclusion.mockReset().mockResolvedValue({
+      rule_id: "windows.temp",
+      rule_label: "Temporary files",
+      pattern: String.raw`%TEMP%\a.txt`,
+      added: "2026-09-12",
+    });
     api.rulesSummary.mockReset().mockResolvedValue({
       native: 10,
       winapp2_retained: 1200,
@@ -284,6 +293,123 @@ describe("CleanPanel", () => {
     expect(
       await screen.findByRole("region", { name: "Paths of Temporary files" })
     ).toHaveTextContent(String.raw`C:\Users\T\AppData\Local\Temp\a.txt`);
+  });
+
+  describe("exclusions", () => {
+    const TWO_PATHS = [
+      {
+        rule_id: "windows.temp",
+        file_count: 2,
+        total_bytes: 2048,
+        paths: [
+          String.raw`C:\Users\T\AppData\Local\Temp\a.txt`,
+          String.raw`C:\Users\T\AppData\Local\Temp\b.txt`,
+        ],
+        skipped: 0,
+      },
+    ];
+
+    async function openPaths() {
+      const user = userEvent.setup();
+      api.scan.mockResolvedValue(TWO_PATHS);
+      render(<CleanPanel />);
+      await screen.findByLabelText("Temporary files");
+      await user.click(screen.getByRole("button", { name: /Analyze/ }));
+      await user.click(await screen.findByTestId("toggle-paths-windows.temp"));
+      return user;
+    }
+
+    /// The two actions carry the path and the rule in their accessible name:
+    /// the icons repeat on every row, so "Exclude this file" alone would name
+    /// nothing in particular.
+    it("offers a file and a folder action on each path, both named", async () => {
+      await openPaths();
+      expect(screen.getByTestId("exclude-file-windows.temp-0")).toHaveAccessibleName(
+        String.raw`Exclude C:\Users\T\AppData\Local\Temp\a.txt from Temporary files`,
+      );
+      expect(screen.getByTestId("exclude-folder-windows.temp-1")).toHaveAccessibleName(
+        String.raw`Exclude the folder holding C:\Users\T\AppData\Local\Temp\b.txt from Temporary files`,
+      );
+    });
+
+    /// The command takes an index, never a path: that is the invariant the
+    /// whole feature is built around (CLAUDE.md).
+    it("sends the index and the scope, never the path", async () => {
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-file-windows.temp-1"));
+
+      expect(api.addExclusion).toHaveBeenCalledWith("windows.temp", 1, "file");
+      const sent = api.addExclusion.mock.calls[0];
+      expect(sent.some((arg: unknown) => String(arg).includes("C:"))).toBe(false);
+    });
+
+    it("passes the folder scope when the folder action is used", async () => {
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-folder-windows.temp-0"));
+      expect(api.addExclusion).toHaveBeenCalledWith("windows.temp", 0, "folder");
+    });
+
+    /// Hiding the row must not renumber the ones after it: the index IS the
+    /// handle the back end resolves to a path, so a shifted index would
+    /// exclude the wrong file on the next click.
+    it("hides the excluded row while keeping the other indices stable", async () => {
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-file-windows.temp-0"));
+
+      await waitFor(() =>
+        expect(screen.queryByTestId("exclude-file-windows.temp-0")).toBeNull(),
+      );
+      expect(
+        screen.queryByText(String.raw`C:\Users\T\AppData\Local\Temp\a.txt`),
+      ).toBeNull();
+
+      // The surviving row kept its original index.
+      expect(screen.getByTestId("exclude-file-windows.temp-1")).toBeInTheDocument();
+      await user.click(screen.getByTestId("exclude-file-windows.temp-1"));
+      expect(api.addExclusion).toHaveBeenLastCalledWith("windows.temp", 1, "file");
+    });
+
+    /// A scan result carries no per-file size, so the byte figure cannot be
+    /// corrected. Saying it is stale beats inventing a number.
+    it("drops the file count by one and flags the figures as stale", async () => {
+      const user = await openPaths();
+      expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("2 files");
+
+      await user.click(screen.getByTestId("exclude-file-windows.temp-0"));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("1 files"),
+      );
+      expect(screen.getByTestId("stale-windows.temp")).toHaveTextContent(
+        "Analyze again to refresh the figures",
+      );
+      // The byte total is left exactly as measured.
+      expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("2 KB");
+    });
+
+    it("keeps the row when the back end refuses", async () => {
+      api.addExclusion.mockRejectedValue("not under %TEMP%");
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-file-windows.temp-0"));
+
+      await waitFor(() => expect(api.addExclusion).toHaveBeenCalled());
+      expect(screen.getByTestId("exclude-file-windows.temp-0")).toBeInTheDocument();
+      expect(screen.queryByTestId("stale-windows.temp")).toBeNull();
+    });
+
+    /// A fresh analysis already has the exclusions applied, and the old
+    /// indices point into a list that no longer exists.
+    it("forgets the hidden rows on the next analysis", async () => {
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-file-windows.temp-0"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("exclude-file-windows.temp-0")).toBeNull(),
+      );
+
+      await user.click(screen.getByRole("button", { name: /Analyze/ }));
+      await waitFor(() => expect(screen.queryByTestId("stale-windows.temp")).toBeNull());
+      expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("2 files");
+    });
   });
 
   it("disables the Clean button before any scan", async () => {

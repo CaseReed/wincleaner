@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FileX, FolderX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,7 +9,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useI18n } from "@/i18n";
-import type { RuleSummary, ScanResult } from "@/lib/api";
+import type { ExclusionScope, RuleSummary, ScanResult } from "@/lib/api";
 
 /// Community rules carry a `winapp2.` id. The attribution is rendered only when
 /// the category actually holds one, so it never reads as covering the native
@@ -19,6 +19,35 @@ function hasWinapp2Rule(rules: RuleSummary[]): boolean {
 }
 
 const WINAPP2_URL = "https://github.com/MoscaDotTo/Winapp2";
+
+/// One of the two per-path actions. Icon-only, so the accessible name carries
+/// the whole meaning — including which path and which rule, since the icon
+/// repeats on every row and "Exclude this file" alone would be ambiguous to
+/// anyone reading the buttons out of context.
+function ExcludeButton({
+  testId,
+  label,
+  onClick,
+  children,
+}: {
+  testId: string;
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="shrink-0 cursor-pointer rounded p-1 text-muted-foreground opacity-0 outline-none transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring group-hover:opacity-100 motion-reduce:transition-none"
+    >
+      {children}
+    </button>
+  );
+}
 
 /// One category: its header — a real toggle, chevron included — and, when it is
 /// open, the rows of the rules it holds.
@@ -30,9 +59,11 @@ export function RuleCategory({
   open,
   selected,
   openPaths,
+  excluded,
   onToggleCategory,
   onToggleRule,
   onTogglePaths,
+  onExclude,
 }: {
   category: string;
   rules: RuleSummary[];
@@ -41,9 +72,15 @@ export function RuleCategory({
   open: boolean;
   selected: Set<string>;
   openPaths: Set<string>;
+  /// Indices, per rule id, that the user has excluded since the last analysis.
+  /// Rows are hidden rather than spliced out: the index IS the handle the back
+  /// end resolves to a path, so removing an entry from `result.paths` would
+  /// shift every later index onto the wrong file.
+  excluded: Map<string, Set<number>>;
   onToggleCategory: () => void;
   onToggleRule: (id: string) => void;
   onTogglePaths: (id: string) => void;
+  onExclude: (ruleId: string, index: number, scope: ExclusionScope) => void;
 }) {
   const { t, tn, tx, formatBytes, formatCount } = useI18n();
   const headingId = useId();
@@ -93,6 +130,11 @@ export function RuleCategory({
         {open && catRules.map((rule, index) => {
               const result = (results ?? []).find((r) => r.rule_id === rule.id);
               const unavailable = rule.unavailable_reason;
+              // The file count drops by what was just excluded; the byte total
+              // does NOT. A scan result carries no per-file size, so there is
+              // nothing to subtract — inventing one would be worse than saying
+              // the figure is stale, which is what the hint below does.
+              const justExcluded = excluded.get(rule.id)?.size ?? 0;
               return (
                 <li
                   key={rule.id}
@@ -143,11 +185,19 @@ export function RuleCategory({
                             {t("rules.skipped", { count: formatCount(result.skipped) })}
                           </span>
                         )}
-                        <span className="w-24 text-right font-mono tnum text-sm">
+                        <span
+                          className={cn(
+                            "w-24 text-right font-mono tnum text-sm",
+                            justExcluded > 0 && "text-muted-foreground",
+                          )}
+                        >
                           {formatBytes(result.total_bytes)}
                         </span>
                         <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
-                          {formatCount(result.file_count)}
+                          {/* One index per excluded row, and `file_count` is
+                              that same list's length, so this cannot go
+                              negative. */}
+                          {formatCount(result.file_count - justExcluded)}
                           <span className="sr-only">{t("rules.filesSr")}</span>
                         </span>
                       </div>
@@ -159,6 +209,14 @@ export function RuleCategory({
                       className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
                     >
                       {t("rules.unavailable", { reason: unavailable })}
+                    </p>
+                  )}
+                  {justExcluded > 0 && (
+                    <p
+                      data-testid={`stale-${rule.id}`}
+                      className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
+                    >
+                      {t("rules.staleCounts")}
                     </p>
                   )}
                   {rule.kind === "recycle-bin" && (
@@ -217,11 +275,41 @@ export function RuleCategory({
                         aria-label={t("rules.pathsOf", { label: rule.label })}
                       >
                         <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
-                          {result.paths.map((p) => (
-                            <li key={p} className="truncate">
-                              {p}
-                            </li>
-                          ))}
+                          {result.paths.map((p, index) =>
+                            excluded.get(rule.id)?.has(index) ? null : (
+                              <li
+                                key={p}
+                                className="group flex items-center gap-2 py-0.5"
+                              >
+                                <span className="min-w-0 flex-1 truncate">{p}</span>
+                                {/* The two actions stay in the DOM at all
+                                    times — revealed on hover, but never
+                                    `display:none` — so they keep their place
+                                    in the tab order and a keyboard user can
+                                    reach them at all. */}
+                                <ExcludeButton
+                                  testId={`exclude-file-${rule.id}-${index}`}
+                                  label={t("rules.excludeFileOf", {
+                                    path: p,
+                                    label: rule.label,
+                                  })}
+                                  onClick={() => onExclude(rule.id, index, "file")}
+                                >
+                                  <FileX aria-hidden="true" className="size-3.5" />
+                                </ExcludeButton>
+                                <ExcludeButton
+                                  testId={`exclude-folder-${rule.id}-${index}`}
+                                  label={t("rules.excludeFolderOf", {
+                                    path: p,
+                                    label: rule.label,
+                                  })}
+                                  onClick={() => onExclude(rule.id, index, "folder")}
+                                >
+                                  <FolderX aria-hidden="true" className="size-3.5" />
+                                </ExcludeButton>
+                              </li>
+                            ),
+                          )}
                         </ul>
                       </CollapsibleContent>
                     </Collapsible>

@@ -115,8 +115,24 @@ export const en = {
   "rules.showPathsOf": "Show the paths of {label}",
   "rules.hidePathsOf": "Hide the paths of {label}",
   "rules.pathsOf": "Paths of {label}",
+  "rules.excludeFile": "Exclude this file",
+  "rules.excludeFolder": "Exclude its folder",
+  "rules.excludeFileOf": "Exclude {path} from {label}",
+  "rules.excludeFolderOf": "Exclude the folder holding {path} from {label}",
+  "rules.excluded": "Excluded — it will no longer be cleaned",
+  "rules.staleCounts": "Analyze again to refresh the figures",
   "rules.winapp2Attribution":
     "Some of the rules in this category are community rules from Winapp2 (CC-BY-SA 4.0) — {url}",
+
+  // Exclusions (Settings)
+  "exclusions.empty":
+    "Nothing is excluded. In the cleanup list, open “Show the paths” on a rule to keep a file or a folder out of it for good.",
+  "exclusions.loadFailed": "The exclusions could not be read.",
+  "exclusions.remove": "Stop excluding {pattern}",
+  "exclusions.removed": "Exclusion removed",
+  "exclusions.added": "{pattern} will no longer be cleaned",
+  "exclusions.addFailed": "This path could not be excluded.",
+  "exclusions.addedOn": "Added on {date}",
 
   // Reclaim gauge
   "gauge.description": "Reclaimable {bytes}: {named}",
@@ -174,6 +190,7 @@ export const en = {
   "settings.whatsNew": "What's new in {version}",
   "settings.updates": "Updates",
   "settings.sandbox": "Sandbox",
+  "settings.exclusions": "Exclusions",
   "settings.notices": "Notices",
   "settings.language": "Language",
   "settings.languageSystem": "System",

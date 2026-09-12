@@ -11,6 +11,7 @@ import {
   clean,
   filterRules,
   groupByCategory,
+  addExclusion,
   listRules,
   onCleanProgress,
   onScanProgress,
@@ -21,6 +22,7 @@ import {
   sortGrouped,
   type CleanMode,
   type CleanProgress,
+  type ExclusionScope,
   type CleanReport,
   type RuleSummary,
   type RulesSummary,
@@ -502,6 +504,26 @@ export function CleanPanel({
     setConfirming(false);
   }
 
+  /// Indices excluded since the last analysis, per rule. The rows are hidden
+  /// by index rather than removed from `results`: the index is what
+  /// `add_exclusion` resolves to a path on the Rust side, so splicing the
+  /// array would silently point every later click at the wrong file.
+  const [excluded, setExcluded] = useState<Map<string, Set<number>>>(new Map());
+
+  async function excludePath(ruleId: string, index: number, scope: ExclusionScope) {
+    try {
+      const added = await addExclusion(ruleId, index, scope);
+      setExcluded((prev) => {
+        const next = new Map(prev);
+        next.set(ruleId, new Set(next.get(ruleId)).add(index));
+        return next;
+      });
+      toast.success(t("exclusions.added", { pattern: added.pattern }));
+    } catch (err) {
+      toast.error(String(err) || t("exclusions.addFailed"));
+    }
+  }
+
   function togglePaths(id: string) {
     setOpenPaths((prev) => {
       const next = new Set(prev);
@@ -560,6 +582,10 @@ export function CleanPanel({
     try {
       const measured = await scan(availableRules.map((r) => r.id));
       setResults(measured);
+      // A fresh analysis already has the exclusions applied, so nothing is
+      // left to hide — and the old indices point into a list that no longer
+      // exists.
+      setExcluded(new Map());
       const checked = measured.filter((r) => selected.has(r.rule_id));
       setAnnouncement(
         tn("announce.scanDone", checked.length, {
@@ -921,6 +947,8 @@ export function CleanPanel({
               onToggleCategory={() => toggleCategory(category, open)}
               onToggleRule={toggleRule}
               onTogglePaths={togglePaths}
+              excluded={excluded}
+              onExclude={excludePath}
             />
           );
         })}
