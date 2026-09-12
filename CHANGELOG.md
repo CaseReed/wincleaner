@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Measured the Recycle Bin batching gain: about 2.6x.** The new opt-in
+  benchmark (`cargo run --release --example trash_bench` in `src-tauri`)
+  creates its own fixture files and times both strategies on this machine: one
+  `trash::delete` per file ran at 77-80 files/s, matching the ~75 files/s seen
+  on the real 77,000-file run that motivated the batching change; batches of
+  500 through `trash::delete_all` ran at about 205 files/s, a 2.5x-2.7x
+  speed-up depending on fixture size (2,000 and 5,000 files tested).
+
 ## [0.6.0] - 2026-09-12
 
 ### Fixed
