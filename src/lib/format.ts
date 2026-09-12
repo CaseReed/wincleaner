@@ -39,6 +39,19 @@ export function formatBytes(bytes: number, locale = "en-US"): string {
   return `${numberFormat(locale, digits, false).format(value)} ${units[unit]}`;
 }
 
+/// A file's modification date, from the epoch milliseconds Rust sends. The
+/// day alone: the hour of a five-year-old download tells nobody anything, and
+/// the column has to stay narrow next to a full path.
+export function formatDate(millis: number, locale = "en-US"): string {
+  const date = new Date(millis);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleDateString(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /// File counters: grouped by thousands the way the locale groups them,
 /// readable at a glance.
 export function formatCount(count: number, locale = "en-US"): string {

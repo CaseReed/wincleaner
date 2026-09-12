@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { I18nProvider, LANGUAGE_KEY } from "@/i18n";
 import { AppShell } from "./AppShell";
 
 const SANDBOX = {
@@ -27,11 +28,32 @@ function renderShell(props: Partial<Parameters<typeof AppShell>[0]> = {}) {
 }
 
 describe("AppShell", () => {
-  it("lists the three screens", () => {
+  it("lists the four screens", () => {
     renderShell();
     expect(screen.getByRole("button", { name: "Cleanup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Space" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Startup" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  });
+
+  it("routes to Space, and names it in French too", async () => {
+    const user = userEvent.setup();
+    const { onScreenChange } = renderShell();
+    await user.click(screen.getByRole("button", { name: "Space" }));
+    expect(onScreenChange).toHaveBeenCalledWith("space");
+
+    localStorage.setItem(LANGUAGE_KEY, "fr");
+    render(
+      <I18nProvider>
+        <AppShell screen="space" onScreenChange={() => {}} dark={false} onToggleTheme={() => {}}>
+          <p>panel</p>
+        </AppShell>
+      </I18nProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Espace" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("routes to Settings when its entry is clicked", async () => {
@@ -68,6 +90,7 @@ describe("AppShell", () => {
     renderShell({ screen: "startup" });
     expect(screen.getByRole("button", { name: "Startup" })).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: "Cleanup" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "Space" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute("tabindex", "-1");
   });
 
@@ -76,8 +99,8 @@ describe("AppShell", () => {
     const { onScreenChange } = renderShell();
     screen.getByRole("button", { name: "Cleanup" }).focus();
     await user.keyboard("{ArrowDown}");
-    expect(onScreenChange).toHaveBeenCalledWith("startup");
-    expect(screen.getByRole("button", { name: "Startup" })).toHaveFocus();
+    expect(onScreenChange).toHaveBeenCalledWith("space");
+    expect(screen.getByRole("button", { name: "Space" })).toHaveFocus();
   });
 
   it("wraps around from the first entry to the last with ArrowUp", async () => {

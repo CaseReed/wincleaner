@@ -20,6 +20,9 @@ click Check for updates or enable automatic checks (off by default).
   ticking one would free before ticking it.
 - **Two deletion modes plus Auto.** Auto sends low-risk items to permanent
   deletion and everything else to the recycle bin.
+- **A Space screen, read-only.** The 100 largest files and the 20 largest
+  folders of your Downloads, Desktop, Documents, Pictures, Videos and Music,
+  with "Reveal in Explorer". It measures and shows; it never deletes.
 - **Startup manager.** Enable or disable what starts with your session, without
   ever deleting a registry value.
 - **Settings screen.** Version, licence and third-party notices, plus "What's

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { AppShell, type Screen } from "@/components/AppShell";
 import { CleanPanel } from "@/components/CleanPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { SpacePanel } from "@/components/SpacePanel";
 import { StartupPanel } from "@/components/StartupPanel";
 import whatsNew from "@/generated/whats-new.json";
 import { I18nProvider, useI18n } from "@/i18n";
@@ -168,6 +169,7 @@ function AppBody() {
       {screen === "clean" && (
         <CleanPanel key={sandbox ? sandbox.root : "real"} sandbox={sandbox} />
       )}
+      {screen === "space" && <SpacePanel sandbox={sandbox} />}
       {screen === "startup" && <StartupPanel sandbox={sandbox} />}
       {screen === "settings" && (
         <SettingsPanel

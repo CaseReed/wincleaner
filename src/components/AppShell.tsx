@@ -1,14 +1,15 @@
 import { useRef, type KeyboardEvent, type ReactNode } from "react";
-import { FlaskConical, Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
+import { FlaskConical, HardDrive, Moon, Power, Settings, Sparkles, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { SandboxSummary } from "@/lib/api";
 
-export type Screen = "clean" | "startup" | "settings";
+export type Screen = "clean" | "space" | "startup" | "settings";
 
 const SCREENS: { id: Screen; label: TranslationKey; icon: typeof Sparkles }[] = [
   { id: "clean", label: "nav.clean", icon: Sparkles },
+  { id: "space", label: "nav.space", icon: HardDrive },
   { id: "startup", label: "nav.startup", icon: Power },
   { id: "settings", label: "nav.settings", icon: Settings },
 ];

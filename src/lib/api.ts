@@ -289,6 +289,76 @@ export function removeExclusion(ruleId: string, pattern: string): Promise<void> 
   return invoke<void>("remove_exclusion", { ruleId, pattern });
 }
 
+/// Mirrors `src-tauri/src/space.rs::SpaceRoot`. `name` is a stable id
+/// (`downloads`, `desktop`, …), not a label: the dictionary turns it into one.
+export interface SpaceRoot {
+  name: string;
+  path: string;
+  bytes: number;
+  files: number;
+}
+
+/// Mirrors `src-tauri/src/space.rs::SpaceFile`. `index` is the row's position
+/// in this result and the only handle `spaceReveal` takes — no path ever goes
+/// back to Rust, the same invariant `scan` and `addExclusion` obey.
+export interface SpaceFile {
+  index: number;
+  path: string;
+  bytes: number;
+  /// Milliseconds since the Unix epoch, or null when the filesystem reports
+  /// no modification time.
+  modified: number | null;
+}
+
+export interface SpaceFolder {
+  index: number;
+  path: string;
+  bytes: number;
+  files: number;
+}
+
+export interface SpaceResult {
+  roots: SpaceRoot[];
+  files: SpaceFile[];
+  folders: SpaceFolder[];
+  skipped_files: number;
+  /// Known folders refused because they resolve outside the profile. Named so
+  /// the user knows the total is short.
+  skipped_roots: string[];
+}
+
+/// Mirrors `src-tauri/src/space.rs::SpaceProgress`, emitted as each root
+/// finishes. `total_bytes` is the running total since the start.
+export interface SpaceProgress {
+  done: number;
+  total: number;
+  root: string;
+  total_bytes: number;
+}
+
+/// Which of the two lists `spaceReveal` counts the index against.
+export type RevealKind = "file" | "folder";
+
+/// Measures the user's known folders. Read-only: this screen deletes nothing,
+/// and the back end offers it no way to. Rejects while a sandbox is active.
+export function spaceScan(): Promise<SpaceResult> {
+  return invoke<SpaceResult>("space_scan");
+}
+
+/// Same contract as `onScanProgress`: resolves with the function that stops
+/// listening.
+export function onSpaceProgress(
+  cb: (progress: SpaceProgress) => void,
+): Promise<() => void> {
+  return listen<SpaceProgress>("space-progress", (event) => cb(event.payload));
+}
+
+/// Shows the row at `index` in Explorer. Rejects when the measurement is stale
+/// (no such index) or the path has since gone.
+export function spaceReveal(kind: RevealKind, index: number): Promise<void> {
+  return invoke<void>("space_reveal", { kind, index });
+}
+
 /// Groups rules by category, preserving the order of rules.toml.
 export function groupByCategory(rules: RuleSummary[]): [string, RuleSummary[]][] {
   const order: string[] = [];

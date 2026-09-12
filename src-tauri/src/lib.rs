@@ -4,6 +4,7 @@ pub mod exclusions;
 pub mod rules;
 pub mod sandbox;
 pub mod scan;
+pub mod space;
 pub mod startup;
 pub mod update;
 pub mod winapp2;
@@ -129,6 +130,9 @@ pub fn run() {
         // Paths of the last analysis, per rule: what lets `add_exclusion` take
         // an index instead of a path.
         .manage(commands::LastPaths::default())
+        // Paths of the last Space measurement, ranked: what lets
+        // `space_reveal` take a row index instead of a path.
+        .manage(commands::LastSpace::default())
         .on_window_event(|window, event| {
             if matches!(
                 event,
@@ -155,6 +159,8 @@ pub fn run() {
             commands::sandbox_verify,
             commands::sandbox_orphans,
             commands::sandbox_remove_orphans,
+            commands::space_scan,
+            commands::space_reveal,
         ])
         .run(tauri::generate_context!())
         .expect("error while launching WinCleaner");

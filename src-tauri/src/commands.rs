@@ -9,6 +9,7 @@ use crate::sandbox::{
     SandboxVerdict, SANDBOX_PREFIX,
 };
 use crate::scan::{scan_rule, scan_rule_with_api, ScanResult};
+use crate::space::{launch_explorer, scan_space, SpaceProgress, SpaceResult};
 use crate::startup::StartupEntry;
 use crate::update::{check_with, http_get, UpdateCheck, LATEST_RELEASE_URL};
 use serde::{Deserialize, Serialize};
@@ -1261,6 +1262,110 @@ pub async fn sandbox_remove_orphans(state: tauri::State<'_, SandboxState>) -> Re
     blocking(move || Ok(remove_orphans_of(&state))).await
 }
 
+// ---------------------------------------------------------------------------
+// Space: where the profile's data sits. Read-only, from end to end.
+// ---------------------------------------------------------------------------
+
+pub const SPACE_IN_SANDBOX: &str =
+    "The Space screen is unavailable while the sandbox is active: it measures your real \
+     Downloads, Desktop, Documents, Pictures, Videos and Music folders, which no sandbox \
+     stands in for. Leave the sandbox to use it.";
+
+/// Which list `space_reveal` counts the index against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RevealKind {
+    File,
+    Folder,
+}
+
+/// Paths of the last measurement, ranked exactly as the front end shows them.
+///
+/// The Space twin of `LastPaths`, and for the same reason: `space_reveal` takes
+/// the row's index, never its path. Rewritten wholesale at every measurement —
+/// an index only ever means something against the list the user is looking at.
+#[derive(Clone, Default)]
+pub struct LastSpace(Arc<Mutex<(Vec<String>, Vec<String>)>>);
+
+impl LastSpace {
+    fn record(&self, result: &SpaceResult) {
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard.0 = result.files.iter().map(|f| f.path.clone()).collect();
+        guard.1 = result.folders.iter().map(|f| f.path.clone()).collect();
+    }
+
+    fn path_at(&self, kind: RevealKind, index: usize) -> Option<String> {
+        let guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let list = match kind {
+            RevealKind::File => &guard.0,
+            RevealKind::Folder => &guard.1,
+        };
+        list.get(index).cloned()
+    }
+}
+
+pub fn space_scan_in(
+    state: &SandboxState,
+    last: &LastSpace,
+    progress: &mut (dyn FnMut(SpaceProgress) + Send),
+) -> Result<SpaceResult, String> {
+    if lock(state).is_some() {
+        return Err(SPACE_IN_SANDBOX.to_string());
+    }
+    let result = scan_space(progress).map_err(|e| e.to_string())?;
+    last.record(&result);
+    Ok(result)
+}
+
+/// Shows the row at `index` in Explorer. `launch` is injected so the test
+/// exercises the index and existence checks without opening a window.
+pub fn space_reveal_with(
+    last: &LastSpace,
+    kind: RevealKind,
+    index: usize,
+    launch: &dyn Fn(&std::path::Path, bool) -> Result<(), String>,
+) -> Result<(), String> {
+    let path = last
+        .path_at(kind, index)
+        .ok_or_else(|| format!("no row #{index} in the last measurement: measure again"))?;
+    let path = std::path::PathBuf::from(path);
+    // The measurement may be minutes old, and this is the user's own data:
+    // between the two, the file may well be gone.
+    if !path.exists() {
+        return Err(format!("\"{}\" no longer exists", path.display()));
+    }
+    launch(&path, kind == RevealKind::File)
+}
+
+/// Emits `space-progress` as each root finishes, from inside the blocking
+/// closure — the event has to reach the window *while* the walk runs. An emit
+/// that fails (window already gone) must never abort the measurement.
+#[tauri::command]
+pub async fn space_scan(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SandboxState>,
+    last: tauri::State<'_, LastSpace>,
+) -> Result<SpaceResult, String> {
+    let state = state.inner().clone();
+    let last = last.inner().clone();
+    blocking(move || {
+        space_scan_in(&state, &last, &mut |step| {
+            let _ = app.emit("space-progress", step);
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn space_reveal(
+    last: tauri::State<'_, LastSpace>,
+    kind: RevealKind,
+    index: usize,
+) -> Result<(), String> {
+    let last = last.inner().clone();
+    blocking(move || space_reveal_with(&last, kind, index, &launch_explorer)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2366,6 +2471,110 @@ mod tests {
 
         let err = add_exclusion_in(&state, &last, "windows.temp", 0, Scope::File).unwrap_err();
         assert!(err.contains("analyze again"), "{err}");
+
+        leave_sandbox(&state).unwrap();
+    }
+
+    // Space.
+
+    /// Stands in for `launch_explorer`: the test proves the index and the
+    /// existence check, and no Explorer window opens on the machine running it.
+    fn recording_launcher(
+        seen: &Mutex<Vec<(String, bool)>>,
+    ) -> impl Fn(&std::path::Path, bool) -> Result<(), String> + '_ {
+        move |path, select| {
+            seen.lock()
+                .unwrap()
+                .push((path.to_string_lossy().to_string(), select));
+            Ok(())
+        }
+    }
+
+    fn last_space_of(files: &[&std::path::Path], folders: &[&std::path::Path]) -> LastSpace {
+        let last = LastSpace::default();
+        last.record(&SpaceResult {
+            roots: Vec::new(),
+            files: files
+                .iter()
+                .enumerate()
+                .map(|(index, p)| crate::space::SpaceFile {
+                    index,
+                    path: p.to_string_lossy().to_string(),
+                    bytes: 0,
+                    modified: None,
+                })
+                .collect(),
+            folders: folders
+                .iter()
+                .enumerate()
+                .map(|(index, p)| crate::space::SpaceFolder {
+                    index,
+                    path: p.to_string_lossy().to_string(),
+                    bytes: 0,
+                    files: 0,
+                })
+                .collect(),
+            skipped_files: 0,
+            skipped_roots: Vec::new(),
+        });
+        last
+    }
+
+    #[test]
+    fn revealing_a_file_selects_it_and_a_folder_opens_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("big.bin");
+        std::fs::write(&file, b"x").unwrap();
+        let last = last_space_of(&[&file], &[dir.path()]);
+        let seen = Mutex::new(Vec::new());
+
+        space_reveal_with(&last, RevealKind::File, 0, &recording_launcher(&seen)).unwrap();
+        space_reveal_with(&last, RevealKind::Folder, 0, &recording_launcher(&seen)).unwrap();
+
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen[0], (file.to_string_lossy().to_string(), true));
+        assert_eq!(
+            seen[1],
+            (dir.path().to_string_lossy().to_string(), false),
+            "a folder is opened, not selected inside its parent"
+        );
+    }
+
+    #[test]
+    fn revealing_an_index_outside_the_last_measurement_is_an_error() {
+        let last = LastSpace::default();
+        let seen = Mutex::new(Vec::new());
+        let err = space_reveal_with(&last, RevealKind::File, 3, &recording_launcher(&seen))
+            .unwrap_err();
+        assert!(err.contains("measure again"), "{err}");
+        assert!(seen.into_inner().unwrap().is_empty(), "nothing was launched");
+    }
+
+    #[test]
+    fn revealing_a_file_that_has_gone_is_an_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("gone.bin");
+        std::fs::write(&file, b"x").unwrap();
+        let last = last_space_of(&[&file], &[]);
+        std::fs::remove_file(&file).unwrap();
+
+        let seen = Mutex::new(Vec::new());
+        let err = space_reveal_with(&last, RevealKind::File, 0, &recording_launcher(&seen))
+            .unwrap_err();
+        assert!(err.contains("no longer exists"), "{err}");
+        assert!(seen.into_inner().unwrap().is_empty(), "nothing was launched");
+    }
+
+    /// The known folders are real: measuring them from inside a sandbox would
+    /// be the one screen that ignores the banner over it.
+    #[test]
+    fn space_refuses_to_measure_while_a_sandbox_is_active() {
+        let state = SandboxState::default();
+        enter_sandbox(&state).unwrap();
+        let last = LastSpace::default();
+
+        let err = space_scan_in(&state, &last, &mut |_| {}).unwrap_err();
+        assert_eq!(err, SPACE_IN_SANDBOX);
 
         leave_sandbox(&state).unwrap();
     }

@@ -434,3 +434,41 @@ outside the sandbox on a rule you are happy to clean.
 11. Leave the sandbox and confirm the exclusions you made inside it are gone
     from Settings: the sandbox has its own store and must never have touched
     the real one.
+
+## VM-21 — The Space screen — to be run by the user
+
+Not run automatically: the point is that the figures match the user's own
+disk, that Explorer really comes up on the right item, and that the screen
+offers no way to delete anything.
+
+1. Sidebar: a fourth entry, **Space** (**Espace** in French), between Cleanup
+   and Startup. Reach it with <kbd>Tab</kbd> then the arrow keys alone — one
+   tab stop for the whole sidebar, as on the other screens.
+2. Click **Measure**. The bar must fill in steps, one per folder, and the
+   counter must read `1 / 6` … `6 / 6` — never sit at zero and then jump to
+   the end. Narrator must announce the progress a few times, and once more
+   when it finishes.
+3. When it finishes: a total, then one bar per folder with its size and file
+   count. Compare two of them with the folder's own **Properties > Size** in
+   Explorer. They must agree to within the odd file Windows itself skips.
+   A folder you do not have (no `Music`) must simply not be listed — not a
+   zero row, not an error.
+4. **Largest files**: one hundred rows at most, biggest first, with a real
+   absolute path, a size and a date formatted for the interface language
+   (`4 mai 2023` in French, `May 4, 2023` in English).
+5. Click the reveal button on the first file. Explorer must open **with that
+   file selected**, and no console window may flash on the way.
+6. **Largest folders**: twenty rows at most, none of them one of the six known
+   folders themselves, and none more than three levels below one. Click a
+   reveal button: Explorer must open **inside** that folder.
+7. Delete one of the listed files in Explorer, come back **without measuring
+   again**, and click its reveal button. A toast must say the path no longer
+   exists. Nothing may crash, and the row may stay: the list is a snapshot.
+8. Look over the whole screen: there must be no checkbox, no delete button and
+   no clean button anywhere on it. This screen shows; it never removes.
+9. Settings > Sandbox > **Create**, then Space. The screen must state that it
+   is unavailable while the sandbox is active, and offer no Measure button at
+   all. Leave the sandbox: the screen must work again.
+10. If one of your known folders is redirected outside your profile (a
+    `Videos` folder moved to `D:\`), it must be **named** under the bars as
+    not measured, and contribute nothing to the total — never silently walked.

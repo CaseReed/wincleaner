@@ -11,6 +11,9 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
 - Front end: `npm test` (Vitest), `npm run build` (tsc + vite).
 - Binary: `npm run tauri build` → `src-tauri/target/release/` (exe, MSI, NSIS).
 - `src-tauri/examples/scan_bench.rs` is an opt-in, read-only benchmark of a full Analyze (`cargo run --release --example scan_bench` from `src-tauri`), never run by `cargo test` or CI.
+- `src-tauri/examples/space_bench.rs` is an opt-in, read-only benchmark of the
+  Space measurement (`cargo run --release --example space_bench` from
+  `src-tauri`), never run by `cargo test` or CI.
 - `src-tauri/examples/trash_bench.rs` is an opt-in throughput benchmark for
   Recycle Bin deletion (`cargo run --release --example trash_bench` from
   `src-tauri`); it is never run by `cargo test` or CI, and it sends real files
@@ -84,6 +87,17 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   into the bin.
 - `%TEMP%` may be an 8.3 short path: `system_env` resolves it to its long form
   via `GetLongPathNameW`.
+- The **Space screen is read-only**, and not merely by convention: there is no
+  command behind it that deletes, moves or writes anything
+  (`src-tauri/src/space.rs`, `commands.rs::space_scan`/`space_reveal`). It
+  measures the six known folders (`SHGetKnownFolderPath`, so an
+  OneDrive-redirected folder is honoured), ranks what it finds and hands
+  Explorer a path to show. Its roots go through `scan.rs::confined_root` like
+  any walk root — one that resolves outside the profile, or is a reparse point,
+  is refused and reported by name in `skipped_roots` — and `space_reveal` takes
+  an **index** into `commands::LastSpace`, never a path, exactly like
+  `add_exclusion`. It refuses while a sandbox is active: the folders it
+  measures are the user's real ones.
 - Never a registry cleaner. Startup: we only write the `StartupApproved` blob
   (bit 0 = disabled), never a deletion, RunOnce is read-only.
 - Tests: never against the real profile, the real recycle bin or the real Run
@@ -95,7 +109,8 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   not in `tests/`: Sandbox mode builds the very same tree on a user's machine
   so what they watch is what CI proves. While a sandbox is active the four
   rule variables all resolve inside its root, the recycle-bin query/empty are
-  no-op stand-ins, `Trash` mode moves the file to `<root>ecycle-bin` instead
+  no-op stand-ins, `Trash` mode moves the file to `<root>
+ecycle-bin` instead
   of calling `trash::delete_all`, and both startup commands refuse.
 - One network call and one only: `check_for_updates` (`src-tauri/src/update.rs`)
   does a single unauthenticated `GET` on

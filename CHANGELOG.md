@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A Space screen: where your own files sit, without a delete button.** A
+  fourth entry in the sidebar measures the six known folders of your profile —
+  Downloads, Desktop, Documents, Pictures, Videos and Music, resolved through
+  `SHGetKnownFolderPath` so a folder redirected into OneDrive is the one that
+  gets measured — and shows the total, a bar per folder, the 100 largest files
+  and the 20 largest folders, each with **Reveal in Explorer**. The walk goes
+  through the same two guards as Analyze: a known folder that resolves outside
+  the profile, or that is a reparse point, is refused and named instead of
+  followed, and a junction below one is never crossed. Nothing on this screen
+  deletes anything and the back end offers it no way to: this is your own
+  data, and the gesture that removes a file stays with you, in Explorer. The
+  reveal takes the row's index, never its path, exactly as `clean` and
+  `add_exclusion` do. Unavailable while a sandbox is active, because the
+  folders it measures are the real ones.
+
 ## [0.8.1] - 2026-09-12
 
 ### Fixed
