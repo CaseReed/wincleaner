@@ -177,7 +177,7 @@ export const fr: Dictionary = {
   "settings.languageEn": "English",
   "settings.languageFr": "Français",
   "settings.languageNote":
-    "Les noms de règles, les notes de version et le journal des modifications viennent de leurs propres sources et restent en anglais.",
+    "Les noms et descriptions des règles natives sont traduits ; les règles communautaires (Winapp2), les notes de version et le journal des modifications viennent de leurs propres sources et restent en anglais.",
 
   // Section Mises à jour
   "updates.check": "Rechercher des mises à jour",

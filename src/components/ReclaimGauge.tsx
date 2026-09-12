@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { useI18n, type I18n } from "@/i18n";
+import { useI18n, type I18n, type Language } from "@/i18n";
 import type { RuleSummary, ScanResult } from "@/lib/api";
+import { ruleLabel } from "@/lib/rule-i18n";
 
 /// Three lightness levels of `--primary` for the categories (the first is the
 /// darkest), plus a colour of its own for the recycle bin: it does not free
@@ -19,6 +20,7 @@ export interface GaugeSegment {
 export function buildSegments(
   rules: RuleSummary[],
   results: ScanResult[],
+  locale: Language,
 ): GaugeSegment[] {
   const categories: string[] = [];
   const segments: GaugeSegment[] = [];
@@ -28,7 +30,7 @@ export function buildSegments(
     if (!result || result.total_bytes <= 0) continue;
     segments.push({
       id: rule.id,
-      label: rule.label,
+      label: ruleLabel(rule, locale),
       bytes: result.total_bytes,
       color:
         rule.kind === "recycle-bin"
@@ -76,7 +78,7 @@ export function ReclaimGauge({
 }) {
   const i18n = useI18n();
   const { t, formatBytes } = i18n;
-  const segments = buildSegments(rules, results);
+  const segments = buildSegments(rules, results, i18n.language);
   const total = segments.reduce((sum, s) => sum + s.bytes, 0);
   const still = prefersReducedMotion();
   // The first render lays the segments out at zero width; the passive effect

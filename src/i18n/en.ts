@@ -180,7 +180,7 @@ export const en = {
   "settings.languageEn": "English",
   "settings.languageFr": "Français",
   "settings.languageNote":
-    "Rule names, release notes and the changelog come from their own sources and stay in English.",
+    "Native rule names and descriptions are translated; community (Winapp2) rules, release notes and the changelog come from their own sources and stay in English.",
 
   // Updates section
   "updates.check": "Check for updates",

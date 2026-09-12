@@ -4,10 +4,10 @@ import { ReclaimGauge } from "./ReclaimGauge";
 import type { RuleSummary, ScanResult } from "@/lib/api";
 
 const RULES: RuleSummary[] = [
-  { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
-  { id: "windows.recycle-bin", category: "System", label: "Recycle Bin", risk: "low", kind: "recycle-bin", default_checked: true, note: null, unavailable_reason: null },
-  { id: "edge.cache", category: "Browsers", label: "Microsoft Edge cache", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
-  { id: "chrome.cache", category: "Browsers", label: "Google Chrome cache", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
+  { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
+  { id: "windows.recycle-bin", category: "System", label: "Recycle Bin", risk: "low", kind: "recycle-bin", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
+  { id: "edge.cache", category: "Browsers", label: "Microsoft Edge cache", risk: "low", kind: "files", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
+  { id: "chrome.cache", category: "Browsers", label: "Google Chrome cache", risk: "low", kind: "files", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
 ];
 
 function result(rule_id: string, total_bytes: number): ScanResult {
