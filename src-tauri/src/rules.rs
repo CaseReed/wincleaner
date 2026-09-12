@@ -649,7 +649,8 @@ default_checked = false"#,
             vec![
                 "windows.recycle-bin",
                 "windows.explorer-recent",
-                "windows.crash-dumps"
+                "windows.crash-dumps",
+                "windows.wer-reports"
             ]
         );
     }
@@ -657,7 +658,7 @@ default_checked = false"#,
     #[test]
     fn the_embedded_rules_toml_is_valid() {
         let rules = load_rules_with(RULES_TOML, &fake_env).unwrap();
-        assert_eq!(rules.len(), 9);
+        assert_eq!(rules.len(), 10);
         // Declared risk included: any risk change changes the deletion mode in
         // Auto, so it must be a deliberate test change.
         let seen: Vec<(&str, Risk)> = rules.iter().map(|r| (r.id.as_str(), r.risk)).collect();
@@ -669,6 +670,7 @@ default_checked = false"#,
                 ("windows.thumbnails", Risk::Low),
                 ("windows.explorer-recent", Risk::Medium),
                 ("windows.crash-dumps", Risk::Medium),
+                ("windows.wer-reports", Risk::Medium),
                 ("edge.cache", Risk::Low),
                 ("chrome.cache", Risk::Low),
                 ("firefox.cache", Risk::Low),
@@ -771,7 +773,7 @@ default_checked = false"#,
     #[test]
     fn the_embedded_rules_load_with_the_real_environment() {
         let rules = load_rules_with(RULES_TOML, &system_env).unwrap();
-        assert_eq!(rules.len(), 9);
+        assert_eq!(rules.len(), 10);
     }
 
     #[test]

@@ -47,6 +47,7 @@ one is dropped, so the same bytes are never counted or deleted twice.
 | System | Thumbnail cache | Checked | Low |
 | System | Recent items | **Unchecked** | Medium |
 | System | Crash dumps (`%LOCALAPPDATA%\CrashDumps`) | **Unchecked** | Medium |
+| System | Error reporting reports (`%LOCALAPPDATA%\Microsoft\Windows\WER\ReportQueue`, `ReportArchive`) | **Unchecked** | Medium |
 | Browsers | Microsoft Edge cache | Checked | Low |
 | Browsers | Google Chrome cache | Checked | Low |
 | Browsers | Mozilla Firefox cache | Checked | Low |

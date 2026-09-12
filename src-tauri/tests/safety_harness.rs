@@ -269,11 +269,11 @@ fn assert_only_junk_disappeared(
 }
 
 #[test]
-fn the_nine_native_rules_delete_their_junk_and_spare_every_sentinel() {
+fn the_native_rules_delete_their_junk_and_spare_every_sentinel() {
     let started = Instant::now();
     let fx = fixture();
     let rules = native_rules(&fx);
-    assert_eq!(rules.len(), 9, "rules.toml declares nine native rules");
+    assert_eq!(rules.len(), 10, "rules.toml declares ten native rules");
     assert!(
         rules.iter().all(|r| r.unavailable_reason.is_none()),
         "every native rule must apply to the fake profile"
