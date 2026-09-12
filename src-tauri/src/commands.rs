@@ -298,50 +298,110 @@ where
         .map_err(|e| format!("task interrupted: {e}"))?
 }
 
-/// Scans each rule, refusing on the spot those that do not apply to this
-/// machine. `run` is injected so that the test exercises that refusal right
-/// here, and not in a copy of the loop; `progress` likewise, so the sequence
-/// the front end draws is asserted without a Tauri application. Rules are
-/// measured in catalogue order and `progress` is called once per rule,
-/// unavailable ones included — they cost nothing to "measure", but dropping
-/// them from the count would leave the bar short of its end.
+/// Caps the worker pool: past a handful of threads, disk and Recycle Bin I/O
+/// stop scaling and only add contention. `available_parallelism` can also
+/// return a number larger than makes sense to spawn for a handful of rules.
+const MAX_SCAN_WORKERS: usize = 8;
+
+/// Scans every rule concurrently, refusing on the spot those that do not
+/// apply to this machine. `run` is injected so that the test exercises that
+/// refusal right here, and not in a copy of the loop; it is called from
+/// worker threads, so it must be `Sync` — the two callers close over either
+/// nothing but free functions (`scan_rule`) or a read-only `Fixture`/lookup,
+/// never a `RefCell` or other single-threaded cache.
+///
+/// The wall time of an Analyze used to be the sum of every rule (dominated by
+/// a couple of slow ones, e.g. the Winapp2 catch-all and the Recycle Bin's own
+/// OS call); scanning them in parallel brings it down to roughly the slowest
+/// rule instead. `progress` is still called exactly once per rule, unavailable
+/// ones included — they cost nothing to "measure", but dropping them from the
+/// count would leave the bar short of its end — but the order it fires in now
+/// follows completion, not the catalogue: two rules finishing on different
+/// threads can report in either order. The returned `Vec` is unaffected: it is
+/// assembled by index, so it always comes back in catalogue order.
 pub fn scan_rules_with(
     rules: &[Rule],
-    mut run: impl FnMut(&Rule) -> Result<ScanResult, String>,
-    progress: &mut dyn FnMut(ScanProgress),
+    run: impl Fn(&Rule) -> Result<ScanResult, String> + Sync,
+    progress: &mut (dyn FnMut(ScanProgress) + Send),
 ) -> Result<Vec<ScanResult>, String> {
     let total = rules.len() as u32;
-    let mut measured = 0u64;
-    let mut out = Vec::with_capacity(rules.len());
-    for (index, r) in rules.iter().enumerate() {
-        let result = match &r.unavailable_reason {
-            // The rule does not apply on this machine: nothing to walk, and
-            // above all nothing to delete. Counted as "skipped", not an error.
-            Some(_) => ScanResult {
-                rule_id: r.id.clone(),
-                file_count: 0,
-                total_bytes: 0,
-                paths: Vec::new(),
-                skipped: 1,
-            },
-            None => run(r)?,
-        };
-        measured += result.total_bytes;
-        progress(ScanProgress {
-            done: index as u32 + 1,
-            total,
-            rule_id: r.id.clone(),
-            label: r.label.clone(),
-            total_bytes: measured,
-        });
-        out.push(result);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(MAX_SCAN_WORKERS)
+        .min(rules.len());
+
+    let next_index = std::sync::atomic::AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<ScanResult>>> = Mutex::new(vec![None; rules.len()]);
+    // One lock around the running byte total, the done count and the actual
+    // callback: `total_bytes` is a cumulative sum the front end trusts
+    // verbatim, so the count, the sum and the emit must advance together or a
+    // race could hand out a `done` further along than its `total_bytes`.
+    let progress_state = Mutex::new((0u32, 0u64, progress));
+    let first_error: Mutex<Option<String>> = Mutex::new(None);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if index >= rules.len() {
+                    return;
+                }
+                let r = &rules[index];
+                let result = match &r.unavailable_reason {
+                    // The rule does not apply on this machine: nothing to
+                    // walk, and above all nothing to delete. Counted as
+                    // "skipped", not an error.
+                    Some(_) => ScanResult {
+                        rule_id: r.id.clone(),
+                        file_count: 0,
+                        total_bytes: 0,
+                        paths: Vec::new(),
+                        skipped: 1,
+                    },
+                    None => match run(r) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            let mut first_error = first_error.lock().unwrap();
+                            if first_error.is_none() {
+                                *first_error = Some(e);
+                            }
+                            continue;
+                        }
+                    },
+                };
+                {
+                    let mut state = progress_state.lock().unwrap();
+                    state.0 += 1;
+                    state.1 += result.total_bytes;
+                    let (done, total_bytes) = (state.0, state.1);
+                    (state.2)(ScanProgress {
+                        done,
+                        total,
+                        rule_id: r.id.clone(),
+                        label: r.label.clone(),
+                        total_bytes,
+                    });
+                }
+                results.lock().unwrap()[index] = Some(result);
+            });
+        }
+    });
+
+    if let Some(e) = first_error.into_inner().unwrap() {
+        return Err(e);
     }
-    Ok(out)
+    Ok(results
+        .into_inner()
+        .unwrap()
+        .into_iter()
+        .map(|r| r.expect("every non-errored index was filled before the scope joined"))
+        .collect())
 }
 
 fn scan_rules(
     rule_ids: &[String],
-    progress: &mut dyn FnMut(ScanProgress),
+    progress: &mut (dyn FnMut(ScanProgress) + Send),
 ) -> Result<Vec<ScanResult>, String> {
     scan_rules_with(
         &find_rules(rule_ids)?,
@@ -880,7 +940,7 @@ pub fn rules_summary_in(state: &SandboxState) -> Result<RulesSummary, String> {
 pub fn scan_rules_in(
     state: &SandboxState,
     rule_ids: &[String],
-    progress: &mut dyn FnMut(ScanProgress),
+    progress: &mut (dyn FnMut(ScanProgress) + Send),
 ) -> Result<Vec<ScanResult>, String> {
     {
         let guard = lock(state);
@@ -1221,12 +1281,16 @@ mod tests {
         }
     }
 
-    /// The progress the front end draws is produced here, once per rule, in
-    /// catalogue order — not by a copy of the loop living in the command.
+    /// Rules scan concurrently, so completion order is not the catalogue's:
+    /// two rules finishing on different threads can report in either order.
+    /// What must still hold is that every rule reports exactly once, `done`
+    /// counts up to `total` with no gap or repeat, `total_bytes` accumulates
+    /// correctly whatever the order, and the returned `Vec` — unlike the
+    /// progress stream — always comes back in catalogue order.
     #[test]
-    fn every_rule_reports_its_progress_in_catalogue_order() {
+    fn every_rule_reports_its_progress_exactly_once() {
         let rules = vec![rule("a"), rule("b"), rule("c")];
-        let mut seen: Vec<ScanProgress> = Vec::new();
+        let seen: Mutex<Vec<ScanProgress>> = Mutex::new(Vec::new());
         let scans = scan_rules_with(
             &rules,
             |r| {
@@ -1238,27 +1302,30 @@ mod tests {
                     skipped: 0,
                 })
             },
-            &mut |p| seen.push(p),
+            &mut |p| seen.lock().unwrap().push(p),
         )
         .unwrap();
 
-        assert_eq!(scans.len(), 3);
         assert_eq!(
-            seen.iter().map(|p| p.rule_id.as_str()).collect::<Vec<_>>(),
-            ["a", "b", "c"]
+            scans.iter().map(|s| s.rule_id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"],
+            "the result Vec keeps catalogue order regardless of scan order"
         );
-        assert_eq!(seen.iter().map(|p| p.done).collect::<Vec<_>>(), [1, 2, 3]);
+
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.len(), 3);
+        let mut ids: Vec<&str> = seen.iter().map(|p| p.rule_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "b", "c"], "every rule reports exactly once");
+        let mut done: Vec<u32> = seen.iter().map(|p| p.done).collect();
+        done.sort_unstable();
+        assert_eq!(done, [1, 2, 3], "done counts up with no gap or repeat");
         assert!(seen.iter().all(|p| p.total == 3));
         // `total_bytes` is the running total, so the hero can show it verbatim
-        // without adding events up itself.
-        assert_eq!(
-            seen.iter().map(|p| p.total_bytes).collect::<Vec<_>>(),
-            [100, 200, 300]
-        );
-        // The last event of the loop is the final one: `done == total`.
-        let last = seen.last().unwrap();
-        assert_eq!(last.done, last.total);
-        assert_eq!(last.label, "c");
+        // without adding events up itself: whatever the order, it must land on
+        // the full sum once every rule has reported.
+        let last = seen.iter().find(|p| p.done == p.total).unwrap();
+        assert_eq!(last.total_bytes, 300);
     }
 
     /// A rule that does not apply to this machine is measured by nobody, but
@@ -1269,7 +1336,7 @@ mod tests {
         let mut unavailable = rule("b");
         unavailable.unavailable_reason = Some("%TEMP% is outside the profile".into());
         let rules = vec![rule("a"), unavailable];
-        let mut seen: Vec<ScanProgress> = Vec::new();
+        let seen: Mutex<Vec<ScanProgress>> = Mutex::new(Vec::new());
         scan_rules_with(
             &rules,
             |r| {
@@ -1281,15 +1348,20 @@ mod tests {
                     skipped: 0,
                 })
             },
-            &mut |p| seen.push(p),
+            &mut |p| seen.lock().unwrap().push(p),
         )
         .unwrap();
 
+        // Rules scan concurrently: "b" (unavailable, free) can report before
+        // or after "a" (which actually runs). Either way, both report once,
+        // and the total settles on the full sum once the second one lands.
+        let seen = seen.into_inner().unwrap();
         assert_eq!(seen.len(), 2);
-        assert_eq!(seen[1].rule_id, "b");
-        assert_eq!(seen[1].done, 2);
-        assert_eq!(seen[1].total, 2);
-        assert_eq!(seen[1].total_bytes, 512);
+        assert!(seen.iter().all(|p| p.total == 2));
+        let b = seen.iter().find(|p| p.rule_id == "b").unwrap();
+        assert!(b.done == 1 || b.done == 2);
+        let last = seen.iter().find(|p| p.done == 2).unwrap();
+        assert_eq!(last.total_bytes, 512);
     }
 
     /// An unavailable rule must never reach the disk, even if the front end
