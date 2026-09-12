@@ -206,7 +206,9 @@ export function RuleCategory({
                               that same list's length, so this cannot go
                               negative. */}
                           {formatCount(result.file_count - justExcluded)}
-                          <span className="sr-only">{t("rules.filesSr")}</span>
+                          <span className="sr-only">
+                            {tn("rules.filesSr", result.file_count - justExcluded)}
+                          </span>
                         </span>
                       </div>
                     )}

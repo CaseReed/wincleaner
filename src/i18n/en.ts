@@ -116,7 +116,8 @@ export const en = {
   "rules.mediumRisk": "medium risk",
   "rules.allVolumes": "all volumes",
   "rules.skipped": "{count} skipped",
-  "rules.filesSr": " files",
+  "rules.filesSr.one": " file",
+  "rules.filesSr.other": " files",
   "rules.unavailable": "Unavailable on this machine: {reason}",
   "rules.recycleBinNote":
     "Empties the recycle bin of every volume on this machine, including outside the user profile. Permanent and irreversible: the deletion mode does not apply to it.",

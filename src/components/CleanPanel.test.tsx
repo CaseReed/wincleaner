@@ -393,8 +393,10 @@ describe("CleanPanel", () => {
 
       await user.click(screen.getByTestId("exclude-file-windows.temp-0"));
 
+      // The accessible count is pluralised: down to 1 remaining file, the
+      // sr-only text reads the English singular rather than always " files".
       await waitFor(() =>
-        expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("1 files"),
+        expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("1 file"),
       );
       expect(screen.getByTestId("stale-windows.temp")).toHaveTextContent(
         "Analyze again to refresh the figures",

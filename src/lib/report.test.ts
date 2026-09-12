@@ -1,11 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import { useI18n, type I18n } from "@/i18n";
+import { I18nProvider, LANGUAGE_KEY, useI18n, type I18n } from "@/i18n";
 import type { CleanReport, RuleSummary, ScanResult } from "@/lib/api";
 import { buildReportData, buildReportJson, buildReportText } from "./report";
 
 function i18n(): I18n {
   return renderHook(() => useI18n()).result.current;
+}
+
+/// `useI18n()` outside a provider is English (see `src/i18n/index.tsx`); a
+/// French report is read the same way the components read one, through
+/// `I18nProvider` with the language stored under `LANGUAGE_KEY`.
+function frenchI18n(): I18n {
+  window.localStorage.setItem(LANGUAGE_KEY, "fr");
+  return renderHook(() => useI18n(), { wrapper: I18nProvider }).result.current;
 }
 
 const RULES: RuleSummary[] = [
@@ -18,7 +26,7 @@ const RULES: RuleSummary[] = [
     default_checked: true,
     note: null,
     unavailable_reason: null,
-    label_fr: null,
+    label_fr: "Fichiers temporaires",
     description_fr: null,
     category_fr: null,
   },
@@ -54,8 +62,22 @@ describe("buildReportData", () => {
   it("pairs scanned rules with their labels and carries the clean totals", () => {
     const data = buildReportData(RULES, SCANNED, CLEAN_REPORT, "trash", "0.7.0", GENERATED_AT);
     expect(data.rules).toEqual([
-      { id: "windows.temp", label: "Temporary files", files: 12, bytes: 1_288_490_188, skipped: 0 },
-      { id: "windows.recycle-bin", label: "Recycle Bin", files: 40, bytes: 134_217_728, skipped: 2 },
+      {
+        id: "windows.temp",
+        label: "Temporary files",
+        label_fr: "Fichiers temporaires",
+        files: 12,
+        bytes: 1_288_490_188,
+        skipped: 0,
+      },
+      {
+        id: "windows.recycle-bin",
+        label: "Recycle Bin",
+        label_fr: null,
+        files: 40,
+        bytes: 134_217_728,
+        skipped: 2,
+      },
     ]);
     expect(data.totalFiles).toBe(52);
     expect(data.totalBytes).toBe(1_422_707_916);
@@ -71,6 +93,19 @@ describe("buildReportData", () => {
 });
 
 describe("buildReportText", () => {
+  afterEach(() => {
+    window.localStorage.removeItem(LANGUAGE_KEY);
+  });
+
+  it("uses the rule's French label when the interface is French", () => {
+    const data = buildReportData(RULES, SCANNED, CLEAN_REPORT, "trash", "0.7.0", GENERATED_AT);
+    const text = buildReportText(data, frenchI18n());
+    expect(text).toContain("Fichiers temporaires — 12 fichiers mesurés, 1,2 Go");
+    // A rule with no `label_fr` (community rule, or none set) still falls
+    // back to its English label rather than going blank.
+    expect(text).toContain("Recycle Bin — 40 fichiers mesurés, 128 Mo (2 ignorés)");
+  });
+
   it("renders a readable report with a total and the skipped paths", () => {
     const data = buildReportData(RULES, SCANNED, CLEAN_REPORT, "trash", "0.7.0", GENERATED_AT);
     const text = buildReportText(data, i18n());

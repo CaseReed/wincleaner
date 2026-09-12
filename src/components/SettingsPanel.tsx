@@ -6,15 +6,18 @@ import { Switch } from "@/components/ui/switch";
 import {
   checkForUpdates,
   listExclusions,
+  listRules,
   removeExclusion,
   sandboxOrphans,
   type Exclusion,
   sandboxRemoveOrphans,
+  type RuleSummary,
   type SandboxOrphan,
   type SandboxSummary,
   type UpdateCheck,
 } from "@/lib/api";
 import { useI18n, type LanguagePreference, type TranslationKey } from "@/i18n";
+import { ruleLabel } from "@/lib/rule-i18n";
 import {
   readAutoCheck,
   toPlainText,
@@ -275,9 +278,19 @@ function SandboxSection({
 /// undo one. Patterns are shown verbatim, in their `%VAR%\…` form: that is
 /// what is actually stored, and showing a resolved absolute path here would
 /// put back on screen the very thing the storage format avoids.
+/// `exclusion.added` is `YYYY-MM-DD` (a date, not an instant): parsed as a
+/// local date rather than handed to `new Date(string)`, which reads a bare
+/// `YYYY-MM-DD` as UTC midnight and can print the day before in a timezone
+/// west of UTC.
+function parseLocalDate(isoDate: string): Date {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 function ExclusionsSection() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [exclusions, setExclusions] = useState<Exclusion[] | null>(null);
+  const [rules, setRules] = useState<RuleSummary[]>([]);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -285,6 +298,11 @@ function ExclusionsSection() {
     void listExclusions()
       .then(setExclusions)
       .catch(() => setFailed(true));
+    // Best-effort: a rule catalogue that fails to load just leaves every
+    // exclusion showing the back end's own (English) `rule_label`.
+    void listRules()
+      .then(setRules)
+      .catch(() => {});
   }, []);
 
   async function onRemove(exclusion: Exclusion) {
@@ -316,7 +334,15 @@ function ExclusionsSection() {
 
   return (
     <ul className="flex flex-col gap-2">
-      {exclusions.map((exclusion) => (
+      {exclusions.map((exclusion) => {
+        // The rule catalogue may not have loaded, or no longer lists this
+        // id: the back end’s own (English) label is the honest fallback.
+        const rule = rules.find((r) => r.id === exclusion.rule_id);
+        const label = rule ? ruleLabel(rule, language) : exclusion.rule_label;
+        const date = new Intl.DateTimeFormat(language, { dateStyle: "medium" }).format(
+          parseLocalDate(exclusion.added),
+        );
+        return (
         <li
           key={`${exclusion.rule_id} ${exclusion.pattern}`}
           className="flex items-center gap-3"
@@ -324,8 +350,7 @@ function ExclusionsSection() {
           <div className="min-w-0 flex-1">
             <p className="truncate font-mono text-xs">{exclusion.pattern}</p>
             <p className="text-xs text-muted-foreground">
-              {exclusion.rule_label} ·{" "}
-              {t("exclusions.addedOn", { date: exclusion.added })}
+              {label} · {t("exclusions.addedOn", { date })}
             </p>
           </div>
           <Button
@@ -339,7 +364,8 @@ function ExclusionsSection() {
             <X aria-hidden="true" className="size-4" />
           </Button>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

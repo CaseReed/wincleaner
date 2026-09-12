@@ -3,11 +3,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import whatsNew from "@/generated/whats-new.json";
 import { AUTO_CHECK_KEY } from "@/lib/updates";
+import { I18nProvider, LANGUAGE_KEY } from "@/i18n";
 import { SettingsPanel } from "./SettingsPanel";
 
 vi.mock("@/lib/api", () => ({
   checkForUpdates: vi.fn(),
   listExclusions: vi.fn(),
+  listRules: vi.fn(),
   removeExclusion: vi.fn(),
   sandboxOrphans: vi.fn(),
   sandboxRemoveOrphans: vi.fn(),
@@ -19,6 +21,7 @@ vi.mock("sonner", () => ({
 import {
   checkForUpdates,
   listExclusions,
+  listRules,
   removeExclusion,
   sandboxOrphans,
   sandboxRemoveOrphans,
@@ -28,6 +31,7 @@ const mockedCheck = vi.mocked(checkForUpdates);
 const mockedOrphans = vi.mocked(sandboxOrphans);
 const mockedRemoveOrphans = vi.mocked(sandboxRemoveOrphans);
 const mockedExclusions = vi.mocked(listExclusions);
+const mockedRules = vi.mocked(listRules);
 const mockedRemoveExclusion = vi.mocked(removeExclusion);
 
 const SANDBOX = {
@@ -60,6 +64,7 @@ beforeEach(() => {
   // No exclusion is the normal case, and the one every other test here renders
   // against.
   mockedExclusions.mockReset().mockResolvedValue([]);
+  mockedRules.mockReset().mockResolvedValue([]);
   mockedRemoveExclusion.mockReset().mockResolvedValue(undefined);
 });
 
@@ -360,15 +365,52 @@ describe("SettingsPanel — updates", () => {
 
     /// The stored pattern is what is shown: a resolved absolute path here
     /// would put back on screen exactly what the storage format avoids.
-    it("lists the pattern, the rule and the date", async () => {
+    it("lists the pattern, the rule and a localized date", async () => {
       mockedExclusions.mockResolvedValue([EXCLUSION]);
       render(<SettingsPanel />);
 
       const section = await screen.findByTestId("exclusions");
       expect(within(section).getByText(EXCLUSION.pattern)).toBeInTheDocument();
       expect(within(section).getByText(/Temporary files/)).toBeInTheDocument();
-      expect(within(section).getByText(/2026-09-12/)).toBeInTheDocument();
+      // Localized, not the raw ISO string: `2026-09-12` reads as "Sep 12, 2026"
+      // in English, parsed as a local date so the day never shifts.
+      expect(within(section).getByText(/Sep 12, 2026/)).toBeInTheDocument();
+      expect(within(section).queryByText(/2026-09-12/)).not.toBeInTheDocument();
       expect(within(section).queryByText(/C:/)).not.toBeInTheDocument();
+    });
+
+    /// The label comes from the loaded rule catalogue (`listRules`), localized
+    /// through `ruleLabel` like every other rule label — not the back end's
+    /// own (English) `rule_label` on the exclusion itself.
+    it("shows the rule's French label when the interface is French", async () => {
+      window.localStorage.setItem(LANGUAGE_KEY, "fr");
+      mockedExclusions.mockResolvedValue([EXCLUSION]);
+      mockedRules.mockResolvedValue([
+        {
+          id: "windows.temp",
+          category: "System",
+          label: "Temporary files",
+          label_fr: "Fichiers temporaires",
+          description_fr: null,
+          category_fr: null,
+          risk: "low",
+          kind: "files",
+          default_checked: true,
+          note: null,
+          unavailable_reason: null,
+        },
+      ]);
+      render(
+        <I18nProvider>
+          <SettingsPanel />
+        </I18nProvider>,
+      );
+
+      const section = await screen.findByTestId("exclusions");
+      expect(await within(section).findByText(/Fichiers temporaires/)).toBeInTheDocument();
+      expect(within(section).queryByText(/^Temporary files/)).not.toBeInTheDocument();
+      // "12 sept. 2026" (fr-FR medium date style).
+      expect(within(section).getByText(/12 sept\. 2026/)).toBeInTheDocument();
     });
 
     it("removes an exclusion and re-reads the store rather than assuming", async () => {

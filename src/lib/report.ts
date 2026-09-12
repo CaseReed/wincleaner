@@ -1,5 +1,6 @@
 import type { I18n, TranslationKey } from "@/i18n";
 import type { CleanMode, CleanReport, RuleSummary, ScanResult, SkippedItem } from "@/lib/api";
+import { ruleLabel } from "@/lib/rule-i18n";
 
 /// Shared with `CleanPanel`'s deletion-mode `<select>`: both need the same
 /// label for the mode a report is about.
@@ -17,6 +18,11 @@ export const MODE_LABEL: Record<CleanMode, TranslationKey> = {
 export interface ReportRuleLine {
   id: string;
   label: string;
+  /// French label of the rule, for `buildReportText` to pick through
+  /// `ruleLabel` (see CLAUDE.md: never `rule.label`/`label_fr` picked
+  /// anywhere else). `buildReportJson` never reads it: the JSON stays
+  /// English and language-neutral.
+  label_fr: string | null;
   files: number;
   bytes: number;
   skipped: number;
@@ -52,18 +58,22 @@ export function buildReportData(
   version: string,
   generatedAt: Date,
 ): ReportData {
-  const labels = new Map(rules.map((r) => [r.id, r.label]));
+  const labels = new Map(rules.map((r) => [r.id, { label: r.label, label_fr: r.label_fr }]));
   return {
     version,
     generatedAt,
     mode,
-    rules: scanned.map((r) => ({
-      id: r.rule_id,
-      label: labels.get(r.rule_id) ?? r.rule_id,
-      files: r.file_count,
-      bytes: r.total_bytes,
-      skipped: r.skipped,
-    })),
+    rules: scanned.map((r) => {
+      const info = labels.get(r.rule_id);
+      return {
+        id: r.rule_id,
+        label: info?.label ?? r.rule_id,
+        label_fr: info?.label_fr ?? null,
+        files: r.file_count,
+        bytes: r.total_bytes,
+        skipped: r.skipped,
+      };
+    }),
     totalFiles: cleanReport.deleted,
     totalBytes: cleanReport.freed_bytes,
     skipped: cleanReport.skipped,
@@ -74,7 +84,7 @@ export function buildReportData(
 /// (`rules.toml`/Winapp2) and stay untranslated, same as everywhere else the
 /// application shows a rule label.
 export function buildReportText(data: ReportData, i18n: I18n): string {
-  const { t, formatBytes, formatCount, locale } = i18n;
+  const { t, formatBytes, formatCount, locale, language } = i18n;
   const date = new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -92,7 +102,7 @@ export function buildReportText(data: ReportData, i18n: I18n): string {
       rule.skipped > 0 ? "report.text.ruleSkipped" : "report.text.rule";
     lines.push(
       t(key, {
-        label: rule.label,
+        label: ruleLabel(rule, language),
         files: formatCount(rule.files),
         bytes: formatBytes(rule.bytes),
         skipped: formatCount(rule.skipped),

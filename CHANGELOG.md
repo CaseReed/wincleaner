@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three spots in the French interface still read in English.** The
+  copyable cleanup report's per-rule lines now go through `ruleLabel`, so a
+  French report says "Fichiers temporaires" instead of "Temporary files" (the
+  JSON report is unaffected: its `label` stays English and language-neutral,
+  as documented). The Exclusions section in Settings now loads the rule
+  catalogue alongside the exclusion list and shows each entry's French label
+  when the interface is French, falling back to the back end's own label for
+  an id no longer in the catalogue, and formats the "Added on" date for the
+  locale instead of printing the raw `YYYY-MM-DD` string (parsed as a local
+  date, so the day never shifts). The rule row's sr-only file count is now a
+  proper `.one`/`.other` pair, so a screen reader hears "1 fichier" rather
+  than "1 fichiers".
+
 ## [0.8.0] - 2026-09-12
 
 ### Added

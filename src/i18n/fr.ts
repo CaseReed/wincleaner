@@ -113,7 +113,8 @@ export const fr: Dictionary = {
   "rules.mediumRisk": "risque moyen",
   "rules.allVolumes": "tous les volumes",
   "rules.skipped": "{count} ignorés",
-  "rules.filesSr": " fichiers",
+  "rules.filesSr.one": " fichier",
+  "rules.filesSr.other": " fichiers",
   "rules.unavailable": "Indisponible sur cette machine : {reason}",
   "rules.recycleBinNote":
     "Vide la corbeille de chaque volume de cette machine, y compris hors du profil utilisateur. Définitif et irréversible : le mode de suppression ne s’y applique pas.",

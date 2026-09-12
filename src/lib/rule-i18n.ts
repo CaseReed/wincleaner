@@ -9,7 +9,10 @@ import type { RuleSummary } from "@/lib/api";
 /// screen or a live region goes through them, so a Winapp2 rule (no French
 /// fields) reads the same in both languages.
 
-export function ruleLabel(rule: RuleSummary, locale: Language): string {
+export function ruleLabel(
+  rule: Pick<RuleSummary, "label" | "label_fr">,
+  locale: Language,
+): string {
   return (locale === "fr" && rule.label_fr) || rule.label;
 }
 
