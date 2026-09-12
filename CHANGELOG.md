@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-12
+
 ### Added
 
 - **Added a native rule for per-user Windows Error Reporting reports.**
@@ -335,7 +337,8 @@ Initial MVP release.
 - Fixes from an internal security audit of the cleanup and startup paths
   (path containment, reparse-point handling, and CSP tightening).
 
-[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/CaseReed/wincleaner/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/CaseReed/wincleaner/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/CaseReed/wincleaner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/CaseReed/wincleaner/compare/v0.4.0...v0.5.0

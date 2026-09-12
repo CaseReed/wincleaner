@@ -1,6 +1,6 @@
 [package]
 name = "wincleaner"
-version = "0.6.0"
+version = "0.7.0"
 description = "Open source Windows cleaner"
 authors = ["Julien Tavernier"]
 license = "MIT"
