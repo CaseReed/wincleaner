@@ -392,8 +392,10 @@ pub fn launch_explorer(path: &Path, select: bool) -> Result<(), String> {
 
     let mut command = std::process::Command::new("explorer.exe");
     if select {
-        // One argument, comma and all: that is the spelling Explorer parses.
-        command.arg(format!("/select,{}", path.display()));
+        // One argument, comma and all, with only the path quoted: `arg` would
+        // quote the whole thing when the path holds a space, and Explorer then
+        // ignores `/select` and opens Documents instead.
+        command.raw_arg(format!("/select,\"{}\"", path.display()));
     } else {
         command.arg(path);
     }
