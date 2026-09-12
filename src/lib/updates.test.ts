@@ -7,7 +7,7 @@ import {
   readLastNotified,
   shouldNotify,
   toPlainText,
-  updateErrorMessage,
+  updateErrorKey,
   writeAutoCheck,
 } from "./updates";
 
@@ -73,18 +73,16 @@ describe("shouldNotify", () => {
   });
 });
 
-describe("updateErrorMessage", () => {
-  it("gives each backend code its sentence", () => {
-    expect(updateErrorMessage("offline")).toBe("Could not reach GitHub — check your connection");
-    expect(updateErrorMessage("not-available")).toBe("No public release is available yet");
-    expect(updateErrorMessage("rate-limited")).toBe("GitHub rate limit reached, try again later");
-    expect(updateErrorMessage("malformed")).toBe("Could not read GitHub's answer");
+describe("updateErrorKey", () => {
+  it("gives each backend code its own key", () => {
+    expect(updateErrorKey("offline")).toBe("updates.error.offline");
+    expect(updateErrorKey("not-available")).toBe("updates.error.not-available");
+    expect(updateErrorKey("rate-limited")).toBe("updates.error.rate-limited");
+    expect(updateErrorKey("malformed")).toBe("updates.error.malformed");
   });
 
-  it("falls back to the offline sentence for an unknown code", () => {
-    expect(updateErrorMessage("something else")).toBe(
-      "Could not reach GitHub — check your connection",
-    );
+  it("falls back to the offline key for an unknown code", () => {
+    expect(updateErrorKey("something else")).toBe("updates.error.offline");
   });
 });
 

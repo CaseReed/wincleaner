@@ -25,6 +25,9 @@ click Check for updates or enable automatic checks (off by default).
 - **Settings screen.** Version, licence and third-party notices, plus "What's
   new" for the running version, extracted from `CHANGELOG.md` at build time and
   shown offline — nothing is fetched.
+- **English and French interface.** Pick the language in Settings or let it
+  follow Windows; rule names and release notes come from their own sources and
+  stay in English.
 - **Light and dark themes**, including the Windows title bar.
 - **Keyboard and screen-reader friendly.** Every screen is operable without
   a mouse, every control is named and every result is announced.

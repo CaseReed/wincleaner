@@ -8,10 +8,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { formatBytes, formatCount } from "@/lib/format";
+import { useI18n } from "@/i18n";
 import type { RuleSummary, ScanResult } from "@/lib/api";
-
-const RULE_COUNT = new Intl.NumberFormat("en-US");
 
 /// Community rules carry a `winapp2.` id. The attribution is rendered only when
 /// the category actually holds one, so it never reads as covering the native
@@ -47,6 +45,7 @@ export function RuleCategory({
   onToggleRule: (id: string) => void;
   onTogglePaths: (id: string) => void;
 }) {
+  const { t, tn, tx, formatBytes, formatCount } = useI18n();
   const headingId = useId();
   const listId = useId();
   return (
@@ -77,7 +76,7 @@ export function RuleCategory({
           </button>
         </h2>
         <p className="shrink-0 text-xs text-muted-foreground">
-          {RULE_COUNT.format(catRules.length)} rules
+          {tn("rules.count", catRules.length)}
           {results && (
             <>
               {" · "}
@@ -122,7 +121,7 @@ export function RuleCategory({
                         variant="outline"
                         className="border-warning/40 bg-warning/12 text-warning-foreground"
                       >
-                        medium risk
+                        {t("rules.mediumRisk")}
                       </Badge>
                     )}
                     {rule.kind === "recycle-bin" && (
@@ -131,7 +130,7 @@ export function RuleCategory({
                         variant="outline"
                         className="border-destructive/40 text-destructive"
                       >
-                        all volumes
+                        {t("rules.allVolumes")}
                       </Badge>
                     )}
                     {result && (
@@ -141,7 +140,7 @@ export function RuleCategory({
                       >
                         {result.skipped > 0 && (
                           <span className="font-mono tnum text-xs text-muted-foreground">
-                            {formatCount(result.skipped)} skipped
+                            {t("rules.skipped", { count: formatCount(result.skipped) })}
                           </span>
                         )}
                         <span className="w-24 text-right font-mono tnum text-sm">
@@ -149,7 +148,7 @@ export function RuleCategory({
                         </span>
                         <span className="w-20 text-right font-mono tnum text-sm text-muted-foreground">
                           {formatCount(result.file_count)}
-                          <span className="sr-only"> files</span>
+                          <span className="sr-only">{t("rules.filesSr")}</span>
                         </span>
                       </div>
                     )}
@@ -159,19 +158,17 @@ export function RuleCategory({
                       data-testid={`unavailable-${rule.id}`}
                       className="px-4 pb-3 pl-11 text-xs text-muted-foreground"
                     >
-                      Unavailable on this machine: {unavailable}
+                      {t("rules.unavailable", { reason: unavailable })}
                     </p>
                   )}
                   {rule.kind === "recycle-bin" && (
                     <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                      Empties the recycle bin of every volume on this machine,
-                      including outside the user profile. Permanent and
-                      irreversible: the deletion mode does not apply to it.
+                      {t("rules.recycleBinNote")}
                     </p>
                   )}
                   {rule.id === "windows.temp" && (
                     <p className="px-4 pb-3 pl-11 text-xs text-muted-foreground">
-                      Close any running installers before cleaning.
+                      {t("rules.tempNote")}
                     </p>
                   )}
                   {rule.note && (
@@ -193,9 +190,12 @@ export function RuleCategory({
                            only obvious from the row it sits under. The visible
                            words stay in the name, so speaking them still
                            works. */
-                        aria-label={`${
-                          openPaths.has(rule.id) ? "Hide" : "Show"
-                        } the paths of ${rule.label}`}
+                        aria-label={t(
+                          openPaths.has(rule.id)
+                            ? "rules.hidePathsOf"
+                            : "rules.showPathsOf",
+                          { label: rule.label },
+                        )}
                         className="mb-3 ml-[38px] inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
                       >
                         <ChevronRight
@@ -206,7 +206,7 @@ export function RuleCategory({
                           )}
                         />
                         <span className="underline underline-offset-2">
-                          {openPaths.has(rule.id) ? "Hide" : "Show"} the paths
+                          {t(openPaths.has(rule.id) ? "rules.hidePaths" : "rules.showPaths")}
                         </span>
                       </CollapsibleTrigger>
                       {/* A landmark of its own: the list is long, and a screen
@@ -214,7 +214,7 @@ export function RuleCategory({
                           arrowing to the end. */}
                       <CollapsibleContent
                         role="region"
-                        aria-label={`Paths of ${rule.label}`}
+                        aria-label={t("rules.pathsOf", { label: rule.label })}
                       >
                         <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                           {result.paths.map((p) => (
@@ -235,9 +235,9 @@ export function RuleCategory({
           data-testid="winapp2-attribution"
           className="px-1 text-xs text-muted-foreground"
         >
-          Some of the rules in this category are community rules
-          from Winapp2 (CC-BY-SA 4.0) —{" "}
-          <span className="font-mono">{WINAPP2_URL}</span>
+          {tx("rules.winapp2Attribution", {
+            url: <span className="font-mono">{WINAPP2_URL}</span>,
+          })}
         </p>
       )}
     </section>

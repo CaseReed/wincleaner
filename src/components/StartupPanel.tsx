@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useI18n, type TranslationKey } from "@/i18n";
 import {
   listStartup,
   setStartupEnabled,
@@ -19,10 +20,10 @@ import {
   type StartupSource,
 } from "@/lib/api";
 
-const SOURCE_LABEL: Record<StartupSource, string> = {
-  run: "Registry (Run)",
-  "run-once": "Registry (RunOnce)",
-  folder: "Startup folder",
+const SOURCE_LABEL: Record<StartupSource, TranslationKey> = {
+  run: "startup.source.run",
+  "run-once": "startup.source.run-once",
+  folder: "startup.source.folder",
 };
 
 function Screen({
@@ -32,18 +33,17 @@ function Screen({
   subtitle: string;
   children: React.ReactNode;
 }) {
+  const { t } = useI18n();
   return (
     <>
       <header className="shrink-0 px-8 pt-7 pb-5">
-        <h1 className="screen-title">Startup</h1>
+        <h1 className="screen-title">{t("startup.title")}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
         {/* The MVP scope is a subset of the Task Manager Startup tab: saying
             so avoids sending the user hunting for an entry that cannot be
             there. */}
         <p data-testid="startup-scope" className="mt-2 text-xs text-muted-foreground">
-          Only the entries of your own session are listed: the HKCU registry
-          (Run, RunOnce) and your Startup folder. Entries shared by all users
-          and scheduled tasks require elevation and stay out of scope.
+          {t("startup.scope")}
         </p>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-8 pb-8">{children}</div>
@@ -59,6 +59,7 @@ export function StartupPanel({
   /// can stand in for — so the screen states that instead of asking.
   sandbox?: SandboxSummary | null;
 } = {}) {
+  const { t, tn } = useI18n();
   const [entries, setEntries] = useState<StartupEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -84,16 +85,14 @@ export function StartupPanel({
 
   if (inSandbox) {
     return (
-      <Screen subtitle="Decide what starts with your session.">
+      <Screen subtitle={t("startup.subtitle")}>
         <div
           data-testid="startup-sandbox-notice"
           className="flex max-w-xl flex-col gap-2 rounded-lg border bg-card p-5"
         >
-          <p className="font-medium">Unavailable while the sandbox is active.</p>
+          <p className="font-medium">{t("startup.sandboxTitle")}</p>
           <p className="text-sm text-muted-foreground">
-            Startup programs live in the real Windows registry and in your real
-            Startup folder. The sandbox never touches either, so there is
-            nothing here to show you. Leave the sandbox to manage them.
+            {t("startup.sandboxBody")}
           </p>
         </div>
       </Screen>
@@ -109,16 +108,16 @@ export function StartupPanel({
     try {
       await setStartupEnabled(entry.id, next);
       await refresh();
-      const done = next
-        ? `${entry.name} enabled at startup`
-        : `${entry.name} disabled at startup`;
+      const done = t(next ? "startup.enabled" : "startup.disabled", {
+        name: entry.name,
+      });
       setAnnouncement(done);
       toast.success(done);
     } catch (err) {
       setEntries((prev) =>
         prev.map((e) => (e.id === entry.id ? { ...e, enabled: entry.enabled } : e))
       );
-      setAnnouncement(`${entry.name} could not be changed`);
+      setAnnouncement(t("startup.changeFailed", { name: entry.name }));
       toast.error(String(err));
     } finally {
       setPending(null);
@@ -127,13 +126,13 @@ export function StartupPanel({
 
   if (error) {
     return (
-      <Screen subtitle="Decide what starts with your session.">
+      <Screen subtitle={t("startup.subtitle")}>
         <div
           data-testid="startup-error"
           role="alert"
           className="flex max-w-xl flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/8 p-5"
         >
-          <p className="font-medium">Could not read the startup programs.</p>
+          <p className="font-medium">{t("startup.error")}</p>
           <p className="font-mono text-xs text-muted-foreground">{error}</p>
         </div>
       </Screen>
@@ -142,9 +141,9 @@ export function StartupPanel({
 
   if (entries.length === 0) {
     return (
-      <Screen subtitle="Decide what starts with your session.">
+      <Screen subtitle={t("startup.subtitle")}>
         <p data-testid="startup-empty" className="text-sm text-muted-foreground">
-          No program starts with your session.
+          {t("startup.empty")}
         </p>
       </Screen>
     );
@@ -154,11 +153,7 @@ export function StartupPanel({
 
   return (
     <Screen
-      subtitle={
-        entries.length > 1
-          ? `${entries.length} programs, ${enabled} enabled`
-          : `1 program, ${enabled} enabled`
-      }
+      subtitle={tn("startup.summary", entries.length, { enabled })}
     >
       <div className="overflow-hidden rounded-lg border bg-card">
         <p data-testid="startup-announcement" className="sr-only" role="status" aria-live="polite">
@@ -169,20 +164,20 @@ export function StartupPanel({
         <Table className="table-fixed">
           {/* Named, not just drawn: a screen reader announces a table by its
               caption before reading a single cell. */}
-          <TableCaption className="sr-only">
-            Programs that start with your session
-          </TableCaption>
+          <TableCaption className="sr-only">{t("startup.caption")}</TableCaption>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="eyebrow w-[30%] px-4 text-muted-foreground">
-                Name
+                {t("startup.colName")}
               </TableHead>
-              <TableHead className="eyebrow px-4 text-muted-foreground">Command</TableHead>
+              <TableHead className="eyebrow px-4 text-muted-foreground">
+                {t("startup.colCommand")}
+              </TableHead>
               <TableHead className="eyebrow w-[9.5rem] px-4 text-muted-foreground">
-                Source
+                {t("startup.colSource")}
               </TableHead>
               <TableHead className="eyebrow w-20 px-4 text-right text-muted-foreground">
-                Enabled
+                {t("startup.colEnabled")}
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -193,7 +188,7 @@ export function StartupPanel({
                 <TableRow
                   key={entry.id}
                   data-testid={`startup-row-${entry.id}`}
-                  title={readOnly ? "Read-only" : undefined}
+                  title={readOnly ? t("startup.readOnly") : undefined}
                   className={readOnly ? "text-muted-foreground" : undefined}
                 >
                   <TableCell className="h-11 px-4 text-sm font-medium">
@@ -208,12 +203,12 @@ export function StartupPanel({
                   </TableCell>
                   <TableCell className="h-11 px-4">
                     <Badge variant="outline" className="max-w-full text-muted-foreground">
-                      <span className="truncate">{SOURCE_LABEL[entry.source]}</span>
+                      <span className="truncate">{t(SOURCE_LABEL[entry.source])}</span>
                     </Badge>
                   </TableCell>
                   <TableCell className="h-11 px-4 text-right">
                     <Switch
-                      aria-label={`Enable ${entry.name}`}
+                      aria-label={t("startup.enable", { name: entry.name })}
                       checked={entry.enabled}
                       disabled={readOnly || pending === entry.id}
                       onCheckedChange={(next) => void onToggle(entry, next)}

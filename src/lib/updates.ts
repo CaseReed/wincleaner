@@ -3,6 +3,8 @@
 /// plain text here, and the "tell the user once per version" rule lives here
 /// too.
 
+import type { TranslationKey } from "@/i18n";
+
 export const AUTO_CHECK_KEY = "wincleaner.autoCheckUpdates";
 export const LAST_NOTIFIED_KEY = "wincleaner.lastNotifiedVersion";
 
@@ -25,18 +27,17 @@ export function shouldNotify(lastNotified: string | null, latest: string | null)
   return latest !== null && latest !== "" && lastNotified !== latest;
 }
 
-/// The wording of every failure, keyed by the stable code
-/// `src-tauri/src/update.rs` sends across the IPC boundary.
-export function updateErrorMessage(code: string): string {
+/// The translation key of every failure, keyed by the stable code
+/// `src-tauri/src/update.rs` sends across the IPC boundary. An unknown code
+/// reads as offline, which is true of a broken IPC call too.
+export function updateErrorKey(code: string): TranslationKey {
   switch (code) {
     case "not-available":
-      return "No public release is available yet";
     case "rate-limited":
-      return "GitHub rate limit reached, try again later";
     case "malformed":
-      return "Could not read GitHub's answer";
+      return `updates.error.${code}`;
     default:
-      return "Could not reach GitHub — check your connection";
+      return "updates.error.offline";
   }
 }
 
