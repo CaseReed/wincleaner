@@ -70,8 +70,9 @@ describe("buildReportText", () => {
     const text = buildReportText(data, i18n());
     expect(text).toContain("WinCleaner 0.7.0");
     expect(text).toContain("Mode: Recycle Bin");
-    expect(text).toContain("Temporary files — 12 files, 1.2 GB freed");
-    expect(text).toContain("Recycle Bin — 40 files, 128 MB freed (2 skipped)");
+    expect(text).toContain("Per rule: measured by the last Analyze. Totals: actually freed.");
+    expect(text).toContain("Temporary files — 12 files measured, 1.2 GB");
+    expect(text).toContain("Recycle Bin — 40 files measured, 128 MB (2 skipped)");
     expect(text).toContain("Total: 52 files, 1.3 GB freed");
     expect(text).toContain("Skipped:");
     expect(text).toContain(String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp — file in use`);
@@ -97,24 +98,35 @@ describe("buildReportJson", () => {
       version: "0.7.0",
       generated_at: "2026-09-12T14:32:00.000Z",
       mode: "permanent",
+      note: expect.stringContaining("last Analyze"),
       rules: [
         {
           id: "windows.temp",
           label: "Temporary files",
-          files_deleted: 12,
-          bytes_freed: 1_288_490_188,
+          files_measured: 12,
+          bytes_measured: 1_288_490_188,
           skipped: 0,
         },
         {
           id: "windows.recycle-bin",
           label: "Recycle Bin",
-          files_deleted: 40,
-          bytes_freed: 134_217_728,
+          files_measured: 40,
+          bytes_measured: 134_217_728,
           skipped: 2,
         },
       ],
       totals: { files_deleted: 52, bytes_freed: 1_422_707_916 },
       skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
     });
+  });
+
+  it("keeps files_measured/bytes_measured distinct from totals when a rule skips files", () => {
+    // The rule that skipped 2 files "measured" 40 at Analyze time; the
+    // aggregate `totals` (from the real CleanReport) is what Clean actually
+    // freed across every rule, and the two are not required to agree.
+    const data = buildReportData(RULES, SCANNED, CLEAN_REPORT, "trash", "0.7.0", GENERATED_AT);
+    const json = buildReportJson(data);
+    expect(json.rules[1].files_measured).toBe(40);
+    expect(json.totals.files_deleted).toBe(52);
   });
 });

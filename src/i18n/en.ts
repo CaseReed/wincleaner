@@ -104,8 +104,9 @@ export const en = {
   "report.copyFailed": "Could not copy the report",
   "report.text.header": "WinCleaner {version} — {date}",
   "report.text.mode": "Mode: {mode}",
-  "report.text.rule": "{label} — {files} files, {bytes} freed",
-  "report.text.ruleSkipped": "{label} — {files} files, {bytes} freed ({skipped} skipped)",
+  "report.text.note": "Per rule: measured by the last Analyze. Totals: actually freed.",
+  "report.text.rule": "{label} — {files} files measured, {bytes}",
+  "report.text.ruleSkipped": "{label} — {files} files measured, {bytes} ({skipped} skipped)",
   "report.text.total": "Total: {files} files, {bytes} freed",
   "report.text.skippedHeader": "Skipped:",
 

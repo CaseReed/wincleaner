@@ -9,6 +9,11 @@ export const MODE_LABEL: Record<CleanMode, TranslationKey> = {
   permanent: "mode.permanent",
 };
 
+/// `files`/`bytes` are what the last Analyze *measured* for this rule, not
+/// what Clean actually freed: a rule with a skipped file (in use, access
+/// denied…) frees less than it measured, and `CleanReport` never breaks its
+/// totals down by rule to correct for that. Callers must say "measured", not
+/// "freed", next to these two fields.
 export interface ReportRuleLine {
   id: string;
   label: string;
@@ -20,9 +25,11 @@ export interface ReportRuleLine {
 /// What the "Copy report" / "Copy as JSON" buttons both build from. `Clean`
 /// only ever returns aggregate totals (`CleanReport`, see
 /// `src-tauri/src/clean.rs`) — never a path, per the "no Tauri command takes
-/// a path" invariant — so the per-rule breakdown here is the last Analyze
-/// measurement for the rules Clean was asked to act on: exactly the numbers
-/// the confirmation and the hero total already showed before the click.
+/// a path" invariant — so `rules[].files`/`.bytes` below are the last Analyze
+/// measurement for the rules Clean was asked to act on (what the confirmation
+/// and the hero total already showed before the click), while `totalFiles`/
+/// `totalBytes` are what Clean actually reported freeing. The two can differ
+/// whenever a rule skips a file.
 export interface ReportData {
   version: string;
   generatedAt: Date;
@@ -76,6 +83,7 @@ export function buildReportText(data: ReportData, i18n: I18n): string {
   const lines: string[] = [
     t("report.text.header", { version: data.version, date }),
     t("report.text.mode", { mode: t(MODE_LABEL[data.mode]) }),
+    t("report.text.note"),
     "",
   ];
 
@@ -110,18 +118,22 @@ export function buildReportText(data: ReportData, i18n: I18n): string {
   return lines.join("\n");
 }
 
-/// The `version`/`generated_at`/`mode`/`rules`/`totals`/`skipped` shape a
-/// script parses. Language-neutral: rule ids and labels are the same data
-/// `buildReportText` uses, never routed through the dictionary.
+/// The `version`/`generated_at`/`mode`/`note`/`rules`/`totals`/`skipped`
+/// shape a script parses. Language-neutral: rule ids and labels are the same
+/// data `buildReportText` uses, never routed through the dictionary. Mirrors
+/// the text report's distinction: `rules[].*_measured` is the last Analyze
+/// measurement, `totals.*` is what Clean actually freed — `note` spells that
+/// out for a reader who only has the JSON.
 export interface ReportJson {
   version: string;
   generated_at: string;
   mode: CleanMode;
+  note: string;
   rules: {
     id: string;
     label: string;
-    files_deleted: number;
-    bytes_freed: number;
+    files_measured: number;
+    bytes_measured: number;
     skipped: number;
   }[];
   totals: { files_deleted: number; bytes_freed: number };
@@ -133,11 +145,13 @@ export function buildReportJson(data: ReportData): ReportJson {
     version: data.version,
     generated_at: data.generatedAt.toISOString(),
     mode: data.mode,
+    note:
+      "rules[].files_measured/bytes_measured come from the last Analyze; totals.files_deleted/bytes_freed are what Clean actually freed.",
     rules: data.rules.map((r) => ({
       id: r.id,
       label: r.label,
-      files_deleted: r.files,
-      bytes_freed: r.bytes,
+      files_measured: r.files,
+      bytes_measured: r.bytes,
       skipped: r.skipped,
     })),
     totals: { files_deleted: data.totalFiles, bytes_freed: data.totalBytes },

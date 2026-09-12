@@ -101,8 +101,9 @@ export const fr: Dictionary = {
   "report.copyFailed": "Impossible de copier le rapport",
   "report.text.header": "WinCleaner {version} — {date}",
   "report.text.mode": "Mode : {mode}",
-  "report.text.rule": "{label} — {files} fichiers, {bytes} libérés",
-  "report.text.ruleSkipped": "{label} — {files} fichiers, {bytes} libérés ({skipped} ignorés)",
+  "report.text.note": "Par règle : mesuré par la dernière analyse. Totaux : réellement libérés.",
+  "report.text.rule": "{label} — {files} fichiers mesurés, {bytes}",
+  "report.text.ruleSkipped": "{label} — {files} fichiers mesurés, {bytes} ({skipped} ignorés)",
   "report.text.total": "Total : {files} fichiers, {bytes} libérés",
   "report.text.skippedHeader": "Ignorés :",
 

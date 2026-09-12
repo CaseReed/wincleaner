@@ -347,7 +347,7 @@ describe("CleanPanel", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text = writeText.mock.calls[0][0] as string;
     expect(text).toContain("WinCleaner");
-    expect(text).toContain("Temporary files — 2 files, 2 KB freed");
+    expect(text).toContain("Temporary files — 2 files measured, 2 KB");
     expect(text).toContain("Total: 2 files, 2 KB freed");
     expect(text).toContain("file in use");
   });
