@@ -46,6 +46,7 @@ export const fr: Dictionary = {
   "clean.cleaningRules.one": "Nettoyage de {count} règle…",
   "clean.cleaningRules.other": "Nettoyage de {count} règles…",
   "clean.progressAnalyzing": "Analyse {counter} · {label}",
+  "clean.progressRunning": "Analyse {counter} · en cours : {labels}",
   "clean.progressCleaning": "Nettoyage {counter} · {label}",
   "clean.empty": "Lancez une analyse pour mesurer ce qui peut être libéré.",
   "clean.search": "Rechercher une règle",
@@ -81,6 +82,10 @@ export const fr: Dictionary = {
   "mode.permanent": "Définitif",
   "mode.autoHelp":
     "Auto : suppression définitive pour les éléments à faible risque, Corbeille pour le reste.",
+  "mode.trashHelp":
+    "Corbeille : tout part à la Corbeille et reste récupérable jusqu’à ce que vous la vidiez.",
+  "mode.permanentHelp":
+    "Définitif : les fichiers sont supprimés sur-le-champ. Rien n’est récupérable.",
   "mode.recycleFirst":
     "La Corbeille est vidée en premier : ce que les autres règles y déposent pendant la même passe n’est pas emporté.",
   "mode.emptyDirs":
@@ -96,6 +101,10 @@ export const fr: Dictionary = {
   "report.title": "Dernier nettoyage",
   "report.summary": "{bytes} libérés · {count} fichiers supprimés",
   "report.skipped": "Ignorés ({count})",
+  "report.reason.in-use": "Fichier en cours d’utilisation ou verrouillé",
+  "report.reason.access-denied": "Accès refusé",
+  "report.reason.not-found": "Déjà supprimé",
+  "report.reason.other": "N’a pas pu être supprimé",
   "report.copy": "Copier le rapport",
   "report.copyJson": "Copier en JSON",
   "report.copied": "Rapport copié",
@@ -114,6 +123,9 @@ export const fr: Dictionary = {
   "rules.mediumRisk": "risque moyen",
   "rules.allVolumes": "tous les volumes",
   "rules.skipped": "{count} ignorés",
+  "rules.cached": "en cache",
+  "rules.cachedTitle":
+    "Chiffres repris de la dernière mesure : la Corbeille n’a pas changé depuis. La vider, ou y envoyer quoi que ce soit, la fait remesurer.",
   "rules.filesSr.one": " fichier",
   "rules.filesSr.other": " fichiers",
   "rules.unavailable": "Indisponible sur cette machine : {reason}",

@@ -44,6 +44,10 @@ export interface ScanResult {
   total_bytes: number;
   paths: string[];
   skipped: number;
+  /// True when the figures were reused from the Recycle Bin cache instead of
+  /// measured (`src-tauri/src/recycle_cache.rs`). Only the Recycle Bin rule
+  /// can ever set it. Optional: an older back end simply never sends it.
+  cached?: boolean;
 }
 
 /// Mirrors `src-tauri/src/commands.rs::ScanProgress`, emitted once per rule
@@ -55,6 +59,19 @@ export interface ScanProgress {
   rule_id: string;
   label: string;
   total_bytes: number;
+  /// The rules still being measured when the event went out, in catalogue
+  /// order. Without it the counter names the rule that has just *finished*,
+  /// which on a full Recycle Bin left the bar reading the wrong rule for four
+  /// minutes. Optional so a dropped field never breaks the hero.
+  running?: RunningRule[];
+}
+
+/// Mirrors `src-tauri/src/commands.rs::RunningRule`. Carries the id next to
+/// the label for the same reason `ScanProgress` does: Rust never localises, so
+/// the French label is looked up here, by id.
+export interface RunningRule {
+  rule_id: string;
+  label: string;
 }
 
 /// Mirrors `src-tauri/src/commands.rs::CleanProgress`, emitted while `clean`
@@ -73,7 +90,13 @@ export interface CleanProgress {
 
 export interface SkippedItem {
   path: string;
+  /// The raw message from the shell or from `std::io`, kept verbatim for the
+  /// JSON report and for the tooltip. The screen shows `code` translated.
   reason: string;
+  /// One of `src-tauri/src/clean.rs`'s `SKIP_*` codes: `in-use`,
+  /// `access-denied`, `not-found`, `other`. Optional: an unknown or missing
+  /// code falls back to `other`.
+  code?: string;
 }
 
 export interface CleanReport {

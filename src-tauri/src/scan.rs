@@ -15,6 +15,12 @@ pub struct ScanResult {
     pub total_bytes: u64,
     pub paths: Vec<String>,
     pub skipped: u32,
+    /// True when this rule's figures were reused from the Recycle Bin cache
+    /// instead of measured (`recycle_cache.rs`). Only the Recycle Bin rule can
+    /// ever set it; `serde(default)` so every other construction site stays a
+    /// plain literal.
+    #[serde(default)]
+    pub cached: bool,
 }
 
 /// Recycle bin query, injected to stay testable.
@@ -347,6 +353,7 @@ pub fn scan_rule_with_api(
                 total_bytes: bytes,
                 paths: Vec::new(),
                 skipped: 0,
+                cached: false,
             },
             Err(_) => ScanResult {
                 rule_id: rule.id.clone(),
@@ -354,6 +361,7 @@ pub fn scan_rule_with_api(
                 total_bytes: 0,
                 paths: Vec::new(),
                 skipped: 1,
+                cached: false,
             },
         });
     }
@@ -368,6 +376,7 @@ pub fn scan_rule_with_api(
         total_bytes: found.values().sum(),
         paths: found.keys().cloned().collect(),
         skipped,
+        cached: false,
     })
 }
 

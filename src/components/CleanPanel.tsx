@@ -7,8 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ReclaimGauge, prefersReducedMotion } from "@/components/ReclaimGauge";
 import { RuleCategory } from "@/components/RuleCategory";
-import { useI18n, type I18n } from "@/i18n";
-import { buildReportData, buildReportJson, buildReportText, MODE_LABEL } from "@/lib/report";
+import { useI18n, type I18n, type TranslationKey } from "@/i18n";
+import {
+  buildReportData,
+  buildReportJson,
+  buildReportText,
+  MODE_LABEL,
+  skipReasonKey,
+} from "@/lib/report";
 import {
   clean,
   filterRules,
@@ -44,6 +50,64 @@ import { ruleLabel } from "@/lib/rule-i18n";
 /// presentation only — Analyze sends every selected rule, folded or filtered
 /// out of view.
 const COLLAPSED_BY_DEFAULT = ["Applications"];
+
+/// The help line under the deletion-mode picker. It used to always render
+/// `mode.autoHelp`, which described Auto whatever the user had picked.
+const MODE_HELP: Record<CleanMode, TranslationKey> = {
+  auto: "mode.autoHelp",
+  trash: "mode.trashHelp",
+  permanent: "mode.permanentHelp",
+};
+
+/// What survives a trip to Space or Settings and back: the Analyze the user
+/// waited minutes for, the report of the clean they just ran, and the boxes
+/// they ticked. Owned by `App` so leaving the screen does not throw it away.
+/// A panel rendered without the pair keeps an identical copy of its own, for
+/// the life of that mount.
+export interface CleanSession {
+  results: ScanResult[] | null;
+  report: CleanReport | null;
+  reportRules: ScanResult[];
+  reportGeneratedAt: Date | null;
+  /// `null` until `listRules` has answered and the defaults have been applied.
+  /// Once set it is the user's, and a remount must not overwrite it.
+  selected: Set<string> | null;
+  /// Rows hidden since the last Analyze, by index, per rule. Travels with
+  /// `results`: the index is the handle the back end resolves to a path, so
+  /// the two are only meaningful together.
+  excluded: Map<string, Set<number>>;
+}
+
+export const emptyCleanSession: CleanSession = {
+  results: null,
+  report: null,
+  reportRules: [],
+  reportGeneratedAt: null,
+  selected: null,
+  excluded: new Map(),
+};
+
+/// One shared empty set, so "nothing ticked yet" keeps a stable identity
+/// through the memos below instead of invalidating them on every render.
+const NOTHING_SELECTED: Set<string> = new Set();
+
+/// Which rows a folder exclusion takes off the list.
+///
+/// The back end stored `%VAR%\folder\**`, so the whole folder is out — not
+/// just the row that was clicked. Hiding only that one row left its siblings
+/// on screen, each still offering an Exclude button for a file already
+/// excluded. The comparison is case-insensitive on the separator-normalised
+/// path, for the reason `exclusions.rs` spells out: Windows casing differs on
+/// the drive letter and on the 8.3 boundary.
+function hiddenByFolder(paths: string[], index: number): number[] {
+  const norm = (p: string) => p.replace(/\//g, "\\").toLowerCase();
+  const target = paths[index];
+  if (target === undefined) return [];
+  const cut = norm(target).lastIndexOf("\\");
+  if (cut < 0) return [index];
+  const prefix = norm(target).slice(0, cut + 1);
+  return paths.flatMap((p, i) => (norm(p).startsWith(prefix) ? [i] : []));
+}
 
 const SORT_KEY = "wincleaner.sortBySize";
 const HINT_KEY = "wincleaner.hintDismissed";
@@ -244,25 +308,36 @@ function SandboxVerdictCard({ verdict }: { verdict: SandboxVerdict }) {
 
 export function CleanPanel({
   sandbox = null,
+  session: ownedSession,
+  onSessionChange,
 }: {
   /// Non-null while a sandbox is active: every rule below then describes the
   /// synthetic profile, and a Clean is followed by a verdict read back off its
   /// disk.
   sandbox?: SandboxSummary | null;
+  /// The state the parent keeps across screens. Both or neither: given the
+  /// pair, the panel owns nothing a trip to Settings could drop. `reportRules`
+  /// and `reportGeneratedAt` travel with `report` so "Copy report"/"Copy as
+  /// JSON" describe the run just shown, not whatever `results` holds by the
+  /// time the button is clicked (cleared right after).
+  session?: CleanSession;
+  onSessionChange?: React.Dispatch<React.SetStateAction<CleanSession>>;
 } = {}) {
   const i18n = useI18n();
   const { language, t, tn, tx, formatBytes, formatCount } = i18n;
   const [rules, setRules] = useState<RuleSummary[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [results, setResults] = useState<ScanResult[] | null>(null);
-  const [report, setReport] = useState<CleanReport | null>(null);
-  /// What Analyze last measured for the rules that were just cleaned, and
-  /// when the clean finished: captured together with `report` so "Copy
-  /// report"/"Copy as JSON" describe the run just shown, not whatever
-  /// `results` holds by the time the button is clicked (cleared right after).
-  const [reportRules, setReportRules] = useState<ScanResult[]>([]);
-  const [reportGeneratedAt, setReportGeneratedAt] = useState<Date | null>(null);
+  /// Always called: the branch below picks between two ready values, it never
+  /// skips a hook.
+  const ownState = useState<CleanSession>(emptyCleanSession);
+  const [session, setSession] =
+    ownedSession && onSessionChange ? [ownedSession, onSessionChange] : ownState;
+  const { results, report, reportRules, reportGeneratedAt, excluded } = session;
+  const selected = session.selected ?? NOTHING_SELECTED;
+  /// Every write to the session goes through this or through `setSession`, so
+  /// the panel never keeps a second copy of what the parent owns.
+  const patch = (fields: Partial<CleanSession>) =>
+    setSession((prev) => ({ ...prev, ...fields }));
   const [verdict, setVerdict] = useState<SandboxVerdict | null>(null);
   /// The verify call failed. Shown inside the verdict card as a line of its
   /// own: it says nothing about the clean, which has already been reported.
@@ -330,12 +405,20 @@ export function CleanPanel({
         // the profile is to exercise the whole catalogue against it, and the
         // usual caution behind `default_checked` — irreversible deletions in a
         // profile the user cares about — has no subject here.
-        setSelected(
-          new Set(
-            loaded
-              .filter((r) => (sandbox ? !r.unavailable_reason : r.default_checked))
-              .map((r) => r.id)
-          )
+        // Only while nothing has been ticked yet: once the session carries a
+        // selection it is the user's, and coming back from Settings must not
+        // reset it to the defaults.
+        setSession((prev) =>
+          prev.selected
+            ? prev
+            : {
+                ...prev,
+                selected: new Set(
+                  loaded
+                    .filter((r) => (sandbox ? !r.unavailable_reason : r.default_checked))
+                    .map((r) => r.id)
+                ),
+              }
         );
       })
       .catch((err) => setRulesError(String(err)));
@@ -463,6 +546,30 @@ export function CleanPanel({
     return rule ? ruleLabel(rule, language) : fallback;
   };
 
+  /// What the hero says while a scan runs. `rule_id`/`label` name the rule
+  /// that has just *finished*, which on a full Recycle Bin left the counter
+  /// reading "84 / 85 · AMD" for four minutes while the bin was the one
+  /// holding everything up. When the back end says what is still in flight,
+  /// that is what gets named instead.
+  function scanProgressLine(step: ScanProgress) {
+    const counter = (
+      <span className="font-mono tnum">
+        {formatCount(step.done)} / {formatCount(step.total)}
+      </span>
+    );
+    const running = step.running ?? [];
+    if (running.length > 0 && step.done < step.total) {
+      return tx("clean.progressRunning", {
+        counter,
+        labels: running.map((r) => progressLabel(r.rule_id, r.label)).join(", "),
+      });
+    }
+    return tx("clean.progressAnalyzing", {
+      counter,
+      label: progressLabel(step.rule_id, step.label),
+    });
+  }
+
   const searching = query.trim().length > 0;
   const grouped = useMemo(() => {
     const base = groupByCategory(filterRules(rules, query));
@@ -509,28 +616,30 @@ export function CleanPanel({
   /// results stand until the next Analyze. A confirmation raised on the old
   /// total no longer describes the new one, so it steps back.
   function toggleRule(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
+    setSession((prev) => {
+      const next = new Set(prev.selected ?? NOTHING_SELECTED);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
+      return { ...prev, selected: next };
     });
     setConfirming(false);
   }
 
-  /// Indices excluded since the last analysis, per rule. The rows are hidden
-  /// by index rather than removed from `results`: the index is what
-  /// `add_exclusion` resolves to a path on the Rust side, so splicing the
-  /// array would silently point every later click at the wrong file.
-  const [excluded, setExcluded] = useState<Map<string, Set<number>>>(new Map());
-
   async function excludePath(ruleId: string, index: number, scope: ExclusionScope) {
     try {
       const added = await addExclusion(ruleId, index, scope);
-      setExcluded((prev) => {
-        const next = new Map(prev);
-        next.set(ruleId, new Set(next.get(ruleId)).add(index));
-        return next;
+      // Rows are hidden by index rather than removed from `results`: the index
+      // is what `add_exclusion` resolves to a path on the Rust side, so
+      // splicing the array would silently point every later click at the wrong
+      // file.
+      setSession((prev) => {
+        const paths = prev.results?.find((r) => r.rule_id === ruleId)?.paths ?? [];
+        const hidden = scope === "folder" ? hiddenByFolder(paths, index) : [index];
+        const byRule = new Map(prev.excluded);
+        const rows = new Set(byRule.get(ruleId));
+        for (const i of hidden) rows.add(i);
+        byRule.set(ruleId, rows);
+        return { ...prev, excluded: byRule };
       });
       toast.success(t("exclusions.added", { pattern: added.pattern }));
     } catch (err) {
@@ -583,7 +692,7 @@ export function CleanPanel({
 
   async function onScan() {
     setBusyAction("scan");
-    setReport(null);
+    patch({ report: null });
     setVerdict(null);
     setVerdictError(null);
     setConfirming(false);
@@ -601,11 +710,10 @@ export function CleanPanel({
       .catch(() => setBrowsers([]));
     try {
       const measured = await scan(availableRules.map((r) => r.id));
-      setResults(measured);
       // A fresh analysis already has the exclusions applied, so nothing is
       // left to hide — and the old indices point into a list that no longer
       // exists.
-      setExcluded(new Map());
+      patch({ results: measured, excluded: new Map() });
       const checked = measured.filter((r) => selected.has(r.rule_id));
       setAnnouncement(
         tn("announce.scanDone", checked.length, {
@@ -637,10 +745,12 @@ export function CleanPanel({
     const cleanedResultsSnapshot = checkedResults;
     try {
       const done = await clean(cleaned, mode);
-      setReport(done);
-      setReportRules(cleanedResultsSnapshot);
-      setReportGeneratedAt(new Date());
-      setResults(null);
+      patch({
+        report: done,
+        reportRules: cleanedResultsSnapshot,
+        reportGeneratedAt: new Date(),
+        results: null,
+      });
       setAnnouncement(
         t("announce.cleanDone", {
           bytes: formatBytes(done.freed_bytes),
@@ -721,8 +831,7 @@ export function CleanPanel({
             <Button
               variant="outline"
               onClick={() => {
-                setResults(null);
-                setReport(null);
+                patch({ results: null, report: null });
                 setReloadKey((k) => k + 1);
               }}
             >
@@ -919,16 +1028,7 @@ export function CleanPanel({
                     tn("clean.cleaningRules", cleanIds.length)
                   )
                 ) : progress ? (
-                  <span data-testid="scan-progress">
-                    {tx("clean.progressAnalyzing", {
-                      counter: (
-                        <span className="font-mono tnum">
-                          {formatCount(progress.done)} / {formatCount(progress.total)}
-                        </span>
-                      ),
-                      label: progressLabel(progress.rule_id, progress.label),
-                    })}
-                  </span>
+                  <span data-testid="scan-progress">{scanProgressLine(progress)}</span>
                 ) : (
                   // Between the click and the first event: the total is only
                   // known once Rust has counted the rules it was sent.
@@ -1090,8 +1190,10 @@ export function CleanPanel({
                 </h3>
                 <ul className="mt-1.5 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                   {report.skipped.map((s) => (
-                    <li key={s.path} className="truncate">
-                      {s.path} — {s.reason}
+                    // The raw message stays reachable — hover, or the JSON
+                    // report — but what is read is the translated reason.
+                    <li key={s.path} className="truncate" title={s.reason}>
+                      {s.path} — {t(skipReasonKey(s.code))}
                     </li>
                   ))}
                 </ul>
@@ -1155,7 +1257,7 @@ export function CleanPanel({
                 {recycleBinChecked ? (
                   <span data-testid="recycle-order-note">{t("mode.recycleFirst")}</span>
                 ) : (
-                  t("mode.autoHelp")
+                  t(MODE_HELP[mode])
                 )}{" "}
                 <span data-testid="empty-dirs-note">{t("mode.emptyDirs")}</span>
               </p>

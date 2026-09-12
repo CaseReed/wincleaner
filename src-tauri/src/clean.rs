@@ -18,7 +18,73 @@ pub enum CleanMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedItem {
     pub path: String,
+    /// The raw message, verbatim, from the shell or from `std::io`. Kept for
+    /// the JSON report and for a tooltip; never the sentence the screen shows.
     pub reason: String,
+    /// One of `SKIP_*` below: a stable code the window turns into its own
+    /// localized sentence, the same contract `update.rs` and
+    /// `exclusions::RULE_ROOT_CODE` already use. The raw message the shell
+    /// hands back for a locked file names an `Unknown` error whose
+    /// description is "Some operations were aborted" — accurate, and no use
+    /// to anyone reading a cleanup report.
+    pub code: String,
+}
+
+/// The file is open somewhere else, or the shell gave up on the batch holding
+/// it. Windows sharing (32) and lock (33) violations, and the shell's own
+/// "Some operations were aborted".
+pub const SKIP_IN_USE: &str = "in-use";
+/// The file is there and we may not touch it: access denied (5), or the
+/// system refusing the file outright (1920, a cloud placeholder or a
+/// filter driver).
+pub const SKIP_ACCESS_DENIED: &str = "access-denied";
+/// It went away between the scan and the deletion (2, 3).
+pub const SKIP_NOT_FOUND: &str = "not-found";
+/// Anything else, including our own guard refusals.
+pub const SKIP_OTHER: &str = "other";
+
+/// Classifies a raw failure message into one of the four codes.
+///
+/// Matching on the text is deliberate: the two sources are `std::io::Error`,
+/// whose `Display` ends in `(os error N)`, and the `trash` crate, which hands
+/// back a formatted `Debug` with no error number at all. One classifier over
+/// the string covers both without a second path that only one of them takes.
+pub fn skip_code(reason: &str) -> &'static str {
+    if let Some(os) = os_error_number(reason) {
+        return match os {
+            32 | 33 => SKIP_IN_USE,
+            5 | 1920 => SKIP_ACCESS_DENIED,
+            2 | 3 => SKIP_NOT_FOUND,
+            _ => SKIP_OTHER,
+        };
+    }
+    if reason.contains("operations were aborted") || reason.contains("being used by another") {
+        return SKIP_IN_USE;
+    }
+    SKIP_OTHER
+}
+
+/// The `N` of a trailing `(os error N)`, when there is one.
+fn os_error_number(reason: &str) -> Option<i32> {
+    let start = reason.rfind("(os error ")? + "(os error ".len();
+    let rest = &reason[start..];
+    let end = rest.find(')')?;
+    rest[..end].trim().parse().ok()
+}
+
+impl SkippedItem {
+    /// The one place a skipped item is built: the code is derived from the
+    /// message rather than passed in, so no call site can forget it or invent
+    /// one of its own.
+    pub fn new(path: impl Into<String>, reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        let code = skip_code(&reason).to_string();
+        Self {
+            path: path.into(),
+            reason,
+            code,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -107,10 +173,7 @@ fn send_to_trash(batch: &[Approved], trash: TrashDelete, report: &mut CleanRepor
                 report.deleted += 1;
                 report.freed_bytes += size;
             }
-            Some(reason) => report.skipped.push(SkippedItem {
-                path: scanned.clone(),
-                reason,
-            }),
+            Some(reason) => report.skipped.push(SkippedItem::new(scanned.clone(), reason)),
         }
     }
 }
@@ -245,10 +308,7 @@ pub fn clean_rule_with_trash(
             Err(reason) => CleanReport {
                 freed_bytes: 0,
                 deleted: 0,
-                skipped: vec![SkippedItem {
-                    path: rule.label.clone(),
-                    reason,
-                }],
+                skipped: vec![SkippedItem::new(rule.label.clone(), reason)],
             },
         });
     }
@@ -264,10 +324,7 @@ pub fn clean_rule_with_trash(
         let (real, size) = match deletable_path(path, &profile_canon) {
             Ok(v) => v,
             Err(reason) => {
-                report.skipped.push(SkippedItem {
-                    path: path.clone(),
-                    reason,
-                });
+                report.skipped.push(SkippedItem::new(path.clone(), reason));
                 continue;
             }
         };
@@ -278,10 +335,7 @@ pub fn clean_rule_with_trash(
                         report.deleted += 1;
                         report.freed_bytes += size;
                     }
-                    Err(e) => report.skipped.push(SkippedItem {
-                        path: path.clone(),
-                        reason: e.to_string(),
-                    }),
+                    Err(e) => report.skipped.push(SkippedItem::new(path.clone(), e.to_string())),
                 }
                 tick(report.deleted, report.freed_bytes);
             }
@@ -883,22 +937,56 @@ mod tests {
         let mut a = CleanReport {
             freed_bytes: 10,
             deleted: 2,
-            skipped: vec![SkippedItem {
-                path: "x".into(),
-                reason: "y".into(),
-            }],
+            skipped: vec![SkippedItem::new("x", "y")],
         };
         a.merge(CleanReport {
             freed_bytes: 5,
             deleted: 1,
-            skipped: vec![SkippedItem {
-                path: "z".into(),
-                reason: "w".into(),
-            }],
+            skipped: vec![SkippedItem::new("z", "w")],
         });
         assert_eq!(a.freed_bytes, 15);
         assert_eq!(a.deleted, 3);
         assert_eq!(a.skipped.len(), 2);
+    }
+
+    /// The two messages the maintainer actually saw on their own machine,
+    /// plus the rest of the class. The point of the codes is that the window
+    /// can say "File in use or locked" instead of quoting either of these.
+    #[test]
+    fn the_raw_failure_messages_map_to_stable_codes() {
+        assert_eq!(
+            skip_code(
+                r#"Error during a `trash` operation: Unknown { description: "Some operations were aborted" }"#
+            ),
+            SKIP_IN_USE
+        );
+        assert_eq!(
+            skip_code("The file cannot be accessed by the system. (os error 1920)"),
+            SKIP_ACCESS_DENIED
+        );
+        assert_eq!(
+            skip_code(
+                "The process cannot access the file because it is being used by another process. (os error 32)"
+            ),
+            SKIP_IN_USE
+        );
+        assert_eq!(skip_code("locked (os error 33)"), SKIP_IN_USE);
+        assert_eq!(skip_code("Access is denied. (os error 5)"), SKIP_ACCESS_DENIED);
+        assert_eq!(skip_code("not found (os error 2)"), SKIP_NOT_FOUND);
+        assert_eq!(
+            skip_code("not a regular file"),
+            SKIP_OTHER,
+            "our own guard refusals have no os error and no shell wording"
+        );
+    }
+
+    /// The code is derived, never passed in: a call site cannot set one that
+    /// disagrees with the message next to it.
+    #[test]
+    fn a_skipped_item_carries_both_the_raw_message_and_its_code() {
+        let item = SkippedItem::new(r"C:\x\y.log", "Access is denied. (os error 5)");
+        assert_eq!(item.code, SKIP_ACCESS_DENIED);
+        assert_eq!(item.reason, "Access is denied. (os error 5)");
     }
 
     #[test]

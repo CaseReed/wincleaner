@@ -10,6 +10,24 @@ export const MODE_LABEL: Record<CleanMode, TranslationKey> = {
   permanent: "mode.permanent",
 };
 
+/// The sentence a skip code becomes on screen and in the copied report. The
+/// codes are `src-tauri/src/clean.rs`'s `SKIP_*`; the raw message they were
+/// derived from stays next to them, but only in a tooltip and in the JSON: an
+/// Unknown shell error whose description is "Some operations were aborted" is
+/// not something to put in front of a user.
+const SKIP_REASON: Record<string, TranslationKey> = {
+  "in-use": "report.reason.in-use",
+  "access-denied": "report.reason.access-denied",
+  "not-found": "report.reason.not-found",
+  other: "report.reason.other",
+};
+
+/// A missing code (older back end) and an unknown one both read as "other":
+/// the report says the file was not deleted, which is true either way.
+export function skipReasonKey(code: string | undefined): TranslationKey {
+  return (code ? SKIP_REASON[code] : undefined) ?? "report.reason.other";
+}
+
 /// `files`/`bytes` are what the last Analyze *measured* for this rule, not
 /// what Clean actually freed: a rule with a skipped file (in use, access
 /// denied…) frees less than it measured, and `CleanReport` never breaks its
@@ -121,7 +139,7 @@ export function buildReportText(data: ReportData, i18n: I18n): string {
   if (data.skipped.length > 0) {
     lines.push("", t("report.text.skippedHeader"));
     for (const s of data.skipped) {
-      lines.push(`${s.path} — ${s.reason}`);
+      lines.push(`${s.path} — ${t(skipReasonKey(s.code))}`);
     }
   }
 
@@ -147,7 +165,7 @@ export interface ReportJson {
     skipped: number;
   }[];
   totals: { files_deleted: number; bytes_freed: number };
-  skipped: { path: string; reason: string }[];
+  skipped: { path: string; reason: string; code: string }[];
 }
 
 export function buildReportJson(data: ReportData): ReportJson {
@@ -165,6 +183,12 @@ export function buildReportJson(data: ReportData): ReportJson {
       skipped: r.skipped,
     })),
     totals: { files_deleted: data.totalFiles, bytes_freed: data.totalBytes },
-    skipped: data.skipped.map((s) => ({ path: s.path, reason: s.reason })),
+    // The JSON keeps the raw message: it is what a script or a bug report
+    // needs, and it is language-neutral like the rest of this shape.
+    skipped: data.skipped.map((s) => ({
+      path: s.path,
+      reason: s.reason,
+      code: s.code ?? "other",
+    })),
   };
 }

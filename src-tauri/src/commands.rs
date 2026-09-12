@@ -8,7 +8,7 @@ use crate::sandbox::{
     sandbox_recycle_query, sandbox_trash, verify, Fixture, Orphan, SandboxManifest, SandboxSummary,
     SandboxVerdict, SANDBOX_PREFIX,
 };
-use crate::scan::{scan_rule, scan_rule_with_api, ScanResult};
+use crate::scan::{scan_rule_with_api, ScanResult};
 use crate::space::{launch_explorer, scan_space, SpaceProgress, SpaceResult};
 use crate::startup::StartupEntry;
 use crate::update::{check_with, http_get, UpdateCheck, LATEST_RELEASE_URL};
@@ -102,6 +102,22 @@ pub struct ScanProgress {
     /// one rule: the hero shows this number verbatim, so a dropped or
     /// duplicated event cannot make the running total drift.
     pub total_bytes: u64,
+    /// The rules still in flight when this event went out, in catalogue order.
+    ///
+    /// Without it the counter reads "84 / 85 · AMD" — the rule that has just
+    /// *finished* — for as long as the slow one takes, which on a full Recycle
+    /// Bin was four minutes of the bar naming the wrong rule. Carries the id
+    /// alongside the label for the same reason the two fields above do: Rust
+    /// never localises, so the front end looks the French label up by id (see
+    /// CLAUDE.md).
+    pub running: Vec<RunningRule>,
+}
+
+/// One rule still being measured, as named by `ScanProgress::running`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunningRule {
+    pub rule_id: String,
+    pub label: String,
 }
 
 /// One step of a Clean, sent to the front end while `clean` runs. Emptying a
@@ -315,6 +331,16 @@ where
 /// return a number larger than makes sense to spawn for a handful of rules.
 const MAX_SCAN_WORKERS: usize = 8;
 
+/// What `scan_rules_with` keeps under one lock while the workers run: see the
+/// comment at its declaration for why these four travel together.
+struct ProgressState<'a, 'b> {
+    done: u32,
+    total_bytes: u64,
+    /// Indices of the rules started and not yet finished.
+    running: std::collections::BTreeSet<usize>,
+    emit: &'a mut (dyn FnMut(ScanProgress) + Send + 'b),
+}
+
 /// Scans every rule concurrently, refusing on the spot those that do not
 /// apply to this machine. `run` is injected so that the test exercises that
 /// refusal right here, and not in a copy of the loop; it is called from
@@ -345,11 +371,18 @@ pub fn scan_rules_with(
 
     let next_index = std::sync::atomic::AtomicUsize::new(0);
     let results: Mutex<Vec<Option<ScanResult>>> = Mutex::new(vec![None; rules.len()]);
-    // One lock around the running byte total, the done count and the actual
-    // callback: `total_bytes` is a cumulative sum the front end trusts
-    // verbatim, so the count, the sum and the emit must advance together or a
-    // race could hand out a `done` further along than its `total_bytes`.
-    let progress_state = Mutex::new((0u32, 0u64, progress));
+    // One lock around the running byte total, the done count, the set of rules
+    // in flight and the actual callback: `total_bytes` is a cumulative sum the
+    // front end trusts verbatim, so the count, the sum and the emit must
+    // advance together or a race could hand out a `done` further along than
+    // its `total_bytes`. The in-flight set lives under the same lock rather
+    // than beside it: two locks around one event is two orders to get wrong.
+    let progress_state = Mutex::new(ProgressState {
+        done: 0,
+        total_bytes: 0,
+        running: std::collections::BTreeSet::new(),
+        emit: progress,
+    });
     let first_error: Mutex<Option<String>> = Mutex::new(None);
 
     std::thread::scope(|scope| {
@@ -360,6 +393,7 @@ pub fn scan_rules_with(
                     return;
                 }
                 let r = &rules[index];
+                progress_state.lock().unwrap().running.insert(index);
                 let result = match &r.unavailable_reason {
                     // The rule does not apply on this machine: nothing to
                     // walk, and above all nothing to delete. Counted as
@@ -370,10 +404,12 @@ pub fn scan_rules_with(
                         total_bytes: 0,
                         paths: Vec::new(),
                         skipped: 1,
+                        cached: false,
                     },
                     None => match run(r) {
                         Ok(result) => result,
                         Err(e) => {
+                            progress_state.lock().unwrap().running.remove(&index);
                             let mut first_error = first_error.lock().unwrap();
                             if first_error.is_none() {
                                 *first_error = Some(e);
@@ -384,15 +420,27 @@ pub fn scan_rules_with(
                 };
                 {
                     let mut state = progress_state.lock().unwrap();
-                    state.0 += 1;
-                    state.1 += result.total_bytes;
-                    let (done, total_bytes) = (state.0, state.1);
-                    (state.2)(ScanProgress {
+                    state.done += 1;
+                    state.total_bytes += result.total_bytes;
+                    state.running.remove(&index);
+                    let (done, total_bytes) = (state.done, state.total_bytes);
+                    // A `BTreeSet<usize>` iterates in index order, which is
+                    // catalogue order.
+                    let running: Vec<RunningRule> = state
+                        .running
+                        .iter()
+                        .map(|&i| RunningRule {
+                            rule_id: rules[i].id.clone(),
+                            label: rules[i].label.clone(),
+                        })
+                        .collect();
+                    (state.emit)(ScanProgress {
                         done,
                         total,
                         rule_id: r.id.clone(),
                         label: r.label.clone(),
                         total_bytes,
+                        running,
                     });
                 }
                 results.lock().unwrap()[index] = Some(result);
@@ -498,10 +546,7 @@ pub fn clean_rules_with(
                 bytes += partial.freed_bytes;
                 report.merge(partial);
             }
-            Err(reason) => report.skipped.push(SkippedItem {
-                path: rule.id.clone(),
-                reason,
-            }),
+            Err(reason) => report.skipped.push(SkippedItem::new(rule.id.clone(), reason)),
         }
         progress(step(files, bytes));
     }
@@ -1029,7 +1074,22 @@ fn scan_rules_resolved(
     // the very files the user asked to keep.
     let mut rules = find_rules(rule_ids)?;
     exclusions::apply(&mut rules, &exclusions::load(&exclusions::store_path(None)?)?);
-    scan_rules_with(&rules, |r| scan_rule(r).map_err(|e| e.to_string()), progress)
+    // One cache per Analyze, so the fingerprint is taken once for the whole
+    // run. Only the Recycle Bin rule ever reaches it, and only it can come
+    // back marked `cached`.
+    let recycle = crate::recycle_cache::CachedRecycle::new();
+    scan_rules_with(
+        &rules,
+        |r| {
+            let mut result = scan_rule_with_api(r, &system_env, &|| {
+                recycle.query(&crate::scan::query_recycle_bin)
+            })
+            .map_err(|e| e.to_string())?;
+            result.cached = r.kind == RuleKind::RecycleBin && recycle.was_cached();
+            Ok(result)
+        },
+        progress,
+    )
 }
 
 pub fn clean_rules_in(
@@ -1631,6 +1691,7 @@ mod tests {
                     total_bytes: 100,
                     paths: Vec::new(),
                     skipped: 0,
+                    cached: false,
                 })
             },
             &mut |p| seen.lock().unwrap().push(p),
@@ -1659,6 +1720,79 @@ mod tests {
         assert_eq!(last.total_bytes, 300);
     }
 
+    /// The whole point of `running`: while the Recycle Bin took 243 s, the bar
+    /// read "84 / 85 · AMD" — the rule that had just *finished*. The event now
+    /// also names what is still in flight, so the hero can say what everyone
+    /// is actually waiting on.
+    ///
+    /// The two rules hand off explicitly rather than racing: "slow" announces
+    /// it has started, "fast" waits for that and finishes, so the event "fast"
+    /// emits provably has "slow" in flight.
+    #[test]
+    fn the_progress_event_names_the_rules_still_being_measured() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // One worker means no rule can be in flight while another reports:
+        // there is nothing to assert on such a machine.
+        if std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) < 2 {
+            return;
+        }
+        let rules = vec![rule("fast"), rule("slow")];
+        let slow_started = AtomicBool::new(false);
+        let fast_reported = AtomicBool::new(false);
+        let seen: Mutex<Vec<ScanProgress>> = Mutex::new(Vec::new());
+
+        /// Spins until the flag flips, or gives up after five seconds so a
+        /// mis-scheduled run fails the assertions instead of hanging the suite.
+        fn wait_for(flag: &AtomicBool) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !flag.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+        }
+
+        scan_rules_with(
+            &rules,
+            |r| {
+                if r.id == "slow" {
+                    slow_started.store(true, Ordering::Release);
+                    wait_for(&fast_reported);
+                } else {
+                    wait_for(&slow_started);
+                }
+                Ok(ScanResult {
+                    rule_id: r.id.clone(),
+                    file_count: 0,
+                    total_bytes: 0,
+                    paths: Vec::new(),
+                    skipped: 0,
+                    cached: false,
+                })
+            },
+            &mut |p| {
+                let last = p.rule_id == "slow";
+                seen.lock().unwrap().push(p);
+                if !last {
+                    fast_reported.store(true, Ordering::Release);
+                }
+            },
+        )
+        .unwrap();
+
+        let seen = seen.into_inner().unwrap();
+        let fast = seen.iter().find(|p| p.rule_id == "fast").unwrap();
+        assert_eq!(
+            fast.running.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+            ["slow"],
+            "the event names what is still being measured, not only what finished"
+        );
+        assert_eq!(fast.running[0].rule_id, "slow");
+        let slow = seen.iter().find(|p| p.rule_id == "slow").unwrap();
+        assert!(
+            slow.running.is_empty(),
+            "the last event has nothing left in flight"
+        );
+    }
+
     /// A rule that does not apply to this machine is measured by nobody, but
     /// the user still asked for it: it counts in `total` and reports zero
     /// bytes, so the bar never stalls short of its end.
@@ -1677,6 +1811,7 @@ mod tests {
                     total_bytes: 512,
                     paths: Vec::new(),
                     skipped: 0,
+                    cached: false,
                 })
             },
             &mut |p| seen.lock().unwrap().push(p),

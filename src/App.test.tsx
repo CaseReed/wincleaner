@@ -2,18 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-const { checkForUpdates, sandboxLeave, sandboxStatus } = vi.hoisted(() => ({
+const { checkForUpdates, sandboxLeave, sandboxStatus, listRules, scan } = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
   sandboxLeave: vi.fn(),
   sandboxStatus: vi.fn(),
+  listRules: vi.fn(),
+  scan: vi.fn(),
 }));
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
-    listRules: () => Promise.resolve([]),
+    listRules,
     runningBrowsers: () => Promise.resolve([]),
     listStartup: () => Promise.resolve([]),
+    scan,
     checkForUpdates,
     sandboxLeave,
     sandboxStatus,
@@ -55,6 +58,8 @@ beforeEach(() => {
   checkForUpdates.mockReset();
   sandboxLeave.mockReset();
   sandboxStatus.mockReset().mockResolvedValue(null);
+  listRules.mockReset().mockResolvedValue([]);
+  scan.mockReset().mockResolvedValue([]);
   vi.mocked(toast.info).mockClear();
   vi.mocked(toast.error).mockClear();
   document.documentElement.classList.remove("dark");
@@ -169,5 +174,44 @@ describe("leaving the sandbox when it fails", () => {
     await leaveOnce();
 
     await waitFor(() => expect(screen.queryByTestId("sandbox-banner")).toBeNull());
+  });
+});
+
+/// An Analyze on a loaded profile is minutes of work. It used to live inside
+/// `CleanPanel`, which the screen switch unmounts: a glance at Space or
+/// Settings threw the figures — and the ticked boxes — away.
+describe("the Cleanup screen across a navigation", () => {
+  const RULES = [
+    {
+      id: "windows.temp",
+      category: "System",
+      label: "Temporary files",
+      risk: "low",
+      kind: "files",
+      default_checked: true,
+    },
+  ];
+
+  it("keeps the analysis and the selection after a trip to Settings", async () => {
+    const user = userEvent.setup();
+    stubPrefersDark(false);
+    listRules.mockResolvedValue(RULES);
+    scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 3, total_bytes: 2048, paths: [], skipped: 0 },
+    ]);
+    render(<App />);
+
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    expect(await screen.findByTestId("total-bytes")).toHaveTextContent("2 KB");
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+    await user.click(screen.getByRole("button", { name: "Cleanup" }));
+
+    // The figures are still there, and `scan` was not run a second time.
+    expect(await screen.findByTestId("total-bytes")).toHaveTextContent("2 KB");
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Temporary files")).toBeChecked();
   });
 });

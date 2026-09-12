@@ -52,6 +52,7 @@ export const en = {
   "clean.cleaningRules.one": "Cleaning {count} rule…",
   "clean.cleaningRules.other": "Cleaning {count} rules…",
   "clean.progressAnalyzing": "Analyzing {counter} · {label}",
+  "clean.progressRunning": "Analyzing {counter} · still measuring: {labels}",
   "clean.progressCleaning": "Cleaning {counter} · {label}",
   "clean.empty": "Analyze to measure what can be freed.",
   "clean.search": "Search rules",
@@ -84,6 +85,8 @@ export const en = {
   "mode.trash": "Recycle Bin",
   "mode.permanent": "Permanent",
   "mode.autoHelp": "Auto: permanent deletion for low-risk items, recycle bin for the rest.",
+  "mode.trashHelp": "Recycle Bin: everything goes to the bin and stays recoverable until you empty it.",
+  "mode.permanentHelp": "Permanent: files are deleted outright. Nothing is recoverable.",
   "mode.recycleFirst":
     "The Recycle Bin is emptied first: whatever the other rules drop into it during the same pass is not swept away.",
   "mode.emptyDirs":
@@ -99,6 +102,10 @@ export const en = {
   "report.title": "Last cleanup",
   "report.summary": "{bytes} freed · {count} files deleted",
   "report.skipped": "Skipped ({count})",
+  "report.reason.in-use": "File in use or locked",
+  "report.reason.access-denied": "Access denied",
+  "report.reason.not-found": "Already gone",
+  "report.reason.other": "Could not be deleted",
   "report.copy": "Copy report",
   "report.copyJson": "Copy as JSON",
   "report.copied": "Report copied",
@@ -117,6 +124,9 @@ export const en = {
   "rules.mediumRisk": "medium risk",
   "rules.allVolumes": "all volumes",
   "rules.skipped": "{count} skipped",
+  "rules.cached": "cached",
+  "rules.cachedTitle":
+    "Reused from the last measurement: the Recycle Bin has not changed since. Emptying it, or sending anything to it, measures it again.",
   "rules.filesSr.one": " file",
   "rules.filesSr.other": " files",
   "rules.unavailable": "Unavailable on this machine: {reason}",

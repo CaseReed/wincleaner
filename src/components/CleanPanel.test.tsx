@@ -67,6 +67,7 @@ type Progress = {
   rule_id: string;
   label: string;
   total_bytes: number;
+  running?: { rule_id: string; label: string }[];
 };
 
 type CleanStep = {
@@ -405,6 +406,45 @@ describe("CleanPanel", () => {
       expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("2 KB");
     });
 
+    /// A folder exclusion stores `%VAR%\folder\**`: everything under that
+    /// folder is out. Hiding only the clicked row left its siblings on screen,
+    /// each still offering an Exclude button for a file already excluded.
+    it("hides every row under the folder, not just the one clicked", async () => {
+      const user = userEvent.setup();
+      api.scan.mockResolvedValue([
+        {
+          rule_id: "windows.temp",
+          file_count: 3,
+          total_bytes: 3072,
+          paths: [
+            String.raw`C:\Users\T\AppData\Local\Temp\cache\a.txt`,
+            String.raw`C:\Users\T\AppData\Local\Temp\CACHE\b.txt`,
+            String.raw`C:\Users\T\AppData\Local\Temp\other\c.txt`,
+          ],
+          skipped: 0,
+        },
+      ]);
+      render(<CleanPanel />);
+      await screen.findByLabelText("Temporary files");
+      await user.click(screen.getByRole("button", { name: /Analyze/ }));
+      await user.click(await screen.findByTestId("toggle-paths-windows.temp"));
+      expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("3 files");
+
+      await user.click(screen.getByTestId("exclude-folder-windows.temp-0"));
+
+      // Both rows of that folder go, whatever their casing; the file in the
+      // sibling folder stays, and keeps its own index.
+      await waitFor(() =>
+        expect(screen.queryByTestId("exclude-file-windows.temp-0")).toBeNull(),
+      );
+      expect(screen.queryByTestId("exclude-file-windows.temp-1")).toBeNull();
+      expect(screen.getByTestId("exclude-file-windows.temp-2")).toBeInTheDocument();
+      // The count drops by the two rows actually hidden, and the figures are
+      // flagged stale rather than recomputed.
+      expect(screen.getByTestId("result-windows.temp")).toHaveTextContent("1 file");
+      expect(screen.getByTestId("stale-windows.temp")).toBeInTheDocument();
+    });
+
     it("keeps the row when the back end refuses", async () => {
       api.addExclusion.mockRejectedValue("not under %TEMP%");
       const user = await openPaths();
@@ -462,7 +502,13 @@ describe("CleanPanel", () => {
     api.clean.mockResolvedValue({
       freed_bytes: 2048,
       deleted: 2,
-      skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+      skipped: [
+        {
+          path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`,
+          reason: "file in use",
+          code: "in-use",
+        },
+      ],
     });
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
@@ -479,7 +525,8 @@ describe("CleanPanel", () => {
     const report = await screen.findByTestId("clean-report");
     expect(report).toHaveTextContent("2 KB");
     expect(report).toHaveTextContent("2");
-    expect(report).toHaveTextContent("file in use");
+    // The code translated, never the raw message.
+    expect(report).toHaveTextContent("File in use or locked");
   });
 
   it("copies the report as text to the clipboard", async () => {
@@ -493,7 +540,13 @@ describe("CleanPanel", () => {
     api.clean.mockResolvedValue({
       freed_bytes: 2048,
       deleted: 2,
-      skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+      skipped: [
+        {
+          path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`,
+          reason: "file in use",
+          code: "in-use",
+        },
+      ],
     });
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");
@@ -510,7 +563,24 @@ describe("CleanPanel", () => {
     expect(text).toContain("WinCleaner");
     expect(text).toContain("Temporary files — 2 files measured, 2 KB");
     expect(text).toContain("Total: 2 files, 2 KB freed");
-    expect(text).toContain("file in use");
+    expect(text).toContain("File in use or locked");
+  });
+
+  /// The footer used to render `mode.autoHelp` whatever was selected, so
+  /// picking Permanent still read "recycle bin for the rest".
+  it("shows the help text of the selected deletion mode", async () => {
+    const user = userEvent.setup();
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    const help = screen.getByTestId("mode-help");
+    expect(help).toHaveTextContent("Auto: permanent deletion for low-risk items");
+
+    await user.selectOptions(screen.getByLabelText("Deletion mode"), "trash");
+    expect(help).toHaveTextContent("everything goes to the bin and stays recoverable");
+
+    await user.selectOptions(screen.getByLabelText("Deletion mode"), "permanent");
+    expect(help).toHaveTextContent("Nothing is recoverable");
+    expect(help).not.toHaveTextContent("Auto:");
   });
 
   it("defaults to the auto mode", async () => {
@@ -1075,6 +1145,53 @@ describe("CleanPanel", () => {
     ]);
     await waitFor(() => expect(screen.queryByTestId("scan-progress")).toBeNull());
     expect(screen.getByTestId("total-bytes")).toHaveTextContent("4 KB");
+  });
+
+  /// The counter used to name the rule that had just *finished*: with a full
+  /// Recycle Bin measured last, the hero read "84 / 85 · AMD" for four minutes
+  /// while the bin was the one everything was waiting on.
+  it("names the rules still being measured, not the one that just finished", async () => {
+    const user = userEvent.setup();
+    api.listRules.mockResolvedValue([...RULES, RECYCLE_BIN]);
+    let release: (results: unknown[]) => void = () => {};
+    api.scan.mockImplementation(
+      () => new Promise((resolve) => { release = resolve as typeof release; })
+    );
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+    act(() =>
+      emitProgress({
+        done: 2,
+        total: 3,
+        rule_id: "edge.cache",
+        label: "Microsoft Edge cache",
+        total_bytes: 1024,
+        running: [{ rule_id: "windows.recycle-bin", label: "Recycle Bin" }],
+      })
+    );
+    expect(screen.getByTestId("scan-progress")).toHaveTextContent(
+      "Analyzing 2 / 3 · still measuring: Recycle Bin"
+    );
+
+    // The last event has nothing left in flight: the counter goes back to
+    // naming what it just closed.
+    act(() =>
+      emitProgress({
+        done: 3,
+        total: 3,
+        rule_id: "windows.recycle-bin",
+        label: "Recycle Bin",
+        total_bytes: 2048,
+        running: [],
+      })
+    );
+    expect(screen.getByTestId("scan-progress")).toHaveTextContent(
+      "Analyzing 3 / 3 · Recycle Bin"
+    );
+    release([]);
   });
 
   /// A live region fed by every event would read the same sentence hundreds of

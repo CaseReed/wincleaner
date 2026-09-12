@@ -472,3 +472,39 @@ offers no way to delete anything.
 10. If one of your known folders is redirected outside your profile (a
     `Videos` folder moved to `D:\`), it must be **named** under the bars as
     not measured, and contribute nothing to the total — never silently walked.
+
+## VM-22 — The Recycle Bin measurement cache — to be run by the user
+
+Not run automatically: the whole point is the real `SHQueryRecycleBinW` on a
+real, loaded bin. The suite only ever sees a `TempDir` store and a made-up
+fingerprint.
+
+1. Make sure the Recycle Bin actually holds something — a few thousand files
+   if you can, otherwise the difference is not visible. Delete
+   `%APPDATA%\WinCleaner\recycle-bin.toml` if it exists, so this is a cold
+   start.
+2. Cleanup > tick **Recycle Bin** > **Analyze**, and time it. On a full bin
+   the run takes as long as the bin does — minutes, in the case this was
+   written for. While it runs, the counter must read **still measuring:
+   Recycle Bin** (French: **en cours : Corbeille**), not the name of whatever
+   rule happened to finish last.
+3. `%APPDATA%\WinCleaner\recycle-bin.toml` must now exist and hold a
+   `fingerprint`, an `items` count and a `bytes` figure. The file must carry
+   no path and no account name — only drive letters, your SID and timestamps.
+4. **Analyze again, changing nothing.** It must come back in seconds, the
+   Recycle Bin row must show the same figures as before, and that row must be
+   marked **cached** (French: **en cache**). Hover it: the tooltip says the
+   bin has not changed since.
+5. Now empty the Recycle Bin from Explorer and **Analyze** again. The row must
+   be re-measured — no **cached** mark — and must read 0 bytes. Send one file
+   to the bin and Analyze once more: re-measured again, and the figure follows
+   the file.
+6. Corrupt the store on purpose (`echo not toml > "%APPDATA%\WinCleaner\
+   recycle-bin.toml"`) and Analyze. Nothing may fail and nothing may be
+   refused: the Analyze simply measures again, and the file is replaced with a
+   valid one. This store fails **open** — unlike `exclusions.toml`, which
+   aborts the scan — because a lost cache costs time, never a file.
+7. Clean with the Recycle Bin ticked. What gets emptied must be whatever is
+   actually in the bin, never the cached figure: the report's freed total is
+   allowed to differ from what the row showed, and the bin must come back
+   empty in Explorer.

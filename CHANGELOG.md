@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Recycle Bin was the whole Analyze.** Measured on a loaded profile,
+  `SHQueryRecycleBinW` took **243 s** cold for 110,553 items and 19 GB, while
+  every other rule of the same run finished in seconds: the Analyze simply
+  waited on that one call. The last measurement is now remembered in
+  `%APPDATA%\WinCleaner\recycle-bin.toml`, keyed on a cheap fingerprint of the
+  bin — the `LastWriteTime` of `<drive>\$Recycle.Bin\<your SID>` on each fixed
+  drive, plus the drive list. Windows restamps that directory whenever
+  anything is filed into the bin or taken out of it, so emptying the bin, or
+  dropping one more file into it, invalidates the cache on its own; the drive
+  list covers the one case timestamps alone would miss, a bin on a disk
+  plugged in between two runs. A rule answered from the cache says so on its
+  row. Unlike the exclusions store this one deliberately fails open: a
+  missing, unreadable or corrupt file is ignored and rewritten, because the
+  worst a lost cache can cost is one slow Analyze — nothing is ever deleted on
+  the strength of a cached figure.
+
+- **The progress bar named the wrong rule.** `scan-progress` carried only the
+  rule that had just *finished*, so while the Recycle Bin took its four
+  minutes the hero read "84 / 85 · AMD" — a rule that was long done. The event
+  now also carries the rules still in flight, and the counter says
+  "Analyzing 84 / 85 · still measuring: Recycle Bin" while any of them is,
+  falling back to the finished rule on the last event.
+
+- **Excluding a folder hid only the row that was clicked.** The stored pattern
+  is `%VAR%\folder\**`, so the whole folder is out of the rule — but its
+  siblings stayed on screen, each still offering an Exclude button for a file
+  already excluded. Every listed path under that folder now goes at once
+  (matched case-insensitively, as everywhere else a Windows path is compared),
+  and the file count drops by the number of rows actually hidden. The byte
+  total is still left as measured, with the same "Analyze again to refresh the
+  figures" note: a scan result carries no per-file size, and inventing one
+  would be worse than admitting the figure is stale.
+
+- **The cleanup report quoted raw shell errors.** A locked file read
+  ``Error during a `trash` operation: Unknown { description: "Some operations
+  were aborted" }``, and a file the system refuses read "(os error 1920)".
+  Every skipped item now also carries a stable code — `in-use`,
+  `access-denied`, `not-found`, `other`, derived once in Rust from the
+  sharing- and lock-violation classes, os errors 5, 32, 33 and 1920, and the
+  shell's own "aborted" — which the window turns into its own sentence ("File
+  in use or locked"). The raw message stays one hover away, and stays verbatim
+  in the JSON report, where a script or a bug report needs it.
+
+- **The deletion-mode help always described Auto.** The footer rendered
+  `mode.autoHelp` whatever was selected, so picking Permanent still read
+  "recycle bin for the rest". It now shows the help for the mode in the
+  picker, in both languages: the Recycle Bin keeps everything recoverable, and
+  Permanent recovers nothing.
+
+- **Switching screens threw the analysis away.** The scan results, the last
+  cleanup report and the ticked boxes lived inside the Cleanup panel, which
+  the screen switch unmounts: a glance at Space or Settings cost a full
+  re-Analyze — minutes, on the profile that needs it most. They now live in
+  `App`, so they survive the trip. Entering or leaving the sandbox still
+  clears them, because the catalogue and the profile both change with it.
+
+- **The Space screen showed "0 B" before measuring anything.** Nothing had
+  been measured, and a zero is a figure. It now shows the em dash the Cleanup
+  hero already shows in the same situation.
+
 ## [0.9.0] - 2026-09-12
 
 ### Added

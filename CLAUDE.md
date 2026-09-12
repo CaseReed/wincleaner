@@ -47,6 +47,21 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   that exists and cannot be read or parsed makes scan and clean **error**, never
   proceed as if nothing were excluded. Written atomically: temporary file, then
   rename over the target.
+- The Recycle Bin measurement cache (`src-tauri/src/recycle_cache.rs`,
+  `%APPDATA%\WinCleaner\recycle-bin.toml`) **fails open**, the exact opposite
+  of the exclusions store above, and that asymmetry is deliberate: a missing,
+  unreadable or corrupt entry is ignored and rewritten, because a lost cache
+  costs one slow Analyze while a lost exclusion costs a file. Nothing is ever
+  deleted on the strength of a cached figure — `clean.rs` re-queries the bin
+  on its own path. The key is the `LastWriteTime` of
+  `<drive>\$Recycle.Bin\<current user SID>` per fixed drive plus the drive
+  list; the query stays injected (`scan::RecycleQuery`) so tests use a
+  `TempDir` store and a fake fingerprint, never the real bin.
+- A `clean.rs::SkippedItem` is built through `SkippedItem::new`, never as a
+  literal: the stable `code` (`in-use`, `access-denied`, `not-found`, `other`)
+  is derived there from the raw message, so no call site can set one that
+  disagrees with the sentence next to it. The window shows the translated
+  code; the raw message stays in a `title` and in the JSON report.
 - Every rule lives in `src-tauri/rules.toml`; allowed variables: TEMP,
   LOCALAPPDATA, APPDATA, USERPROFILE; the resolved path must be under the
   profile. Variable values go through `globset::escape` (a `[` in an account

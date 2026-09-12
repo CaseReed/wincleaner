@@ -1,6 +1,7 @@
 pub mod clean;
 pub mod commands;
 pub mod exclusions;
+pub mod recycle_cache;
 pub mod rules;
 pub mod sandbox;
 pub mod scan;

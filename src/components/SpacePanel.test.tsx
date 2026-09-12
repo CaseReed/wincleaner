@@ -78,6 +78,9 @@ describe("SpacePanel", () => {
     render(<SpacePanel />);
     expect(screen.getByText("Measure to see where your space has gone.")).toBeInTheDocument();
     expect(api.spaceScan).not.toHaveBeenCalled();
+    // Not "0 B": nothing has been measured, and the Cleanup hero says exactly
+    // that with the same em dash.
+    expect(screen.getByTestId("space-total")).toHaveTextContent("—");
   });
 
   it("shows the roots, the largest files and the largest folders", async () => {

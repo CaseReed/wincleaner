@@ -193,6 +193,18 @@ export function RuleCategory({
                             {t("rules.skipped", { count: formatCount(result.skipped) })}
                           </span>
                         )}
+                        {/* The Recycle Bin's figures can come straight from
+                            the cache: measuring a full bin takes minutes, so
+                            the row says when it did not have to. */}
+                        {result.cached && (
+                          <span
+                            data-testid={`cached-${rule.id}`}
+                            title={t("rules.cachedTitle")}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {t("rules.cached")}
+                          </span>
+                        )}
                         <span
                           className={cn(
                             "w-24 text-right font-mono tnum text-sm",

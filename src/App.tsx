@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell, type Screen } from "@/components/AppShell";
-import { CleanPanel } from "@/components/CleanPanel";
+import { CleanPanel, emptyCleanSession, type CleanSession } from "@/components/CleanPanel";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { SpacePanel } from "@/components/SpacePanel";
 import { StartupPanel } from "@/components/StartupPanel";
@@ -68,6 +68,11 @@ function AppBody() {
   /// Creating the sandbox writes a few hundred files and leaving it removes
   /// them: both take long enough for a second click to land.
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  /// The Cleanup screen's own state, held here rather than inside the panel:
+  /// an Analyze on a loaded profile is minutes of work, and a glance at Space
+  /// or Settings used to throw it — and the last cleanup report, and the
+  /// ticked boxes — away on the way back.
+  const [cleanSession, setCleanSession] = useState<CleanSession>(emptyCleanSession);
 
   /// The backend is the authority: a reload of the webview must not lose a
   /// sandbox that is still open on the Rust side.
@@ -81,6 +86,9 @@ function AppBody() {
     setSandboxBusy(true);
     try {
       const summary = await sandboxEnter();
+      // The catalogue and the profile both change: measurements of the real
+      // profile describe nothing that is on screen any more.
+      setCleanSession(emptyCleanSession);
       setSandbox(summary);
       toast.success(t("sandbox.created"));
     } catch (err) {
@@ -99,6 +107,7 @@ function AppBody() {
     setSandboxBusy(true);
     try {
       await sandboxLeave();
+      setCleanSession(emptyCleanSession);
       setSandbox(null);
       toast.success(t("sandbox.removed"));
     } catch (err) {
@@ -165,9 +174,15 @@ function AppBody() {
     >
       {/* Keyed on the sandbox: entering or leaving swaps the whole catalogue,
           so the panel starts over rather than showing the previous profile's
-          rules and measurements. */}
+          rules and measurements — the session above is reset alongside it,
+          since it outlives the mount on purpose. */}
       {screen === "clean" && (
-        <CleanPanel key={sandbox ? sandbox.root : "real"} sandbox={sandbox} />
+        <CleanPanel
+          key={sandbox ? sandbox.root : "real"}
+          sandbox={sandbox}
+          session={cleanSession}
+          onSessionChange={setCleanSession}
+        />
       )}
       {screen === "space" && <SpacePanel sandbox={sandbox} />}
       {screen === "startup" && <StartupPanel sandbox={sandbox} />}

@@ -53,7 +53,13 @@ const SCANNED: ScanResult[] = [
 const CLEAN_REPORT: CleanReport = {
   freed_bytes: 1_422_707_916,
   deleted: 52,
-  skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+  skipped: [
+    {
+      path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`,
+      reason: "file in use",
+      code: "in-use",
+    },
+  ],
 };
 
 const GENERATED_AT = new Date("2026-09-12T14:32:00.000Z");
@@ -116,7 +122,11 @@ describe("buildReportText", () => {
     expect(text).toContain("Recycle Bin — 40 files measured, 128 MB (2 skipped)");
     expect(text).toContain("Total: 52 files, 1.3 GB freed");
     expect(text).toContain("Skipped:");
-    expect(text).toContain(String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp — file in use`);
+    // The translated reason, not the raw message: the report is read by a
+    // person, and the raw one stays in the JSON and in the row's tooltip.
+    expect(text).toContain(
+      String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp — File in use or locked`,
+    );
   });
 
   it("omits the skipped section when nothing was skipped", () => {
@@ -157,7 +167,13 @@ describe("buildReportJson", () => {
         },
       ],
       totals: { files_deleted: 52, bytes_freed: 1_422_707_916 },
-      skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+      skipped: [
+        {
+          path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`,
+          reason: "file in use",
+          code: "in-use",
+        },
+      ],
     });
   });
 

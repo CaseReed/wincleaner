@@ -223,12 +223,24 @@ export function SpacePanel({
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
               <p className="eyebrow text-muted-foreground">{t("space.total")}</p>
-              <p
-                data-testid="space-total"
-                className="mt-1 font-mono tnum text-3xl font-semibold tracking-tight"
-              >
-                {formatBytes(busy ? (progress?.total_bytes ?? 0) : total)}
-              </p>
+              {/* Before the first measure there is no figure, and "0 B" would
+                  be one: the em dash the Cleanup hero shows says the same
+                  thing honestly. */}
+              {result || busy ? (
+                <p
+                  data-testid="space-total"
+                  className="mt-1 font-mono tnum text-3xl font-semibold tracking-tight"
+                >
+                  {formatBytes(busy ? (progress?.total_bytes ?? 0) : total)}
+                </p>
+              ) : (
+                <p
+                  data-testid="space-total"
+                  className="mt-1 text-3xl leading-none font-normal text-muted-foreground"
+                >
+                  —
+                </p>
+              )}
             </div>
             <Button size="lg" onClick={() => void onMeasure()} aria-busy={busy} disabled={busy}>
               {busy ? (
