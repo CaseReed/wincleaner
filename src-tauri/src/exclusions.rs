@@ -158,6 +158,49 @@ pub fn pattern_for(path: &str, scope: Scope, lookup: EnvLookup) -> Result<String
     Ok(pattern)
 }
 
+/// Stable code, not a sentence, for the one refusal the window turns into its
+/// own localized message — the same contract `update.rs` uses for its error
+/// codes.
+pub const RULE_ROOT_CODE: &str = "exclusion-is-rule-root";
+
+/// Whether the folder holding `path` is one of the roots the rule walks.
+///
+/// Excluding a rule's own root collapses it to `%VAR%\**`, or to the very
+/// directory the rule descends from: the rule then matches nothing at all, and
+/// the checkbox still says it is on. A user who wants that wants the rule
+/// unchecked, so this is refused rather than silently emptying it.
+///
+/// The comparison is against `scan::glob_root`, the literal prefix the walk
+/// actually starts from — not against the raw pattern, which still carries its
+/// wildcards.
+pub fn folder_is_rule_root(path: &str, rule: &Rule, lookup: EnvLookup) -> Result<bool, String> {
+    let path = path.replace('/', "\\");
+    let folder = Path::new(&path)
+        .parent()
+        .ok_or_else(|| format!("\"{path}\" has no parent directory"))?
+        .to_string_lossy()
+        .to_string();
+    let folder = folder.trim_end_matches('\\');
+    let patterns = crate::rules::resolved_paths_with(rule, lookup).map_err(|e| e.to_string())?;
+    Ok(patterns.iter().any(|pattern| {
+        let root = crate::scan::glob_root(&crate::scan::to_slash(pattern)).replace('/', "\\");
+        root.trim_end_matches('\\').eq_ignore_ascii_case(folder)
+    }))
+}
+
+/// `pattern_for`, plus the one refusal that needs the rule to decide.
+pub fn pattern_for_rule(
+    path: &str,
+    scope: Scope,
+    rule: &Rule,
+    lookup: EnvLookup,
+) -> Result<String, String> {
+    if scope == Scope::Folder && folder_is_rule_root(path, rule, lookup)? {
+        return Err(RULE_ROOT_CODE.to_string());
+    }
+    pattern_for(path, scope, lookup)
+}
+
 /// Where the store lives. Under a sandbox root when one is active, so a
 /// sandbox never reads nor writes the user's real exclusions.
 pub fn store_path(sandbox_root: Option<&Path>) -> Result<PathBuf, String> {
@@ -299,6 +342,53 @@ mod tests {
     fn a_path_outside_every_variable_is_refused() {
         let err = pattern_for(r"D:\elsewhere\x.tmp", Scope::File, &env).unwrap_err();
         assert!(err.contains("not under"), "{err}");
+    }
+
+    fn temp_rule() -> Rule {
+        Rule {
+            id: "windows.temp".to_string(),
+            category: "System".to_string(),
+            label: "Temporary files".to_string(),
+            paths: vec![r"%TEMP%\**\*".to_string()],
+            exclude: Vec::new(),
+            risk: Risk::Low,
+            kind: Default::default(),
+            default_checked: true,
+            note: None,
+            unavailable_reason: None,
+        }
+    }
+
+    /// Excluding the folder of a file that sits directly in the rule's root
+    /// would collapse the rule to `%TEMP%\**` and silently empty it, while its
+    /// checkbox still read as on. The file itself stays excludable: that is
+    /// the narrowing the user actually asked for.
+    #[test]
+    fn excluding_the_rule_root_as_a_folder_is_refused_but_the_file_is_not() {
+        let rule = temp_rule();
+        let at_root = r"C:\Users\jo\AppData\Local\Temp\stray.tmp";
+
+        let err = pattern_for_rule(at_root, Scope::Folder, &rule, &env).unwrap_err();
+        assert_eq!(err, RULE_ROOT_CODE);
+
+        assert_eq!(
+            pattern_for_rule(at_root, Scope::File, &rule, &env).unwrap(),
+            r"%TEMP%\stray.tmp",
+        );
+    }
+
+    /// One level down is a genuine narrowing, not a disabling: it must still
+    /// go through.
+    #[test]
+    fn excluding_a_folder_below_the_rule_root_is_allowed() {
+        let rule = temp_rule();
+        let nested = r"C:\Users\jo\AppData\Local\Temp\nested\installer.log";
+
+        assert!(!folder_is_rule_root(nested, &rule, &env).unwrap());
+        assert_eq!(
+            pattern_for_rule(nested, Scope::Folder, &rule, &env).unwrap(),
+            r"%TEMP%\nested\**",
+        );
     }
 
     #[test]

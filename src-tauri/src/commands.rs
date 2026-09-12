@@ -1074,6 +1074,18 @@ pub fn clean_rules_in(
     ))
 }
 
+/// One rule by id, from whichever catalogue is live.
+fn rule_for(state: &SandboxState, rule_id: &str) -> Result<Rule, String> {
+    let ids = [rule_id.to_string()];
+    {
+        let guard = lock(state);
+        if let Some(active) = guard.as_ref() {
+            return Ok(pick_rules(&active.catalogue, &ids)?.remove(0));
+        }
+    }
+    Ok(find_rules(&ids)?.remove(0))
+}
+
 /// Records an exclusion for the file at `index` in the last analysis of
 /// `rule_id`. The path is never sent by the front end: it is read back from
 /// `LastPaths` here.
@@ -1088,14 +1100,17 @@ pub fn add_exclusion_in(
         format!("no path #{index} in the last analysis of \"{rule_id}\": analyze again")
     })?;
 
+    // The rule itself is needed to refuse excluding the folder that IS one of
+    // its walk roots, which would empty the rule instead of narrowing it.
+    let rule = rule_for(state, rule_id)?;
     let pattern = {
         let guard = lock(state);
         match guard.as_ref() {
             Some(active) => {
                 let lookup = |n: &str| active.fixture.lookup(n);
-                exclusions::pattern_for(&path, scope, &lookup)?
+                exclusions::pattern_for_rule(&path, scope, &rule, &lookup)?
             }
-            None => exclusions::pattern_for(&path, scope, &system_env)?,
+            None => exclusions::pattern_for_rule(&path, scope, &rule, &system_env)?,
         }
     };
 
@@ -2218,11 +2233,20 @@ mod tests {
         let last = LastPaths::default();
         let ids = vec!["windows.temp".to_string()];
 
-        scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
-        let picked = last.path_at("windows.temp", 0).unwrap();
+        let scanned = scan_rules_in(&state, &last, &ids, &mut |_| {}).unwrap();
+        // `paths` comes out of a HashMap, so its order is arbitrary: pick a
+        // file that is genuinely nested rather than trusting index 0, which
+        // may be the one sitting directly in the rule's root (and which
+        // `add_exclusion` now refuses for the folder scope).
+        let index = scanned[0]
+            .paths
+            .iter()
+            .position(|p| p.contains(r"\nested\") && !p.contains(r"\deeper\"))
+            .expect("the fixture must hold a nested temp file");
+        let picked = last.path_at("windows.temp", index).unwrap();
         let folder = std::path::Path::new(&picked).parent().unwrap().to_path_buf();
 
-        let added = add_exclusion_in(&state, &last, "windows.temp", 0, Scope::Folder).unwrap();
+        let added = add_exclusion_in(&state, &last, "windows.temp", index, Scope::Folder).unwrap();
         assert!(added.pattern.ends_with(r"\**"), "{}", added.pattern);
 
         clean_rules_in(&state, &ids, CleanMode::Permanent, &mut |_| {}).unwrap();

@@ -132,6 +132,8 @@ export const en = {
   "exclusions.removed": "Exclusion removed",
   "exclusions.added": "{pattern} will no longer be cleaned",
   "exclusions.addFailed": "This path could not be excluded.",
+  "exclusions.rootFolder":
+    "This folder is the rule’s own root: uncheck the rule instead of excluding it.",
   "exclusions.addedOn": "Added on {date}",
 
   // Reclaim gauge

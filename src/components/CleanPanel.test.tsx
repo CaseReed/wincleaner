@@ -31,6 +31,11 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
+import { toast } from "sonner";
 import { CleanPanel } from "./CleanPanel";
 
 const RULES = [
@@ -91,6 +96,8 @@ describe("CleanPanel", () => {
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     api.runningBrowsers.mockReset().mockResolvedValue([]);
     api.sandboxVerify.mockReset();
+    vi.mocked(toast.error).mockReset();
+    vi.mocked(toast.success).mockReset();
     api.addExclusion.mockReset().mockResolvedValue({
       rule_id: "windows.temp",
       rule_label: "Temporary files",
@@ -395,6 +402,23 @@ describe("CleanPanel", () => {
       await waitFor(() => expect(api.addExclusion).toHaveBeenCalled());
       expect(screen.getByTestId("exclude-file-windows.temp-0")).toBeInTheDocument();
       expect(screen.queryByTestId("stale-windows.temp")).toBeNull();
+    });
+
+    /// Excluding a rule's own root would empty the rule while its checkbox
+    /// still read as on. The back end refuses with a stable code; the window
+    /// is what turns that into advice in the user's language.
+    it("turns the rule-root refusal into its own message, not the raw code", async () => {
+      api.addExclusion.mockRejectedValue("exclusion-is-rule-root");
+      const user = await openPaths();
+      await user.click(screen.getByTestId("exclude-folder-windows.temp-0"));
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          "This folder is the rule\u2019s own root: uncheck the rule instead of excluding it.",
+        ),
+      );
+      // The row stays: nothing was excluded.
+      expect(screen.getByTestId("exclude-folder-windows.temp-0")).toBeInTheDocument();
     });
 
     /// A fresh analysis already has the exclusions applied, and the old

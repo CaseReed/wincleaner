@@ -12,6 +12,7 @@ import {
   filterRules,
   groupByCategory,
   addExclusion,
+  EXCLUSION_RULE_ROOT,
   listRules,
   onCleanProgress,
   onScanProgress,
@@ -520,7 +521,13 @@ export function CleanPanel({
       });
       toast.success(t("exclusions.added", { pattern: added.pattern }));
     } catch (err) {
-      toast.error(String(err) || t("exclusions.addFailed"));
+      // One rejection is a stable code rather than a sentence, because it is
+      // advice to the user and has to be said in their language.
+      toast.error(
+        String(err).includes(EXCLUSION_RULE_ROOT)
+          ? t("exclusions.rootFolder")
+          : String(err) || t("exclusions.addFailed"),
+      );
     }
   }
 

@@ -129,6 +129,8 @@ export const fr: Dictionary = {
   "exclusions.removed": "Exclusion supprimée",
   "exclusions.added": "{pattern} ne sera plus nettoyé",
   "exclusions.addFailed": "Ce chemin n’a pas pu être exclu.",
+  "exclusions.rootFolder":
+    "Ce dossier est la racine de la règle : décochez la règle plutôt que de l’exclure.",
   "exclusions.addedOn": "Ajoutée le {date}",
 
   // Jauge de récupération

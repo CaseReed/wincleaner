@@ -240,6 +240,13 @@ export function sandboxRemoveOrphans(): Promise<number> {
 /// directory holding it.
 export type ExclusionScope = "file" | "folder";
 
+/// `add_exclusion` rejects with this stable code — not a sentence — when the
+/// folder asked for is one of the rule's own walk roots, which would empty the
+/// rule rather than narrow it. The window turns it into its own localized
+/// message; every other rejection is already a sentence.
+/// Mirrors `src-tauri/src/exclusions.rs::RULE_ROOT_CODE`.
+export const EXCLUSION_RULE_ROOT = "exclusion-is-rule-root";
+
 /// Mirrors `src-tauri/src/commands.rs::ExclusionView`. `pattern` is always in
 /// `%VAR%\…` form — the back end folds the resolved profile back into the
 /// variable, so nothing here carries an account name.
