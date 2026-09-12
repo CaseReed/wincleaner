@@ -330,6 +330,37 @@ describe("CleanPanel", () => {
     expect(report).toHaveTextContent("file in use");
   });
 
+  it("copies the report as text to the clipboard", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 0, total_bytes: 0, paths: [], skipped: 0 },
+    ]);
+    api.clean.mockResolvedValue({
+      freed_bytes: 2048,
+      deleted: 2,
+      skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+    });
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+    await screen.findByTestId("clean-report");
+
+    await user.click(screen.getByTestId("copy-report"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const text = writeText.mock.calls[0][0] as string;
+    expect(text).toContain("WinCleaner");
+    expect(text).toContain("Temporary files — 2 files measured, 2 KB");
+    expect(text).toContain("Total: 2 files, 2 KB freed");
+    expect(text).toContain("file in use");
+  });
+
   it("defaults to the auto mode", async () => {
     render(<CleanPanel />);
     await screen.findByLabelText("Temporary files");

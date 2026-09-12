@@ -1,12 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
+import { ClipboardCopy, Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
+import whatsNew from "@/generated/whats-new.json";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ReclaimGauge, prefersReducedMotion } from "@/components/ReclaimGauge";
 import { RuleCategory } from "@/components/RuleCategory";
-import { useI18n, type I18n, type TranslationKey } from "@/i18n";
+import { useI18n, type I18n } from "@/i18n";
+import { buildReportData, buildReportJson, buildReportText, MODE_LABEL } from "@/lib/report";
 import {
   clean,
   filterRules,
@@ -31,12 +33,6 @@ import {
   type ScanResult,
 } from "@/lib/api";
 import { ruleLabel } from "@/lib/rule-i18n";
-
-const MODE_LABEL: Record<CleanMode, TranslationKey> = {
-  auto: "mode.auto",
-  trash: "mode.trash",
-  permanent: "mode.permanent",
-};
 
 /// Categories that start folded: `Applications` is hundreds of rows, almost all
 /// of them converted Winapp2 rules that are unchecked by default, and unfolding
@@ -258,6 +254,12 @@ export function CleanPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [results, setResults] = useState<ScanResult[] | null>(null);
   const [report, setReport] = useState<CleanReport | null>(null);
+  /// What Analyze last measured for the rules that were just cleaned, and
+  /// when the clean finished: captured together with `report` so "Copy
+  /// report"/"Copy as JSON" describe the run just shown, not whatever
+  /// `results` holds by the time the button is clicked (cleared right after).
+  const [reportRules, setReportRules] = useState<ScanResult[]>([]);
+  const [reportGeneratedAt, setReportGeneratedAt] = useState<Date | null>(null);
   const [verdict, setVerdict] = useState<SandboxVerdict | null>(null);
   /// The verify call failed. Shown inside the verdict card as a line of its
   /// own: it says nothing about the clean, which has already been reported.
@@ -597,9 +599,14 @@ export function CleanPanel({
     // What was cleaned, captured before `results` is dropped: the verdict is
     // scoped to these rules, so it must be the list Clean was actually given.
     const cleaned = cleanIds;
+    // Same reason: the report's per-rule breakdown reads off this Analyze
+    // snapshot, not `results`, which is about to be cleared below.
+    const cleanedResultsSnapshot = checkedResults;
     try {
       const done = await clean(cleaned, mode);
       setReport(done);
+      setReportRules(cleanedResultsSnapshot);
+      setReportGeneratedAt(new Date());
       setResults(null);
       setAnnouncement(
         t("announce.cleanDone", {
@@ -625,6 +632,44 @@ export function CleanPanel({
       cleanPending.current = false;
       setBusyAction(null);
     }
+  }
+
+  /// Same clipboard mechanism as "Copy link" in Settings (`navigator.clipboard
+  /// .writeText`, a success toast, and a failure toast instead of a thrown
+  /// error): no clipboard permission just means the text stays on screen.
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(t("report.copied"));
+    } catch {
+      toast.error(t("report.copyFailed"));
+    }
+  }
+
+  function onCopyReport() {
+    if (!report || !reportGeneratedAt) return;
+    const data = buildReportData(
+      rules,
+      reportRules,
+      report,
+      mode,
+      whatsNew.version,
+      reportGeneratedAt
+    );
+    void copyToClipboard(buildReportText(data, i18n));
+  }
+
+  function onCopyReportJson() {
+    if (!report || !reportGeneratedAt) return;
+    const data = buildReportData(
+      rules,
+      reportRules,
+      report,
+      mode,
+      whatsNew.version,
+      reportGeneratedAt
+    );
+    void copyToClipboard(JSON.stringify(buildReportJson(data), null, 2));
   }
 
   if (rulesError) {
@@ -962,9 +1007,31 @@ export function CleanPanel({
             aria-labelledby={reportTitleId}
             className="rounded-lg border bg-card p-5"
           >
-            <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
-              {t("report.title")}
-            </h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
+                {t("report.title")}
+              </h2>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  data-testid="copy-report"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyReport}
+                >
+                  <ClipboardCopy className="size-3.5" aria-hidden="true" />
+                  {t("report.copy")}
+                </Button>
+                <Button
+                  data-testid="copy-report-json"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyReportJson}
+                >
+                  <ClipboardCopy className="size-3.5" aria-hidden="true" />
+                  {t("report.copyJson")}
+                </Button>
+              </div>
+            </div>
             <p className="mt-2 text-sm">
               {tx("report.summary", {
                 bytes: (
