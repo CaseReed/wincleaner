@@ -161,9 +161,12 @@ time.
 
 ## Roadmap
 
-- More application caches (package managers, IDEs, chat clients).
-- On-demand elevation for the machine-wide startup entries and the common
-  Startup folder, which are out of scope today.
+The next versions widen what the application is useful for while staying
+inside its invariants: exclusions picked from the listed paths, a copyable
+cleanup report, a read-only view of the largest files and folders, a portable
+build and a read-only command line. Elevation on demand is deliberately
+deferred until installers are signed. Details and reasoning in
+[`docs/roadmap.md`](docs/roadmap.md).
 
 ## License
 
