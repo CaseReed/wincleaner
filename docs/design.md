@@ -62,7 +62,7 @@ message):
   glob (a `[` in an account name previously escaped the profile);
 - `id` unique, `risk` within the enumeration.
 
-The eight current rules, all within the user profile:
+The nine current rules, all within the user profile:
 
 | Category | Rule id | Label | Default | Risk |
 | --- | --- | --- | --- | --- |
@@ -71,6 +71,7 @@ The eight current rules, all within the user profile:
 | System | `windows.thumbnails` | Thumbnail cache | Checked | Low |
 | System | `windows.explorer-recent` | Recent items | **Unchecked** | Medium |
 | System | `windows.crash-dumps` | Crash dumps (`%LOCALAPPDATA%\CrashDumps`) | **Unchecked** | Medium |
+| System | `windows.wer-reports` | Error reporting reports (`%LOCALAPPDATA%\Microsoft\Windows\WER\ReportQueue`, `ReportArchive`) | **Unchecked** | Medium |
 | Browsers | `edge.cache` | Microsoft Edge cache | Checked | Low |
 | Browsers | `chrome.cache` | Google Chrome cache | Checked | Low |
 | Browsers | `firefox.cache` | Mozilla Firefox cache (multiple profiles via the `Profiles\*\cache2` glob) | Checked | Low |

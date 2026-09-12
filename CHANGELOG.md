@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Added a native rule for per-user Windows Error Reporting reports.**
+  `windows.wer-reports` clears `%LOCALAPPDATA%\Microsoft\Windows\WER\ReportQueue`
+  and `ReportArchive` — the crash reports Windows queues and archives for this
+  user, regenerated on the next crash and not user data. The machine-wide
+  `%ProgramData%\Microsoft\Windows\WER\*` store is out of scope: no allowed
+  variable resolves there. `risk = medium`, `default_checked = false`, same
+  category and voice as `windows.crash-dumps`.
+
 ### Changed
 
 - **Measured the Recycle Bin batching gain: about 2.6x.** The new opt-in

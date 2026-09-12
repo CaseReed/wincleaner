@@ -298,6 +298,17 @@ impl Fixture {
             r"AppData\Local\CrashDumps\wincleaner.exe.4242.dmp",
         )?;
 
+        // windows.wer-reports — recursive (`**`), one file nested under each
+        // report folder to prove the recursion actually walks.
+        self.junk_file(
+            "windows.wer-reports",
+            r"AppData\Local\Microsoft\Windows\WER\ReportQueue\AppCrash_wincleaner_4242\Report.wer",
+        )?;
+        self.junk_file(
+            "windows.wer-reports",
+            r"AppData\Local\Microsoft\Windows\WER\ReportArchive\AppCrash_wincleaner_1337\Report.wer",
+        )?;
+
         // edge.cache — one file per declared pattern.
         for rel in [
             r"Default\Cache\Cache_Data\f_000001",

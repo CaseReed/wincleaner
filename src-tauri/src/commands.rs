@@ -1596,7 +1596,7 @@ mod tests {
         let rules = rule_summaries_in(&state).unwrap();
 
         let native = rules.iter().filter(|r| !r.id.starts_with("winapp2.")).count();
-        assert_eq!(native, 9, "rules.toml declares nine native rules");
+        assert_eq!(native, 10, "rules.toml declares ten native rules");
         assert!(
             summary.winapp2_rules >= 10,
             "the fixture must make at least ten Winapp2 entries detected, got {}",

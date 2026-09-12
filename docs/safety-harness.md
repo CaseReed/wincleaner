@@ -109,7 +109,7 @@ one builder, one catalogue, one set of guards.
    every screen naming the root, so you can never forget which profile you are
    looking at.
 2. **Cleanup → Analyze**, then **Clean**. The rule list is the sandbox's own:
-   the nine native rules plus the Winapp2 entries the fixture makes detected,
+   the ten native rules plus the Winapp2 entries the fixture makes detected,
    and in the sandbox they all start checked — the profile is there to be
    exercised, not spared. Both run the real code, on the real disk.
 3. **Read the verdict.** After the clean, a "Sandbox verdict" card reads the
@@ -180,8 +180,8 @@ asserts exactly that.
 
 ## The seven tests
 
-1. **`the_nine_native_rules_delete_their_junk_and_spare_every_sentinel`** —
-   loads `rules.toml` against the fake environment, asserts the nine rules are
+1. **`the_native_rules_delete_their_junk_and_spare_every_sentinel`** —
+   loads `rules.toml` against the fake environment, asserts the ten rules are
    available, scans them all, asserts every `files` rule matched at least one
    junk file and that the scan saw *exactly* the junk list, then cleans them
    all in `Permanent` mode (the worst case). Asserts: every junk file gone,
