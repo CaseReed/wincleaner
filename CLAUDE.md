@@ -48,6 +48,13 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   LOCALAPPDATA, APPDATA, USERPROFILE; the resolved path must be under the
   profile. Variable values go through `globset::escape` (a `[` in an account
   name used to send the walk outside the profile).
+- A native rule may set `label_fr`, `description_fr` and `category_fr`
+  (`Option<String>`, serde default): the French name, warning and category
+  shown when the interface is French. `src/lib/rule-i18n.ts` is the one place
+  that picks the French field and falls back to the English one, used
+  everywhere a rule's label or description reaches the screen, a live region,
+  or the search/sort order — never `rule.label` or `rule.note` directly.
+  Winapp2 (community) rules never set these and always read in English.
 - The textual containment done at load time is not enough: it is **replayed on
   disk**. `scan.rs::confined_root` refuses any root carrying
   `FILE_ATTRIBUTE_REPARSE_POINT` or whose `canonicalize` form leaves the

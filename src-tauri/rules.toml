@@ -1,7 +1,9 @@
 [[rule]]
 id = "windows.temp"
 category = "System"
+category_fr = "Système"
 label = "Temporary files"
+label_fr = "Fichiers temporaires"
 paths = ["%TEMP%\\**\\*"]
 exclude = []
 risk = "low"
@@ -9,7 +11,9 @@ risk = "low"
 [[rule]]
 id = "windows.recycle-bin"
 category = "System"
+category_fr = "Système"
 label = "Recycle Bin"
+label_fr = "Corbeille"
 kind = "recycle-bin"
 paths = []
 exclude = []
@@ -19,7 +23,9 @@ default_checked = false
 [[rule]]
 id = "windows.thumbnails"
 category = "System"
+category_fr = "Système"
 label = "Thumbnail cache"
+label_fr = "Cache des miniatures"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db",
   "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\iconcache_*.db",
@@ -34,7 +40,9 @@ risk = "low"
 [[rule]]
 id = "windows.explorer-recent"
 category = "System"
+category_fr = "Système"
 label = "Recent items"
+label_fr = "Éléments récents"
 paths = [
   "%APPDATA%\\Microsoft\\Windows\\Recent\\*.lnk",
   "%APPDATA%\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\*",
@@ -51,7 +59,9 @@ default_checked = false
 [[rule]]
 id = "windows.crash-dumps"
 category = "System"
+category_fr = "Système"
 label = "Crash dumps"
+label_fr = "Vidages sur incident"
 paths = ["%LOCALAPPDATA%\\CrashDumps\\*"]
 exclude = []
 risk = "medium"
@@ -67,7 +77,9 @@ default_checked = false
 [[rule]]
 id = "windows.wer-reports"
 category = "System"
+category_fr = "Système"
 label = "Error reporting reports"
+label_fr = "Rapports d’erreurs"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Windows\\WER\\ReportQueue\\**",
   "%LOCALAPPDATA%\\Microsoft\\Windows\\WER\\ReportArchive\\**",
@@ -83,7 +95,9 @@ default_checked = false
 [[rule]]
 id = "edge.cache"
 category = "Browsers"
+category_fr = "Navigateurs"
 label = "Microsoft Edge cache"
+label_fr = "Cache d’Edge"
 paths = [
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\*\\Code Cache\\**\\*",
@@ -100,7 +114,9 @@ risk = "low"
 [[rule]]
 id = "chrome.cache"
 category = "Browsers"
+category_fr = "Navigateurs"
 label = "Google Chrome cache"
+label_fr = "Cache de Chrome"
 paths = [
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache\\**\\*",
   "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Code Cache\\**\\*",
@@ -117,7 +133,9 @@ risk = "low"
 [[rule]]
 id = "firefox.cache"
 category = "Browsers"
+category_fr = "Navigateurs"
 label = "Mozilla Firefox cache"
+label_fr = "Cache de Firefox"
 paths = [
   "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2\\**\\*",
   "%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache\\**\\*",
@@ -134,7 +152,9 @@ risk = "low"
 [[rule]]
 id = "npm.cache"
 category = "Applications"
+category_fr = "Applications"
 label = "npm cache"
+label_fr = "Cache npm"
 paths = ["%LOCALAPPDATA%\\npm-cache\\**\\*"]
 exclude = []
 risk = "low"

@@ -404,11 +404,12 @@ const LANGUAGE_OPTIONS: { value: LanguagePreference; label: TranslationKey }[] =
   { value: "fr", label: "settings.languageFr" },
 ];
 
-/// The interface language. It covers the UI chrome only: rule labels and
-/// descriptions come from `src-tauri/rules.toml` and from Winapp2, the
-/// "What's new" body is extracted from CHANGELOG.md at build time, and the
-/// release notes come from GitHub — all four stay in English whatever is
-/// picked here.
+/// The interface language. It covers the UI chrome and, since v0.8.0, the
+/// native rules' labels and descriptions (optional `label_fr`/
+/// `description_fr` in `src-tauri/rules.toml`, `src/lib/rule-i18n.ts` picks
+/// them). Winapp2 (community) rules, the "What's new" body extracted from
+/// CHANGELOG.md at build time, and the release notes from GitHub stay in
+/// English whatever is picked here.
 function LanguageSection() {
   const { t, preference, setPreference } = useI18n();
   return (

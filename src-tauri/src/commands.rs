@@ -57,6 +57,13 @@ pub struct RuleSummary {
     pub default_checked: bool,
     /// Inline warning shown under the rule row (Winapp2 `Warning=`).
     pub note: Option<String>,
+    /// French translation of `label`, null for a Winapp2 rule or a native rule
+    /// that has none. The front end falls back to `label` when this is null.
+    pub label_fr: Option<String>,
+    /// French translation of `note`, on the same terms as `label_fr`.
+    pub description_fr: Option<String>,
+    /// French translation of `category`, on the same terms as `label_fr`.
+    pub category_fr: Option<String>,
     /// Set when the rule does not apply on this machine. The front end greys
     /// the row out and shows this reason; the rule is neither scanned nor
     /// cleaned, even if its id were sent.
@@ -188,6 +195,9 @@ fn summarize(rule: Rule) -> RuleSummary {
         kind: rule.kind,
         default_checked: rule.default_checked && rule.unavailable_reason.is_none(),
         note: rule.note,
+        label_fr: rule.label_fr,
+        description_fr: rule.description_fr,
+        category_fr: rule.category_fr,
         unavailable_reason: rule.unavailable_reason,
     }
 }
@@ -1400,6 +1410,9 @@ mod tests {
             kind: RuleKind::Files,
             default_checked: false,
             note: Some("This deletes the saved sessions.".into()),
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         assert_eq!(
@@ -1443,6 +1456,9 @@ mod tests {
             kind: RuleKind::Files,
             default_checked: true,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         }
     }
@@ -1484,6 +1500,9 @@ mod tests {
             kind: RuleKind::RecycleBin,
             default_checked: false,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         }
     }

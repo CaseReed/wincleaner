@@ -369,6 +369,9 @@ mod tests {
             kind: RuleKind::Files,
             default_checked: true,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         }
     }
@@ -384,6 +387,9 @@ mod tests {
             kind: RuleKind::RecycleBin,
             default_checked: false,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         }
     }

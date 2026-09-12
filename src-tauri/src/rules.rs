@@ -49,6 +49,17 @@ pub struct Rule {
     /// Winapp2 `Warning=` key; `rules.toml` rules may set it too.
     #[serde(default)]
     pub note: Option<String>,
+    /// French translation of `label`, for a native rule only: Winapp2 rules
+    /// stay English and never set this. The front end falls back to `label`
+    /// when this is absent.
+    #[serde(default)]
+    pub label_fr: Option<String>,
+    /// French translation of `note`, on the same terms as `label_fr`.
+    #[serde(default)]
+    pub description_fr: Option<String>,
+    /// French translation of `category`, on the same terms as `label_fr`.
+    #[serde(default)]
+    pub category_fr: Option<String>,
     /// Set when the rule does not apply on THIS machine: variable missing, or
     /// pointing outside the profile. The rule is loaded, shown greyed out with
     /// this reason, and never scanned nor cleaned. This is not a faulty
@@ -791,6 +802,9 @@ default_checked = false"#,
             kind: RuleKind::Files,
             default_checked: false,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         assert!(check_rule_with(&rule, &fake_env).is_ok());
@@ -838,6 +852,20 @@ note = "Closes the saved sessions.""#,
     }
 
     #[test]
+    fn every_native_rule_carries_a_french_label() {
+        // `embedded_rules` is the native rules alone (no Winapp2, which stays
+        // English): every one of them must offer a real French label, not
+        // just an empty string that would render as a blank row.
+        for rule in load_rules_with(RULES_TOML, &fake_env).unwrap() {
+            assert!(
+                rule.label_fr.as_deref().is_some_and(|s| !s.trim().is_empty()),
+                "rule \"{}\" has no label_fr",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
     fn resolved_paths_returns_absolute_paths() {
         let rule = Rule {
             id: "x.y".into(),
@@ -849,6 +877,9 @@ note = "Closes the saved sessions.""#,
             kind: RuleKind::Files,
             default_checked: true,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         let got = resolved_paths_with(&rule, &fake_env).unwrap();

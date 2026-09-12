@@ -356,6 +356,9 @@ mod tests {
             default_checked: true,
             note: None,
             unavailable_reason: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
         }
     }
 
@@ -461,6 +464,9 @@ mod tests {
                 default_checked: true,
                 note: None,
                 unavailable_reason: None,
+                label_fr: None,
+                description_fr: None,
+                category_fr: None,
             },
             Rule {
                 id: "b".to_string(),
@@ -473,6 +479,9 @@ mod tests {
                 default_checked: true,
                 note: None,
                 unavailable_reason: None,
+                label_fr: None,
+                description_fr: None,
+                category_fr: None,
             },
         ];
         apply(

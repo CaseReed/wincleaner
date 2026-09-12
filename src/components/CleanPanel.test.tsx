@@ -37,9 +37,18 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner";
 import { CleanPanel } from "./CleanPanel";
+import { I18nProvider, LANGUAGE_KEY } from "@/i18n";
 
 const RULES = [
-  { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true },
+  {
+    id: "windows.temp",
+    category: "System",
+    label: "Temporary files",
+    label_fr: "Fichiers temporaires",
+    risk: "low",
+    kind: "files",
+    default_checked: true,
+  },
   { id: "edge.cache", category: "Browsers", label: "Microsoft Edge cache", risk: "low", kind: "files", default_checked: true },
 ];
 
@@ -469,6 +478,37 @@ describe("CleanPanel", () => {
     expect(report).toHaveTextContent("2 KB");
     expect(report).toHaveTextContent("2");
     expect(report).toHaveTextContent("file in use");
+  });
+
+  it("copies the report as text to the clipboard", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    api.scan.mockResolvedValue([
+      { rule_id: "windows.temp", file_count: 2, total_bytes: 2048, paths: [], skipped: 0 },
+      { rule_id: "edge.cache", file_count: 0, total_bytes: 0, paths: [], skipped: 0 },
+    ]);
+    api.clean.mockResolvedValue({
+      freed_bytes: 2048,
+      deleted: 2,
+      skipped: [{ path: String.raw`C:\Users\T\AppData\Local\Temp\lock.tmp`, reason: "file in use" }],
+    });
+    render(<CleanPanel />);
+    await screen.findByLabelText("Temporary files");
+    await user.click(screen.getByRole("button", { name: /Analyze/ }));
+    await screen.findByTestId("total-bytes");
+    await user.click(screen.getByRole("button", { name: /^Clean/ }));
+    await user.click(await screen.findByRole("button", { name: /Confirm cleanup/ }));
+    await screen.findByTestId("clean-report");
+
+    await user.click(screen.getByTestId("copy-report"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const text = writeText.mock.calls[0][0] as string;
+    expect(text).toContain("WinCleaner");
+    expect(text).toContain("Temporary files — 2 files measured, 2 KB");
+    expect(text).toContain("Total: 2 files, 2 KB freed");
+    expect(text).toContain("file in use");
   });
 
   it("defaults to the auto mode", async () => {
@@ -1435,6 +1475,66 @@ describe("CleanPanel", () => {
       render(<CleanPanel />);
       await screen.findByLabelText("Temporary files");
       expect(screen.getByLabelText("Recycle Bin")).not.toBeChecked();
+    });
+  });
+
+  /// The native rules' French label (`label_fr` in rules.toml) shows up only
+  /// when the interface is French; Winapp2 rules have none and always fall
+  /// back to English. `CleanPanel` has no provider of its own in the tests
+  /// above (default context: English), so these wrap it in `I18nProvider`.
+  describe("native rule labels in French", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(LANGUAGE_KEY);
+    });
+
+    it("shows the French label when the interface is French", async () => {
+      window.localStorage.setItem(LANGUAGE_KEY, "fr");
+      render(
+        <I18nProvider>
+          <CleanPanel />
+        </I18nProvider>,
+      );
+      expect(await screen.findByText("Fichiers temporaires")).toBeInTheDocument();
+      // A Winapp2-style rule with no label_fr still reads in English.
+      expect(screen.getByText("Microsoft Edge cache")).toBeInTheDocument();
+    });
+
+    it("shows the English label when the interface is English", async () => {
+      render(<CleanPanel />);
+      expect(await screen.findByText("Temporary files")).toBeInTheDocument();
+    });
+
+    it("uses the French label in the Analyze progress line", async () => {
+      const user = userEvent.setup();
+      let release: (results: unknown[]) => void = () => {};
+      api.scan.mockImplementation(
+        () => new Promise((resolve) => { release = resolve as typeof release; })
+      );
+      window.localStorage.setItem(LANGUAGE_KEY, "fr");
+      render(
+        <I18nProvider>
+          <CleanPanel />
+        </I18nProvider>,
+      );
+      await screen.findByText("Fichiers temporaires");
+      await user.click(screen.getByRole("button", { name: /Analyser/ }));
+      await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+      // Rust never localises the event's own `label` (see CLAUDE.md): the
+      // front end looks the French label up by `rule_id` from the loaded
+      // rule summaries instead of trusting the event's English text.
+      act(() =>
+        emitProgress({
+          done: 1,
+          total: 1,
+          rule_id: "windows.temp",
+          label: "Temporary files",
+          total_bytes: 1024,
+        })
+      );
+      expect(screen.getByTestId("scan-progress")).toHaveTextContent("Fichiers temporaires");
+
+      release([]);
     });
   });
 });

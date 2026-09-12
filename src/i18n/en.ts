@@ -98,6 +98,17 @@ export const en = {
   "report.title": "Last cleanup",
   "report.summary": "{bytes} freed · {count} files deleted",
   "report.skipped": "Skipped ({count})",
+  "report.copy": "Copy report",
+  "report.copyJson": "Copy as JSON",
+  "report.copied": "Report copied",
+  "report.copyFailed": "Could not copy the report",
+  "report.text.header": "WinCleaner {version} — {date}",
+  "report.text.mode": "Mode: {mode}",
+  "report.text.note": "Per rule: measured by the last Analyze. Totals: actually freed.",
+  "report.text.rule": "{label} — {files} files measured, {bytes}",
+  "report.text.ruleSkipped": "{label} — {files} files measured, {bytes} ({skipped} skipped)",
+  "report.text.total": "Total: {files} files, {bytes} freed",
+  "report.text.skippedHeader": "Skipped:",
 
   // Rule rows
   "rules.count.one": "{count} rule",
@@ -199,7 +210,7 @@ export const en = {
   "settings.languageEn": "English",
   "settings.languageFr": "Français",
   "settings.languageNote":
-    "Rule names, release notes and the changelog come from their own sources and stay in English.",
+    "Native rule names and descriptions are translated; community (Winapp2) rules, release notes and the changelog come from their own sources and stay in English.",
 
   // Updates section
   "updates.check": "Check for updates",

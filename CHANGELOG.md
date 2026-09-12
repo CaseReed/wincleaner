@@ -32,6 +32,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be read or parsed fails the scan and the clean outright rather than
   proceeding as though nothing were excluded.
 
+- **The ten native rules now have French labels.** `rules.toml` gains optional
+  `label_fr`, `description_fr` and `category_fr` fields (`Rule`/`RuleSummary`
+  in Rust, `src/lib/rule-i18n.ts::ruleLabel`/`ruleDescription`/`ruleCategory`
+  on the front end, falling back to the English field when the French one is
+  absent). A native rule is grouped, searched and announced under its French
+  name when the interface is French — search still matches the English name
+  too — including the "Analyze 3 / 85 · …" progress line, which now looks the
+  label up by rule id from the loaded summaries instead of the (deliberately
+  unlocalised) event Rust emits. Winapp2 (community) rules stay English, as
+  documented in Settings.
+
+- **The last cleanup report can be copied to the clipboard.** "Copy report"
+  puts a readable summary on the clipboard — app version, date, deletion mode,
+  a total line of what Clean actually freed, the skipped paths if any, and
+  per rule how many files and bytes the last Analyze *measured* for it plus
+  its skipped count — in the current interface language. `CleanReport` only
+  ever returns aggregate totals, never a per-rule breakdown, so the per-rule
+  figures are explicitly labelled as measured rather than freed: a rule with
+  a skipped file frees less than it measured, and the report says so instead
+  of implying otherwise. "Copy as JSON" puts the same data on the clipboard as
+  a stable, language-neutral object (`version`, `generated_at`, `mode`, a
+  `note` spelling out the same distinction, `rules[]` with `files_measured`/
+  `bytes_measured`, `totals` with the real `files_deleted`/`bytes_freed`, and
+  `skipped[]`). Both reuse the clipboard mechanism already behind "Copy link"
+  in Settings (`navigator.clipboard.writeText`, a success or failure toast)
+  and build off a pure, unit-tested `src/lib/report.ts`. No file is written.
+
 ## [0.7.0] - 2026-09-12
 
 ### Added

@@ -1,12 +1,14 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
+import { ClipboardCopy, Info, Loader2, ShieldCheck, ShieldX, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
+import whatsNew from "@/generated/whats-new.json";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ReclaimGauge, prefersReducedMotion } from "@/components/ReclaimGauge";
 import { RuleCategory } from "@/components/RuleCategory";
-import { useI18n, type I18n, type TranslationKey } from "@/i18n";
+import { useI18n, type I18n } from "@/i18n";
+import { buildReportData, buildReportJson, buildReportText, MODE_LABEL } from "@/lib/report";
 import {
   clean,
   filterRules,
@@ -33,12 +35,7 @@ import {
   type ScanProgress,
   type ScanResult,
 } from "@/lib/api";
-
-const MODE_LABEL: Record<CleanMode, TranslationKey> = {
-  auto: "mode.auto",
-  trash: "mode.trash",
-  permanent: "mode.permanent",
-};
+import { ruleLabel } from "@/lib/rule-i18n";
 
 /// Categories that start folded: `Applications` is hundreds of rows, almost all
 /// of them converted Winapp2 rules that are unchecked by default, and unfolding
@@ -254,12 +251,18 @@ export function CleanPanel({
   sandbox?: SandboxSummary | null;
 } = {}) {
   const i18n = useI18n();
-  const { t, tn, tx, formatBytes, formatCount } = i18n;
+  const { language, t, tn, tx, formatBytes, formatCount } = i18n;
   const [rules, setRules] = useState<RuleSummary[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [results, setResults] = useState<ScanResult[] | null>(null);
   const [report, setReport] = useState<CleanReport | null>(null);
+  /// What Analyze last measured for the rules that were just cleaned, and
+  /// when the clean finished: captured together with `report` so "Copy
+  /// report"/"Copy as JSON" describe the run just shown, not whatever
+  /// `results` holds by the time the button is clicked (cleared right after).
+  const [reportRules, setReportRules] = useState<ScanResult[]>([]);
+  const [reportGeneratedAt, setReportGeneratedAt] = useState<Date | null>(null);
   const [verdict, setVerdict] = useState<SandboxVerdict | null>(null);
   /// The verify call failed. Shown inside the verdict card as a line of its
   /// own: it says nothing about the clean, which has already been reported.
@@ -450,6 +453,16 @@ export function CleanPanel({
     setConfirming(false);
   }
 
+  /// `ScanProgress`/`CleanProgress` carry the rule's English label straight
+  /// from Rust (never localised there — see CLAUDE.md): the front end already
+  /// has the rule's summary loaded, so it looks the French label up by id
+  /// instead, falling back to the event's own label for an id it does not
+  /// recognise (there should be none).
+  const progressLabel = (ruleId: string, fallback: string): string => {
+    const rule = rules.find((r) => r.id === ruleId);
+    return rule ? ruleLabel(rule, language) : fallback;
+  };
+
   const searching = query.trim().length > 0;
   const grouped = useMemo(() => {
     const base = groupByCategory(filterRules(rules, query));
@@ -619,9 +632,14 @@ export function CleanPanel({
     // What was cleaned, captured before `results` is dropped: the verdict is
     // scoped to these rules, so it must be the list Clean was actually given.
     const cleaned = cleanIds;
+    // Same reason: the report's per-rule breakdown reads off this Analyze
+    // snapshot, not `results`, which is about to be cleared below.
+    const cleanedResultsSnapshot = checkedResults;
     try {
       const done = await clean(cleaned, mode);
       setReport(done);
+      setReportRules(cleanedResultsSnapshot);
+      setReportGeneratedAt(new Date());
       setResults(null);
       setAnnouncement(
         t("announce.cleanDone", {
@@ -647,6 +665,44 @@ export function CleanPanel({
       cleanPending.current = false;
       setBusyAction(null);
     }
+  }
+
+  /// Same clipboard mechanism as "Copy link" in Settings (`navigator.clipboard
+  /// .writeText`, a success toast, and a failure toast instead of a thrown
+  /// error): no clipboard permission just means the text stays on screen.
+  async function copyToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(t("report.copied"));
+    } catch {
+      toast.error(t("report.copyFailed"));
+    }
+  }
+
+  function onCopyReport() {
+    if (!report || !reportGeneratedAt) return;
+    const data = buildReportData(
+      rules,
+      reportRules,
+      report,
+      mode,
+      whatsNew.version,
+      reportGeneratedAt
+    );
+    void copyToClipboard(buildReportText(data, i18n));
+  }
+
+  function onCopyReportJson() {
+    if (!report || !reportGeneratedAt) return;
+    const data = buildReportData(
+      rules,
+      reportRules,
+      report,
+      mode,
+      whatsNew.version,
+      reportGeneratedAt
+    );
+    void copyToClipboard(JSON.stringify(buildReportJson(data), null, 2));
   }
 
   if (rulesError) {
@@ -854,7 +910,7 @@ export function CleanPanel({
                             {formatCount(cleanProgress.total_rules)}
                           </span>
                         ),
-                        label: cleanProgress.label,
+                        label: progressLabel(cleanProgress.rule_id, cleanProgress.label),
                       })}
                     </span>
                   ) : (
@@ -870,7 +926,7 @@ export function CleanPanel({
                           {formatCount(progress.done)} / {formatCount(progress.total)}
                         </span>
                       ),
-                      label: progress.label,
+                      label: progressLabel(progress.rule_id, progress.label),
                     })}
                   </span>
                 ) : (
@@ -986,9 +1042,31 @@ export function CleanPanel({
             aria-labelledby={reportTitleId}
             className="rounded-lg border bg-card p-5"
           >
-            <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
-              {t("report.title")}
-            </h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 id={reportTitleId} className="eyebrow text-muted-foreground">
+                {t("report.title")}
+              </h2>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  data-testid="copy-report"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyReport}
+                >
+                  <ClipboardCopy className="size-3.5" aria-hidden="true" />
+                  {t("report.copy")}
+                </Button>
+                <Button
+                  data-testid="copy-report-json"
+                  variant="outline"
+                  size="sm"
+                  onClick={onCopyReportJson}
+                >
+                  <ClipboardCopy className="size-3.5" aria-hidden="true" />
+                  {t("report.copyJson")}
+                </Button>
+              </div>
+            </div>
             <p className="mt-2 text-sm">
               {tx("report.summary", {
                 bytes: (
@@ -1047,7 +1125,7 @@ export function CleanPanel({
               <p id={confirmDetailId} className="mt-0.5 text-xs text-muted-foreground">
                 {irreversibleRules.length > 0
                   ? t("confirm.irreversible", {
-                      rules: irreversibleRules.map((r) => r.label).join(", "),
+                      rules: irreversibleRules.map((r) => ruleLabel(r, language)).join(", "),
                     })
                   : t("confirm.reversible")}
               </p>

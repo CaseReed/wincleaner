@@ -689,6 +689,9 @@ pub fn convert_with(
             kind: RuleKind::Files,
             default_checked: false,
             note: entry.warning.clone(),
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         // A rule refused here would be permanently greyed out (the machine does

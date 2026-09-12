@@ -95,6 +95,17 @@ export const fr: Dictionary = {
   "report.title": "Dernier nettoyage",
   "report.summary": "{bytes} libérés · {count} fichiers supprimés",
   "report.skipped": "Ignorés ({count})",
+  "report.copy": "Copier le rapport",
+  "report.copyJson": "Copier en JSON",
+  "report.copied": "Rapport copié",
+  "report.copyFailed": "Impossible de copier le rapport",
+  "report.text.header": "WinCleaner {version} — {date}",
+  "report.text.mode": "Mode : {mode}",
+  "report.text.note": "Par règle : mesuré par la dernière analyse. Totaux : réellement libérés.",
+  "report.text.rule": "{label} — {files} fichiers mesurés, {bytes}",
+  "report.text.ruleSkipped": "{label} — {files} fichiers mesurés, {bytes} ({skipped} ignorés)",
+  "report.text.total": "Total : {files} fichiers, {bytes} libérés",
+  "report.text.skippedHeader": "Ignorés :",
 
   // Lignes de règles
   "rules.count.one": "{count} règle",
@@ -196,7 +207,7 @@ export const fr: Dictionary = {
   "settings.languageEn": "English",
   "settings.languageFr": "Français",
   "settings.languageNote":
-    "Les noms de règles, les notes de version et le journal des modifications viennent de leurs propres sources et restent en anglais.",
+    "Les noms et descriptions des règles natives sont traduits ; les règles communautaires (Winapp2), les notes de version et le journal des modifications viennent de leurs propres sources et restent en anglais.",
 
   // Section Mises à jour
   "updates.check": "Rechercher des mises à jour",

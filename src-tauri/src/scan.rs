@@ -435,6 +435,9 @@ mod tests {
             kind: RuleKind::Files,
             default_checked: true,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         }
     }
@@ -790,6 +793,9 @@ mod tests {
             kind: RuleKind::RecycleBin,
             default_checked: false,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         let query = || Ok((7u64, 700u64));
@@ -814,6 +820,9 @@ mod tests {
             kind: RuleKind::RecycleBin,
             default_checked: false,
             note: None,
+            label_fr: None,
+            description_fr: None,
+            category_fr: None,
             unavailable_reason: None,
         };
         let query = || Err("failure".to_string());

@@ -55,9 +55,9 @@ describe("api", () => {
 
   it("groupByCategory preserves the order the categories appear in", () => {
     const rules: RuleSummary[] = [
-      { id: "a", category: "System", label: "A", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
-      { id: "b", category: "Browsers", label: "B", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
-      { id: "c", category: "System", label: "C", risk: "medium", kind: "files", default_checked: false, note: null, unavailable_reason: null },
+      { id: "a", category: "System", label: "A", risk: "low", kind: "files", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
+      { id: "b", category: "Browsers", label: "B", risk: "low", kind: "files", default_checked: true, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
+      { id: "c", category: "System", label: "C", risk: "medium", kind: "files", default_checked: false, note: null, label_fr: null, description_fr: null, category_fr: null, unavailable_reason: null },
     ];
     const grouped = groupByCategory(rules);
     expect(grouped.map(([cat]) => cat)).toEqual(["System", "Browsers"]);
@@ -66,7 +66,17 @@ describe("api", () => {
 
   describe("filterRules", () => {
     const rules = [
-      { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true, note: null, unavailable_reason: null },
+      {
+        id: "windows.temp",
+        category: "System",
+        label: "Temporary files",
+        label_fr: "Fichiers temporaires",
+        risk: "low",
+        kind: "files",
+        default_checked: true,
+        note: null,
+        unavailable_reason: null,
+      },
       { id: "winapp2.7-zip", category: "Applications", label: "7-Zip", risk: "medium", kind: "files", default_checked: false, note: null, unavailable_reason: null },
     ] as RuleSummary[];
 
@@ -78,6 +88,12 @@ describe("api", () => {
       expect(filterRules(rules, "zip").map((r) => r.id)).toEqual(["winapp2.7-zip"]);
       expect(filterRules(rules, "TEMPORARY").map((r) => r.id)).toEqual(["windows.temp"]);
       expect(filterRules(rules, "nothing")).toEqual([]);
+    });
+
+    /// A rule's French label matches too, regardless of the UI's current
+    /// language: a Winapp2 rule has none and is unaffected.
+    it("also matches a rule's French label", () => {
+      expect(filterRules(rules, "temporaires").map((r) => r.id)).toEqual(["windows.temp"]);
     });
   });
 
