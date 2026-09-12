@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Analyze scans its rules concurrently instead of one after another.**
+  `commands::scan_rules_with` used to walk the 84 rules of a full catalogue in
+  a straight loop, so the wall time was their sum — dominated by a couple of
+  slow ones (the Winapp2 catch-all, and the Recycle Bin's own OS call). It now
+  runs them on a small worker pool (`std::thread::scope`, sized to
+  `available_parallelism` capped at 8), each rule scanned by the exact same
+  `scan::scan_rule`/`scan_rule_with_api` function as before. `scan_bench`
+  (`cargo run --release --example scan_bench` in `src-tauri`), on this machine:
+  26s cold / 17s warm before, 11.2s cold / 7.3s warm after — the warm run now
+  lands almost exactly on the slowest single rule (7.3s total against a 7.3s
+  Recycle Bin query) instead of their sum. The `scan-progress` event still
+  fires once per rule with a running byte total, but the order it arrives in
+  now follows completion rather than catalogue order; the result list handed
+  back to the front end is unaffected, since it is reassembled by index after
+  every rule finishes.
+
 - **Measured the Recycle Bin batching gain: about 2.6x.** The new opt-in
   benchmark (`cargo run --release --example trash_bench` in `src-tauri`)
   creates its own fixture files and times both strategies on this machine: one
