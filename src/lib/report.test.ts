@@ -18,6 +18,9 @@ const RULES: RuleSummary[] = [
     default_checked: true,
     note: null,
     unavailable_reason: null,
+    label_fr: null,
+    description_fr: null,
+    category_fr: null,
   },
   {
     id: "windows.recycle-bin",
@@ -28,6 +31,9 @@ const RULES: RuleSummary[] = [
     default_checked: false,
     note: null,
     unavailable_reason: null,
+    label_fr: null,
+    description_fr: null,
+    category_fr: null,
   },
 ];
 
