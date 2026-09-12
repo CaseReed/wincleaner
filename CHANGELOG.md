@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-12
+
 ### Added
 
 - **A file or a folder can be kept out of a rule for good, picked from the
@@ -389,7 +391,8 @@ Initial MVP release.
 - Fixes from an internal security audit of the cleanup and startup paths
   (path containment, reparse-point handling, and CSP tightening).
 
-[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/CaseReed/wincleaner/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/CaseReed/wincleaner/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/CaseReed/wincleaner/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/CaseReed/wincleaner/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/CaseReed/wincleaner/compare/v0.5.0...v0.5.1
