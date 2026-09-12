@@ -59,7 +59,7 @@ describe("AppShell", () => {
   /// first button of the page.
   it("names the sidebar as the main navigation landmark", () => {
     renderShell();
-    expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
   });
 
   /// One Tab stop for the whole sidebar: the active entry is the only one in
