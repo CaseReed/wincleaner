@@ -157,7 +157,10 @@ request must pass those checks before review.
 Adding a cleaning rule usually means editing `src-tauri/rules.toml` alone.
 Paths may only use `%TEMP%`, `%LOCALAPPDATA%`, `%APPDATA%` and `%USERPROFILE%`,
 and must resolve under the user profile — anything else is refused at load
-time.
+time. `label_fr`, `description_fr` and `category_fr` are optional: set them to
+give the rule a French name, warning and category, shown when the interface is
+French (`src/lib/rule-i18n.ts` falls back to the English field otherwise).
+Winapp2 (community) rules have none and always read in English.
 
 ## Roadmap
 

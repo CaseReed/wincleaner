@@ -30,6 +30,7 @@ import {
   type ScanProgress,
   type ScanResult,
 } from "@/lib/api";
+import { ruleLabel } from "@/lib/rule-i18n";
 
 const MODE_LABEL: Record<CleanMode, TranslationKey> = {
   auto: "mode.auto",
@@ -251,7 +252,7 @@ export function CleanPanel({
   sandbox?: SandboxSummary | null;
 } = {}) {
   const i18n = useI18n();
-  const { t, tn, tx, formatBytes, formatCount } = i18n;
+  const { language, t, tn, tx, formatBytes, formatCount } = i18n;
   const [rules, setRules] = useState<RuleSummary[]>([]);
   const [rulesError, setRulesError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -446,6 +447,16 @@ export function CleanPanel({
     returnFocus.current = true;
     setConfirming(false);
   }
+
+  /// `ScanProgress`/`CleanProgress` carry the rule's English label straight
+  /// from Rust (never localised there — see CLAUDE.md): the front end already
+  /// has the rule's summary loaded, so it looks the French label up by id
+  /// instead, falling back to the event's own label for an id it does not
+  /// recognise (there should be none).
+  const progressLabel = (ruleId: string, fallback: string): string => {
+    const rule = rules.find((r) => r.id === ruleId);
+    return rule ? ruleLabel(rule, language) : fallback;
+  };
 
   const searching = query.trim().length > 0;
   const grouped = useMemo(() => {
@@ -821,7 +832,7 @@ export function CleanPanel({
                             {formatCount(cleanProgress.total_rules)}
                           </span>
                         ),
-                        label: cleanProgress.label,
+                        label: progressLabel(cleanProgress.rule_id, cleanProgress.label),
                       })}
                     </span>
                   ) : (
@@ -837,7 +848,7 @@ export function CleanPanel({
                           {formatCount(progress.done)} / {formatCount(progress.total)}
                         </span>
                       ),
-                      label: progress.label,
+                      label: progressLabel(progress.rule_id, progress.label),
                     })}
                   </span>
                 ) : (
@@ -1012,7 +1023,7 @@ export function CleanPanel({
               <p id={confirmDetailId} className="mt-0.5 text-xs text-muted-foreground">
                 {irreversibleRules.length > 0
                   ? t("confirm.irreversible", {
-                      rules: irreversibleRules.map((r) => r.label).join(", "),
+                      rules: irreversibleRules.map((r) => ruleLabel(r, language)).join(", "),
                     })
                   : t("confirm.reversible")}
               </p>

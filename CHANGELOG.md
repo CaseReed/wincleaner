@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The ten native rules now have French labels.** `rules.toml` gains optional
+  `label_fr`, `description_fr` and `category_fr` fields (`Rule`/`RuleSummary`
+  in Rust, `src/lib/rule-i18n.ts::ruleLabel`/`ruleDescription`/`ruleCategory`
+  on the front end, falling back to the English field when the French one is
+  absent). A native rule is grouped, searched and announced under its French
+  name when the interface is French — search still matches the English name
+  too — including the "Analyze 3 / 85 · …" progress line, which now looks the
+  label up by rule id from the loaded summaries instead of the (deliberately
+  unlocalised) event Rust emits. Winapp2 (community) rules stay English, as
+  documented in Settings.
+
 ## [0.7.0] - 2026-09-12
 
 ### Added

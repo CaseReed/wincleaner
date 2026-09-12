@@ -18,6 +18,14 @@ export interface RuleSummary {
   /// Inline warning carried by the rule (Winapp2 `Warning=`). Shown under the
   /// row.
   note: string | null;
+  /// French translation of `label`, null for a Winapp2 rule (community rules
+  /// stay English) or a native rule that has none. See `ruleLabel` in
+  /// `src/lib/rule-i18n.ts`.
+  label_fr: string | null;
+  /// French translation of `note`, on the same terms as `label_fr`.
+  description_fr: string | null;
+  /// French translation of `category`, on the same terms as `label_fr`.
+  category_fr: string | null;
   /// Set when the rule does not apply on this machine (variable missing, or
   /// pointing outside the profile). The row is greyed out and inert.
   unavailable_reason: string | null;
@@ -251,11 +259,18 @@ export function groupByCategory(rules: RuleSummary[]): [string, RuleSummary[]][]
 }
 
 /// Filters on the label, across every category. The rule id is deliberately
-/// not searched: `winapp2.7-zip` is an implementation detail.
+/// not searched: `winapp2.7-zip` is an implementation detail. Matches against
+/// both `label` and `label_fr` regardless of the current UI language: a
+/// French interface still shows the English label of a Winapp2 rule, and a
+/// user typing from memory should find a rule by either name.
 export function filterRules(rules: RuleSummary[], query: string): RuleSummary[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return rules;
-  return rules.filter((rule) => rule.label.toLowerCase().includes(needle));
+  return rules.filter(
+    (rule) =>
+      rule.label.toLowerCase().includes(needle) ||
+      (rule.label_fr?.toLowerCase().includes(needle) ?? false),
+  );
 }
 
 /// Biggest wins first: rules by reclaimable size inside each category, then

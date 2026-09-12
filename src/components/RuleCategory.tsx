@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/collapsible";
 import { useI18n } from "@/i18n";
 import type { RuleSummary, ScanResult } from "@/lib/api";
+import { ruleCategory, ruleDescription, ruleLabel } from "@/lib/rule-i18n";
 
 /// Community rules carry a `winapp2.` id. The attribution is rendered only when
 /// the category actually holds one, so it never reads as covering the native
@@ -45,9 +46,14 @@ export function RuleCategory({
   onToggleRule: (id: string) => void;
   onTogglePaths: (id: string) => void;
 }) {
-  const { t, tn, tx, formatBytes, formatCount } = useI18n();
+  const { language, t, tn, tx, formatBytes, formatCount } = useI18n();
   const headingId = useId();
   const listId = useId();
+  /// `category` is the grouping key rules.toml order relies on; the French
+  /// spelling (when the interface is French) comes off the first rule in the
+  /// group that carries one, every native rule in a category agreeing.
+  const categoryRule = catRules.find((r) => r.category_fr);
+  const categoryLabel = categoryRule ? ruleCategory(categoryRule, language) : category;
   return (
     <section className="flex flex-col gap-1.5" aria-labelledby={headingId}>
       <div
@@ -72,7 +78,7 @@ export function RuleCategory({
                 open && "rotate-90"
               )}
             />
-            <span className="eyebrow truncate text-muted-foreground">{category}</span>
+            <span className="eyebrow truncate text-muted-foreground">{categoryLabel}</span>
           </button>
         </h2>
         <p className="shrink-0 text-xs text-muted-foreground">
@@ -93,6 +99,8 @@ export function RuleCategory({
         {open && catRules.map((rule, index) => {
               const result = (results ?? []).find((r) => r.rule_id === rule.id);
               const unavailable = rule.unavailable_reason;
+              const label = ruleLabel(rule, language);
+              const description = ruleDescription(rule, language);
               return (
                 <li
                   key={rule.id}
@@ -101,7 +109,7 @@ export function RuleCategory({
                   <div className="flex h-11 items-center gap-3 px-4">
                     <Checkbox
                       id={rule.id}
-                      aria-label={rule.label}
+                      aria-label={label}
                       checked={selected.has(rule.id)}
                       disabled={!!unavailable}
                       onCheckedChange={() => onToggleRule(rule.id)}
@@ -114,7 +122,7 @@ export function RuleCategory({
                       }
                       onClick={() => !unavailable && onToggleRule(rule.id)}
                     >
-                      {rule.label}
+                      {label}
                     </span>
                     {rule.risk === "medium" && (
                       <Badge
@@ -171,12 +179,12 @@ export function RuleCategory({
                       {t("rules.tempNote")}
                     </p>
                   )}
-                  {rule.note && (
+                  {description && (
                     <p
                       data-testid={`warning-${rule.id}`}
                       className="px-4 pb-3 pl-11 text-xs text-warning-foreground"
                     >
-                      {rule.note}
+                      {description}
                     </p>
                   )}
                   {result && result.paths.length > 0 && (
@@ -194,7 +202,7 @@ export function RuleCategory({
                           openPaths.has(rule.id)
                             ? "rules.hidePathsOf"
                             : "rules.showPathsOf",
-                          { label: rule.label },
+                          { label },
                         )}
                         className="mb-3 ml-[38px] inline-flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring"
                       >
@@ -214,7 +222,7 @@ export function RuleCategory({
                           arrowing to the end. */}
                       <CollapsibleContent
                         role="region"
-                        aria-label={t("rules.pathsOf", { label: rule.label })}
+                        aria-label={t("rules.pathsOf", { label })}
                       >
                         <ul className="mx-4 mb-3 ml-11 max-h-48 overflow-auto rounded-[6px] bg-muted p-3 font-mono text-xs text-muted-foreground">
                           {result.paths.map((p) => (

@@ -29,9 +29,18 @@ vi.mock("@/lib/api", async () => {
 });
 
 import { CleanPanel } from "./CleanPanel";
+import { I18nProvider, LANGUAGE_KEY } from "@/i18n";
 
 const RULES = [
-  { id: "windows.temp", category: "System", label: "Temporary files", risk: "low", kind: "files", default_checked: true },
+  {
+    id: "windows.temp",
+    category: "System",
+    label: "Temporary files",
+    label_fr: "Fichiers temporaires",
+    risk: "low",
+    kind: "files",
+    default_checked: true,
+  },
   { id: "edge.cache", category: "Browsers", label: "Microsoft Edge cache", risk: "low", kind: "files", default_checked: true },
 ];
 
@@ -1285,6 +1294,66 @@ describe("CleanPanel", () => {
       render(<CleanPanel />);
       await screen.findByLabelText("Temporary files");
       expect(screen.getByLabelText("Recycle Bin")).not.toBeChecked();
+    });
+  });
+
+  /// The native rules' French label (`label_fr` in rules.toml) shows up only
+  /// when the interface is French; Winapp2 rules have none and always fall
+  /// back to English. `CleanPanel` has no provider of its own in the tests
+  /// above (default context: English), so these wrap it in `I18nProvider`.
+  describe("native rule labels in French", () => {
+    afterEach(() => {
+      window.localStorage.removeItem(LANGUAGE_KEY);
+    });
+
+    it("shows the French label when the interface is French", async () => {
+      window.localStorage.setItem(LANGUAGE_KEY, "fr");
+      render(
+        <I18nProvider>
+          <CleanPanel />
+        </I18nProvider>,
+      );
+      expect(await screen.findByText("Fichiers temporaires")).toBeInTheDocument();
+      // A Winapp2-style rule with no label_fr still reads in English.
+      expect(screen.getByText("Microsoft Edge cache")).toBeInTheDocument();
+    });
+
+    it("shows the English label when the interface is English", async () => {
+      render(<CleanPanel />);
+      expect(await screen.findByText("Temporary files")).toBeInTheDocument();
+    });
+
+    it("uses the French label in the Analyze progress line", async () => {
+      const user = userEvent.setup();
+      let release: (results: unknown[]) => void = () => {};
+      api.scan.mockImplementation(
+        () => new Promise((resolve) => { release = resolve as typeof release; })
+      );
+      window.localStorage.setItem(LANGUAGE_KEY, "fr");
+      render(
+        <I18nProvider>
+          <CleanPanel />
+        </I18nProvider>,
+      );
+      await screen.findByText("Fichiers temporaires");
+      await user.click(screen.getByRole("button", { name: /Analyser/ }));
+      await waitFor(() => expect(api.onScanProgress).toHaveBeenCalled());
+
+      // Rust never localises the event's own `label` (see CLAUDE.md): the
+      // front end looks the French label up by `rule_id` from the loaded
+      // rule summaries instead of trusting the event's English text.
+      act(() =>
+        emitProgress({
+          done: 1,
+          total: 1,
+          rule_id: "windows.temp",
+          label: "Temporary files",
+          total_bytes: 1024,
+        })
+      );
+      expect(screen.getByTestId("scan-progress")).toHaveTextContent("Fichiers temporaires");
+
+      release([]);
     });
   });
 });
