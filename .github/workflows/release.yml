@@ -151,9 +151,11 @@ jobs:
 
       # Replace the unsigned assets on the release created by tauri-action
       # above with the signed ones from `signed-installers/`, then update the
-      # release body to drop the "unsigned" note. `--clobber` makes the upload
-      # idempotent (safe to re-run), and the notes edit only rewrites the one
-      # sentence so re-running it is a no-op once already applied.
+      # release body to drop the "unsigned" note. Only the installers are
+      # submitted to SignPath, so the note says so: the portable exe uploaded
+      # earlier stays unsigned. `--clobber` makes the upload idempotent (safe
+      # to re-run), and the notes edit only rewrites the one sentence so
+      # re-running it is a no-op once already applied.
       - name: Upload signed installers to release
         if: steps.signpath-check.outputs.configured == 'true'
         env:
@@ -168,7 +170,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes="$(gh release view "${{ github.ref_name }}" --json body --jq .body)"
-          signed_note="Installers signed via SignPath Foundation."
+          signed_note="Installers signed via SignPath Foundation; the portable executable is unsigned."
           if [ "${notes#*"$signed_note"}" = "$notes" ]; then
             notes="$(printf '%s\n' "$notes" | grep -v 'Installers are unsigned until SignPath signing is configured')"
             notes="$(printf '%s\n\n%s\n' "$notes" "$signed_note")"

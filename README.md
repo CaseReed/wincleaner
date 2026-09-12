@@ -128,7 +128,8 @@ next to it and WinCleaner stops writing to `%APPDATA%`: the exclusions list and
 the Recycle Bin measurement go to `<exe dir>\WinCleaner\` instead, so a copy
 on a USB stick leaves nothing behind on the machine it is run from. The content
 of the marker is never read. Settings → About says "Portable" when the mode is
-active.
+active. Only the installers are submitted to SignPath: the portable executable
+stays unsigned even on a release whose notes say the installers are signed.
 
 Theme, language and the automatic-update consent are WebView2 `localStorage`
 and stay where WebView2 puts them — portable mode does not move those. The
@@ -147,10 +148,23 @@ wincleaner --analyze --json          # one JSON object, for a script or a ticket
 `--rules id,id` narrows the run to those rule ids; `--help` prints the usage.
 Exit codes: `0` a run, `1` a scan error, `2` a bad argument.
 
-This command line is **read-only**. There is no `--clean` and there never will
-be — the confirmation before a deletion is an invariant of the application —
-and no option takes a path: `--rules` accepts rule ids and refuses anything the
-catalogue does not know.
+Reading that exit code takes one precaution: the binary is built with
+`windows_subsystem = "windows"`, so `cmd.exe` does not wait for it and a bare
+`%ERRORLEVEL%` or `$LASTEXITCODE` is not the process's own code. Any of these
+gives the real one:
+
+```
+powershell -c "(Start-Process .\wincleaner.exe -ArgumentList '--analyze','--json' -Wait -PassThru -NoNewWindow).ExitCode"
+powershell -c ".\wincleaner.exe --analyze | Out-String; $LASTEXITCODE"   # a pipe makes PowerShell wait
+cmd /c start /wait wincleaner.exe --analyze
+```
+
+This command line is **read-only**: it deletes nothing and takes no path; the
+only file it writes is its own measurement cache (the Recycle Bin figure, so
+the next run is not slower for having been asked twice). There is no `--clean`
+and there never will be — the confirmation before a deletion is an invariant of
+the application — and no option takes a path: `--rules` accepts rule ids and
+refuses anything the catalogue does not know.
 
 ## Build from source
 

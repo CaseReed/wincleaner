@@ -585,9 +585,15 @@ a binary prints in a terminal without opening a window.
    same profile and compare a couple of rules. They are the same catalogue and
    the same scan, so a difference is a bug.
 4. `.\wincleaner.exe --analyze --rules recycle-bin` must measure that one rule.
-   `--rules nope` must print `unknown rule id: nope`, the usage, and exit **2**
-   (`$LASTEXITCODE`). `--clean` must do the same: it does not exist and never
-   will.
+   `--rules nope` must print `unknown rule id: nope`, the usage, and exit **2**.
+   `--clean` must do the same: it does not exist and never will.
+   Read that exit code carefully: the binary is `windows_subsystem =
+   "windows"`, so the shell does not wait for it and a bare `$LASTEXITCODE` or
+   `%ERRORLEVEL%` right after `.\wincleaner.exe --rules nope` is *not* the
+   process's code. Use
+   `(Start-Process .\wincleaner.exe -ArgumentList '--analyze','--rules','nope' -Wait -PassThru -NoNewWindow).ExitCode`,
+   or pipe the output (`… | Out-String`, which makes PowerShell wait) and then
+   read `$LASTEXITCODE`, or `cmd /c start /wait wincleaner.exe --rules nope`.
 5. `.\wincleaner.exe` with no argument at all must open the window as usual.
 6. Double-click the exe with a `--analyze` shortcut (Properties > Target):
    nothing must appear on screen and nothing must be written — no console, no

@@ -24,6 +24,7 @@ use crate::exclusions;
 use crate::rules::{Risk, Rule};
 use crate::scan::ScanResult;
 use serde::Serialize;
+use std::ffi::OsString;
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
@@ -67,6 +68,11 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
             "--analyze" => analyze = true,
             "--json" => json = true,
             "--rules" => {
+                // Two lists would silently keep the last one, and the run
+                // would measure something other than what the line asked for.
+                if rules.is_some() {
+                    return Err("--rules is accepted once, as one list".to_string());
+                }
                 let value = args
                     .next()
                     .ok_or("--rules needs a comma-separated list of rule ids")?;
@@ -81,13 +87,16 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     Ok(Command::Analyze { json, rules })
 }
 
+/// The ids of one `--rules` list, in the order given. A repeated id is kept
+/// once: the same rule listed twice would be walked twice and counted twice,
+/// inflating the totals a script reads.
 fn rule_ids(value: &str) -> Result<Vec<String>, String> {
-    let ids: Vec<String> = value
-        .split(',')
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_string)
-        .collect();
+    let mut ids: Vec<String> = Vec::new();
+    for id in value.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+        if !ids.iter().any(|kept| kept == id) {
+            ids.push(id.to_string());
+        }
+    }
     if ids.is_empty() {
         return Err("--rules needs at least one rule id".to_string());
     }
@@ -308,10 +317,26 @@ fn analyze(json: bool, requested: Option<Vec<String>>) -> Result<i32, (i32, Stri
     Ok(EXIT_OK)
 }
 
+/// The arguments as `parse` wants them. The process reads `args_os`, never
+/// `args`: the latter panics on an argument that is not valid Unicode, and a
+/// windowed binary takes whatever a shortcut, a scheduled task or a drop onto
+/// its icon hands it — a crash dialog with no window behind it would be the
+/// worst possible answer. Nothing this command line accepts needs a byte
+/// outside UTF-8, so such an argument is a usage error like a typo.
+fn to_utf8(args: &[OsString]) -> Result<Vec<String>, String> {
+    args.iter()
+        .map(|arg| {
+            arg.clone().into_string().map_err(|bad| {
+                format!("argument is not valid text: \"{}\"", bad.to_string_lossy())
+            })
+        })
+        .collect()
+}
+
 /// Entry point of a run that carries arguments. Returns the process exit code.
-pub fn main(args: &[String]) -> i32 {
+pub fn main(args: &[OsString]) -> i32 {
     attach_console();
-    match parse(args) {
+    match to_utf8(args).and_then(|args| parse(&args)) {
         Ok(Command::Help) => {
             print!("{USAGE}");
             EXIT_OK
@@ -411,6 +436,40 @@ mod tests {
         assert!(parse(&["--json".to_string()])
             .unwrap_err()
             .contains("--analyze"));
+    }
+
+    /// The same id twice would be measured twice and its files counted twice
+    /// in the totals a script reads.
+    #[test]
+    fn a_rule_id_repeated_in_the_list_is_measured_once() {
+        let args = ["--analyze", "--rules", "temp,cache,temp"].map(str::to_string);
+        assert_eq!(
+            parse(&args).unwrap(),
+            Command::Analyze {
+                json: false,
+                rules: Some(vec!["temp".to_string(), "cache".to_string()])
+            }
+        );
+    }
+
+    /// Keeping the last list would measure something other than what the line
+    /// asked for, without saying so.
+    #[test]
+    fn a_second_rules_option_is_a_usage_error() {
+        let args = ["--analyze", "--rules", "temp", "--rules", "cache"].map(str::to_string);
+        assert!(parse(&args).unwrap_err().contains("--rules"));
+    }
+
+    /// `std::env::args()` would panic here instead; the line is refused like
+    /// any other bad argument.
+    #[test]
+    fn an_argument_that_is_not_valid_text_is_a_usage_error() {
+        use std::os::windows::ffi::OsStringExt;
+        // An unpaired surrogate: a valid Windows argument, not valid UTF-8.
+        let broken = OsString::from_wide(&[0x2D, 0xD800]);
+        let args = [OsString::from("--analyze"), broken];
+        assert!(to_utf8(&args).unwrap_err().contains("not valid text"));
+        assert!(to_utf8(&args[..1]).is_ok());
     }
 
     #[test]

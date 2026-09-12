@@ -65,7 +65,10 @@ the app), followed by the unsigned-installers note and a link to the full
 changelog. The release workflow runs it into `release-notes.md` and passes
 that as `releaseBody` to `tauri-action`; the SignPath step at the end of the
 workflow edits that same body in place to drop the unsigned note once
-installers are signed, without touching the changelog section.
+installers are signed, without touching the changelog section. The sentence it
+writes is "Installers signed via SignPath Foundation; the portable executable
+is unsigned." — only the installers go through SignPath, and a note that said
+"signed" without that second half would cover an asset it does not apply to.
 
 ## Where the artifacts land
 

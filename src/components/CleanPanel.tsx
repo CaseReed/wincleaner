@@ -351,10 +351,17 @@ export function CleanPanel({
   /// The browser being stopped, while the call is in flight.
   const [quitBusy, setQuitBusy] = useState<string | null>(null);
   const quitConfirmRef = useRef<HTMLDivElement | null>(null);
-  /// The Quit button that raised the confirmation, so Escape and Cancel send
-  /// the focus back to it — it is one button among several in the banner, so
-  /// the element itself is kept rather than a ref per browser.
-  const quitTrigger = useRef<HTMLButtonElement | null>(null);
+  /// The live Quit button of each browser, by process name. The button
+  /// unmounts while the confirmation stands in its place, so the element that
+  /// raised it is a detached node by the time the focus comes back: what is
+  /// focused is the one mounted now, looked up here.
+  const quitTriggers = useRef(new Map<string, HTMLButtonElement>());
+  /// Where the focus belongs once the confirmation closes: back on the Quit
+  /// button of that browser, or on the Analyze button when the quit succeeded
+  /// and the whole banner line is about to go with it. Read by the effect
+  /// below, after the render that removed the confirmation.
+  const quitReturn = useRef<{ trigger: string } | "analyze" | null>(null);
+  const analyzeRef = useRef<HTMLButtonElement | null>(null);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
   /// The last `scan-progress` event of the running scan, or null before the
   /// first one arrives. Read only while a scan is pending.
@@ -549,9 +556,21 @@ export function CleanPanel({
 
   /// The quit confirmation follows the Clean one: focused as it appears so it
   /// is read out, `Escape` steps back out of it, and the focus returns to the
-  /// button that raised it.
+  /// button that raised it — or, when the browser is actually gone and that
+  /// button goes with the banner, to the Analyze button, which is always
+  /// there. Anything else drops the focus on `<body>`, and a keyboard is then
+  /// back at the top of the page.
   useEffect(() => {
-    if (quitting) quitConfirmRef.current?.focus();
+    if (quitting) {
+      quitConfirmRef.current?.focus();
+      return;
+    }
+    const back = quitReturn.current;
+    if (!back) return;
+    quitReturn.current = null;
+    const target =
+      back === "analyze" ? analyzeRef.current : quitTriggers.current.get(back.trigger);
+    (target ?? analyzeRef.current)?.focus();
   }, [quitting]);
 
   useEffect(() => {
@@ -566,8 +585,8 @@ export function CleanPanel({
   }, [quitting]);
 
   function cancelQuit() {
+    if (quitting) quitReturn.current = { trigger: quitting.process };
     setQuitting(null);
-    quitTrigger.current?.focus();
   }
 
   /// Force-closes a background-only browser, then re-reads the banner: the
@@ -575,8 +594,10 @@ export function CleanPanel({
   /// must keep its warning.
   async function onQuitBrowser(browser: RunningBrowser) {
     setQuitBusy(browser.process);
+    let stoppedIt = false;
     try {
       const stopped = await quitBrowser(browser.process);
+      stoppedIt = true;
       toast.success(
         t("browser.quitDone", {
           name: browser.name,
@@ -594,6 +615,7 @@ export function CleanPanel({
       );
     } finally {
       setQuitBusy(null);
+      quitReturn.current = stoppedIt ? "analyze" : { trigger: browser.process };
       setQuitting(null);
       runningBrowsers()
         .then(setBrowsers)
@@ -947,7 +969,11 @@ export function CleanPanel({
                         data-testid="confirm-quit"
                         ref={quitConfirmRef}
                         tabIndex={-1}
-                        role="group"
+                        /* A live region, not a plain group: the sentence
+                           appears in place of the button, and a screen reader
+                           announces it as it is inserted as well as when the
+                           focus lands here. */
+                        role="status"
                         aria-label={t("browser.quit", { name: browser.name })}
                         className="flex flex-wrap items-center gap-2 outline-none focus-visible:ring-3 focus-visible:ring-ring"
                       >
@@ -970,10 +996,11 @@ export function CleanPanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={(event) => {
-                          quitTrigger.current = event.currentTarget;
-                          setQuitting(browser);
+                        ref={(element) => {
+                          if (element) quitTriggers.current.set(browser.process, element);
+                          else quitTriggers.current.delete(browser.process);
                         }}
+                        onClick={() => setQuitting(browser)}
                         disabled={quitBusy !== null}
                       >
                         {t("browser.quit", { name: browser.name })}
@@ -1085,6 +1112,7 @@ export function CleanPanel({
               </span>
               <Button
                 size="lg"
+                ref={analyzeRef}
                 onClick={onScan}
                 aria-busy={busyAction === "scan"}
                 disabled={busy || availableRules.length === 0}

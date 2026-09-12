@@ -654,6 +654,50 @@ describe("CleanPanel", () => {
     await waitFor(() => expect(screen.queryByTestId("browser-warning")).toBeNull());
   });
 
+  it("announces the quit confirmation as a live region", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers.mockResolvedValue([
+      { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+    ]);
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+
+    const confirm = screen.getByTestId("confirm-quit");
+    expect(confirm).toHaveAttribute("role", "status");
+    expect(confirm).toHaveFocus();
+  });
+
+  it("moves the focus to Analyze once the browser is gone", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers
+      .mockResolvedValueOnce([
+        { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+      ])
+      .mockResolvedValue([]);
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+    await user.click(screen.getByRole("button", { name: "Quit Google Chrome" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Analyze" })).toHaveFocus()
+    );
+  });
+
+  it("puts the focus back on the Quit button when the quit failed", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers.mockResolvedValue([
+      { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+    ]);
+    api.quitBrowser.mockRejectedValue("browser-has-window");
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+    await user.click(screen.getByRole("button", { name: "Quit Google Chrome" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Quit Google Chrome" })).toHaveFocus()
+    );
+  });
+
   it("says so when a window appeared between the banner and the click", async () => {
     const user = userEvent.setup();
     api.runningBrowsers.mockResolvedValue([

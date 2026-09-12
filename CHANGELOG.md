@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Force-closing a browser now only touches that browser, in this session.**
+  The second pass, the one that catches whatever outlived the main process,
+  used to terminate any pid from the list that was still *a* live process —
+  and Windows hands pid numbers straight back out, with three seconds of
+  waiting for it to happen. It now re-lists the browser by name and keeps the
+  intersection, so a number that came back as something else is left alone.
+  The list of processes is narrowed to the current logon session as well: the
+  same account can be signed in twice, on the console and over RDP, and the
+  other session's browser has windows nobody here can see. And Firefox is
+  finally read correctly — its children are marked `-contentproc`, not
+  `--type=`, so every `firefox.exe` used to pass for a main process and be
+  terminated one by one.
+- **The command line refuses an ambiguous line instead of measuring the wrong
+  thing.** `--rules a,a` measured that rule twice and counted its files twice
+  in the totals; a repeated id is now kept once. A second `--rules` silently
+  replaced the first: it is a usage error, exit 2. And the arguments are read
+  as `args_os`, so a line carrying bytes that are not valid text is refused
+  with the usage rather than panicking — in a windowed binary, that panic had
+  no console to print to.
+- **The release notes no longer imply the portable executable is signed.**
+  Only the installers go through SignPath; the note the workflow writes once
+  they are signed now says so, and the README and `docs/releasing.md` say it
+  too.
+- **The quit confirmation is announced, and the focus goes somewhere.** The
+  confirmation next to a background browser is a live region now, so its
+  sentence is read out as it appears. Once the quit goes through, the banner
+  and the button that raised it disappear together and the focus used to fall
+  to the top of the page: it lands on Analyze instead, and back on the Quit
+  button when the browser refused to die.
+
 ## [0.10.0] - 2026-09-13
 
 ### Added

@@ -294,15 +294,23 @@ fn pid_has_visible_window(pid: u32) -> bool {
 }
 
 /// One process of a tracked browser as `quit_browser_with` sees it.
-/// `is_child` is read off the command line: Chrome and Edge give every
-/// renderer, GPU and utility process a `--type=` argument, and only the main
-/// browser process has none. A command line we cannot read leaves `is_child`
-/// false, so the process counts as a main one — terminating it is what stops
-/// the browser, and the alternative would be to leave it half running.
+/// `is_child` is read off the command line (`marks_child_process`). A command
+/// line we cannot read leaves `is_child` false, so the process counts as a
+/// main one — terminating it is what stops the browser, and the alternative
+/// would be to leave it half running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrowserProcess {
     pub pid: u32,
     pub is_child: bool,
+}
+
+/// Whether a command-line argument marks a child process rather than the main
+/// browser one. Chrome and Edge give every renderer, GPU and utility process a
+/// `--type=` argument; Firefox spells the same thing `-contentproc`, so
+/// without that second marker every `firefox.exe` would pass for a main
+/// process and be terminated one by one.
+fn marks_child_process(arg: &str) -> bool {
+    arg.starts_with("--type=") || arg.starts_with("-contentproc")
 }
 
 /// Everything `quit_browser_with` needs from the machine, behind one seam: the
@@ -359,10 +367,33 @@ pub fn quit_browser_with(process: &str, machine: &dyn ProcessControl) -> Result<
         machine.pause();
         alive = machine.still_running(&pids);
     }
-    for leftover in &alive {
-        machine.terminate(*leftover);
+    for leftover in leftovers(&pids, machine.list(&process)) {
+        machine.terminate(leftover);
     }
-    Ok((pids.len() - machine.still_running(&pids).len()) as u32)
+    let remaining = leftovers(&pids, machine.list(&process)).len();
+    Ok((pids.len() - remaining) as u32)
+}
+
+/// Which of the pids found at the start are still a process of that browser.
+/// A pid alone proves nothing — Windows reuses them, and the wait above gives
+/// it three seconds to do so — so a pid that is merely *some* live process is
+/// not a leftover: only one the browser still answers for is, and only those
+/// are terminated or counted as survivors.
+fn leftovers(original: &[u32], current: Vec<BrowserProcess>) -> Vec<u32> {
+    current
+        .iter()
+        .map(|p| p.pid)
+        .filter(|pid| original.contains(pid))
+        .collect()
+}
+
+/// The Terminal Services session a pid belongs to, or `None` when it cannot be
+/// read — the process has exited, or it is not ours to look at.
+fn session_of(pid: u32) -> Option<u32> {
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    let mut session = 0u32;
+    unsafe { ProcessIdToSessionId(pid, &mut session) }.ok()?;
+    Some(session)
 }
 
 /// The real machine behind `quit_browser`.
@@ -382,6 +413,7 @@ impl ProcessControl for Machine {
             .process(sysinfo::Pid::from_u32(std::process::id()))
             .and_then(|p| p.user_id())
             .cloned();
+        let ours = session_of(std::process::id());
         system
             .processes()
             .iter()
@@ -393,12 +425,21 @@ impl ProcessControl for Machine {
                 (Some(me), Some(owner)) => owner == me,
                 _ => true,
             })
+            // Our own logon session too, and here the unreadable case goes the
+            // other way: the same account can be logged on twice (console plus
+            // RDP), and the other session's browser has windows we cannot see,
+            // so a process whose session cannot be read is not provably ours
+            // and is skipped rather than terminated.
+            .filter(|(pid, _)| match (session_of(pid.as_u32()), ours) {
+                (Some(theirs), Some(ours)) => theirs == ours,
+                _ => false,
+            })
             .map(|(pid, p)| BrowserProcess {
                 pid: pid.as_u32(),
                 is_child: p
                     .cmd()
                     .iter()
-                    .any(|arg| arg.to_string_lossy().starts_with("--type=")),
+                    .any(|arg| marks_child_process(&arg.to_string_lossy())),
             })
             .collect()
     }
@@ -1601,6 +1642,9 @@ mod tests {
         processes: Vec<BrowserProcess>,
         windows: Vec<u32>,
         stubborn: Vec<u32>,
+        /// Pids whose process exits but whose number is immediately taken over
+        /// by an unrelated one: still a live pid, no longer this browser.
+        reused: Vec<u32>,
         killed: std::cell::RefCell<Vec<u32>>,
         pauses: std::cell::Cell<u32>,
     }
@@ -1611,9 +1655,23 @@ mod tests {
                 processes,
                 windows: Vec::new(),
                 stubborn: Vec::new(),
+                reused: Vec::new(),
                 killed: std::cell::RefCell::new(Vec::new()),
                 pauses: std::cell::Cell::new(0),
             }
+        }
+
+        /// Whether a process of this browser is still there: killed ones are
+        /// gone, and a child follows its parent out unless it is stubborn.
+        fn alive(&self, p: &BrowserProcess) -> bool {
+            if self.killed.borrow().contains(&p.pid) {
+                return false;
+            }
+            let parent_gone = self
+                .processes
+                .iter()
+                .any(|other| !other.is_child && self.killed.borrow().contains(&other.pid));
+            !(p.is_child && parent_gone) || self.stubborn.contains(&p.pid)
         }
     }
 
@@ -1633,7 +1691,11 @@ mod tests {
 
     impl ProcessControl for FakeMachine {
         fn list(&self, _process: &str) -> Vec<BrowserProcess> {
-            self.processes.clone()
+            self.processes
+                .iter()
+                .filter(|p| self.alive(p))
+                .copied()
+                .collect()
         }
 
         fn has_visible_window(&self, pid: u32) -> bool {
@@ -1645,16 +1707,16 @@ mod tests {
         }
 
         fn still_running(&self, pids: &[u32]) -> Vec<u32> {
-            let parent_gone = self
-                .processes
-                .iter()
-                .any(|p| !p.is_child && self.killed.borrow().contains(&p.pid));
             pids.iter()
                 .copied()
-                .filter(|pid| !self.killed.borrow().contains(pid))
                 .filter(|pid| {
-                    let child = self.processes.iter().any(|p| p.pid == *pid && p.is_child);
-                    !(child && parent_gone) || self.stubborn.contains(pid)
+                    // A reused number answers "yes, some process": exactly the
+                    // trap this poll cannot see and `leftovers` must.
+                    self.reused.contains(pid)
+                        || self
+                            .processes
+                            .iter()
+                            .any(|p| p.pid == *pid && self.alive(p))
                 })
                 .collect()
         }
@@ -1702,6 +1764,26 @@ mod tests {
         assert_eq!(quit_browser_with("chrome.exe", &machine), Ok(2));
         assert_eq!(*machine.killed.borrow(), vec![1, 2]);
         assert_eq!(machine.pauses.get(), QUIT_POLLS);
+    }
+
+    /// The wait is three seconds long and Windows reuses pid numbers freely:
+    /// the second pass must not terminate whatever has since inherited one.
+    #[test]
+    fn a_pid_that_comes_back_under_another_name_is_not_terminated() {
+        let mut machine = FakeMachine::with(vec![main_process(1), child_process(2)]);
+        machine.reused = vec![2];
+        assert_eq!(quit_browser_with("chrome.exe", &machine), Ok(2));
+        assert_eq!(*machine.killed.borrow(), vec![1]);
+    }
+
+    #[test]
+    fn firefox_marks_its_children_with_contentproc_rather_than_type() {
+        assert!(marks_child_process("--type=renderer"));
+        assert!(marks_child_process("-contentproc"));
+        // The way Firefox actually spells it on the line.
+        assert!(marks_child_process("-contentproc-tab"));
+        assert!(!marks_child_process("--new-window"));
+        assert!(!marks_child_process(r"C:\Program Files\Mozilla Firefox\firefox.exe"));
     }
 
     /// No pid ever owns a window: the default stand-in for `has_window` in

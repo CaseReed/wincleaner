@@ -53,7 +53,9 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   update consent) are WebView2 `localStorage` and are not moved by portable
   mode. `app_mode` hands the front end a single flag, never the directory.
 - The command line (`src-tauri/src/cli.rs`) is **read-only and takes no
-  path**. There is no `--clean`: the confirmation before a deletion is an
+  path**: it deletes nothing, and the only file it writes is its own
+  measurement cache (`recycle-bin.toml`, through the same `scan_rules_in` the
+  window uses). There is no `--clean`: the confirmation before a deletion is an
   invariant, and an unattended flag would be the way around it. `--rules`
   accepts rule ids validated against the catalogue and nothing else — the same
   rule the IPC boundary obeys, extended to `argv` — and the printed report
@@ -86,8 +88,17 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   a pid: it is matched against `BROWSER_PROCESSES` and anything else is refused
   (`unknown-browser`), and a browser that owns a visible window is refused too
   (`browser-has-window`), re-checked at the moment of the call rather than
-  trusted from the banner. It terminates the main process first (no `--type=`
-  argument) and only then whatever outlived it. The machine is behind
+  trusted from the banner. It terminates the main process first — one with no
+  child marker on its command line: `--type=` for Chrome and Edge,
+  `-contentproc` for Firefox (`commands::marks_child_process`) — and only then
+  whatever outlived it. That second pass re-lists the browser by name and
+  keeps the intersection with the pids found at the start
+  (`commands::leftovers`): a pid alone proves nothing, Windows reuses them
+  during the three-second wait. `Machine::list` also keeps only the current
+  logon session (`ProcessIdToSessionId`), so the same account logged on twice
+  (console plus RDP) does not lose the other session's browser; a session that
+  cannot be read is skipped, the opposite of the owner check next to it,
+  because such a process is not provably ours. The machine is behind
   `ProcessControl`, so no test ever terminates anything.
 - Every rule lives in `src-tauri/rules.toml`; allowed variables: TEMP,
   LOCALAPPDATA, APPDATA, USERPROFILE; the resolved path must be under the
