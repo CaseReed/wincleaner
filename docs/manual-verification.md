@@ -508,3 +508,36 @@ fingerprint.
    actually in the bin, never the cached figure: the report's freed total is
    allowed to differ from what the row showed, and the bin must come back
    empty in Explorer.
+
+## VM-23 — Quitting a background-only browser — to be run by the user
+
+Not run automatically, and it cannot be: the suite drives a table of fake
+processes through `ProcessControl` and never terminates anything. This is the
+only check that a real browser actually dies and that its cache stops being
+"in use".
+
+1. Put Chrome in the state this exists for: open it, make sure an extension is
+   installed and that **Continue running background apps when Google Chrome is
+   closed** is on in its settings, then close every window. Its icon stays in
+   the notification area. `Get-Process chrome` must still list several
+   processes.
+2. Cleanup > **Analyze**. The banner must read **Google Chrome is still
+   running in the background (N processes)**, must name the "Continue running
+   background apps" setting as the permanent fix, and must carry a **Quit
+   Google Chrome** button. Tick the Chrome cache rule and **Clean**: the report
+   must skip files marked **in use**.
+3. Click **Quit Google Chrome**. The confirmation must appear in the banner and
+   must say the browser will be force-closed and may offer to restore its
+   session. Press **Escape**: it goes away, the focus comes back on the button,
+   and nothing was stopped (`Get-Process chrome` unchanged).
+4. Click it again and confirm. A toast must read **Google Chrome stopped (N
+   processes)**, the banner must disappear on its own, and `Get-Process chrome`
+   must report no such process.
+5. **Analyze**, then **Clean** the same rule again. The cache files that were
+   skipped as **in use** must now be deleted.
+6. The refusal path: open Chrome with a window on screen and Analyze. The
+   banner must show the "is open" sentence and **no** button at all. Then, with
+   a background-only Chrome, raise the confirmation, open a Chrome window
+   before confirming, and confirm: the toast must read **Google Chrome has just
+   opened a window: close it yourself instead.**, and the window must still be
+   there.

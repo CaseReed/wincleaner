@@ -210,6 +210,16 @@ export function runningBrowsers(): Promise<RunningBrowser[]> {
   return invoke<RunningBrowser[]>("running_browsers");
 }
 
+/// Force-closes a browser that `runningBrowsers` reported with no window
+/// left, and resolves with how many of its processes are gone. `process` is
+/// one of the executable names that command returned: the back end matches it
+/// against its own list and refuses anything else. It also refuses, with the
+/// stable code `browser-has-window`, a browser that has opened a window since
+/// the banner was painted.
+export function quitBrowser(process: string): Promise<number> {
+  return invoke<number>("quit_browser", { process });
+}
+
 export function rulesSummary(): Promise<RulesSummary> {
   return invoke<RulesSummary>("rules_summary");
 }

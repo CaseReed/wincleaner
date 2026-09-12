@@ -293,6 +293,150 @@ fn pid_has_visible_window(pid: u32) -> bool {
     search.found
 }
 
+/// One process of a tracked browser as `quit_browser_with` sees it.
+/// `is_child` is read off the command line: Chrome and Edge give every
+/// renderer, GPU and utility process a `--type=` argument, and only the main
+/// browser process has none. A command line we cannot read leaves `is_child`
+/// false, so the process counts as a main one — terminating it is what stops
+/// the browser, and the alternative would be to leave it half running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BrowserProcess {
+    pub pid: u32,
+    pub is_child: bool,
+}
+
+/// Everything `quit_browser_with` needs from the machine, behind one seam: the
+/// tests drive a table of fake processes and no real browser is ever touched.
+pub trait ProcessControl {
+    /// The live processes named `process` owned by the current user.
+    fn list(&self, process: &str) -> Vec<BrowserProcess>;
+    fn has_visible_window(&self, pid: u32) -> bool;
+    fn terminate(&self, pid: u32);
+    /// Which of `pids` are still alive, in one snapshot: asked once per poll
+    /// rather than once per process, because the real answer costs a walk of
+    /// the whole process table.
+    fn still_running(&self, pids: &[u32]) -> Vec<u32>;
+    /// One polling interval while the children follow their parent out.
+    fn pause(&self);
+}
+
+/// How many times the children are re-checked before the leftovers are
+/// terminated in turn: `QUIT_POLLS` x `Machine::pause` (100 ms) = about 3 s.
+const QUIT_POLLS: u32 = 30;
+
+/// Stable error codes of `quit_browser`, translated by the front end. Not
+/// sentences: the window shows the code's translation, like `SkippedItem`.
+const QUIT_UNKNOWN_BROWSER: &str = "unknown-browser";
+const QUIT_HAS_WINDOW: &str = "browser-has-window";
+
+/// Force-closes a browser that is running with no window left. `process` is
+/// matched against `BROWSER_PROCESSES` and nothing else — the front end cannot
+/// name an arbitrary executable — and a browser that has a visible window is
+/// refused, because the user would lose what is on screen: the banner offers
+/// the button only in the background-only case, and this re-checks it at the
+/// moment of the click rather than trusting that reading. The main process
+/// goes first and its children exit with it; whatever is still alive after the
+/// wait is terminated in turn. Returns how many of the processes found are
+/// gone.
+pub fn quit_browser_with(process: &str, machine: &dyn ProcessControl) -> Result<u32, String> {
+    let process = process.to_lowercase();
+    if !BROWSER_PROCESSES.contains(&process.as_str()) {
+        return Err(QUIT_UNKNOWN_BROWSER.to_string());
+    }
+    let found = machine.list(&process);
+    if found.iter().any(|p| machine.has_visible_window(p.pid)) {
+        return Err(QUIT_HAS_WINDOW.to_string());
+    }
+    for main in found.iter().filter(|p| !p.is_child) {
+        machine.terminate(main.pid);
+    }
+    let pids: Vec<u32> = found.iter().map(|p| p.pid).collect();
+    let mut alive = machine.still_running(&pids);
+    for _ in 0..QUIT_POLLS {
+        if alive.is_empty() {
+            break;
+        }
+        machine.pause();
+        alive = machine.still_running(&pids);
+    }
+    for leftover in &alive {
+        machine.terminate(*leftover);
+    }
+    Ok((pids.len() - machine.still_running(&pids).len()) as u32)
+}
+
+/// The real machine behind `quit_browser`.
+struct Machine;
+
+impl ProcessControl for Machine {
+    fn list(&self, process: &str) -> Vec<BrowserProcess> {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::All,
+            true,
+            sysinfo::ProcessRefreshKind::nothing()
+                .with_cmd(sysinfo::UpdateKind::Always)
+                .with_user(sysinfo::UpdateKind::Always),
+        );
+        let me = system
+            .process(sysinfo::Pid::from_u32(std::process::id()))
+            .and_then(|p| p.user_id())
+            .cloned();
+        system
+            .processes()
+            .iter()
+            .filter(|(_, p)| p.name().to_string_lossy().to_lowercase() == process)
+            // Our own session only. When either owner cannot be read we keep
+            // the process: the OS refuses another user's process anyway, and
+            // dropping it would silently leave the browser running.
+            .filter(|(_, p)| match (&me, p.user_id()) {
+                (Some(me), Some(owner)) => owner == me,
+                _ => true,
+            })
+            .map(|(pid, p)| BrowserProcess {
+                pid: pid.as_u32(),
+                is_child: p
+                    .cmd()
+                    .iter()
+                    .any(|arg| arg.to_string_lossy().starts_with("--type=")),
+            })
+            .collect()
+    }
+
+    fn has_visible_window(&self, pid: u32) -> bool {
+        pid_has_visible_window(pid)
+    }
+
+    fn terminate(&self, pid: u32) {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        unsafe {
+            // A process that has already exited, or one this session may not
+            // touch, simply fails to open: there is nothing to do about either,
+            // and the count returned is measured afterwards, not from here.
+            let Ok(handle) = OpenProcess(PROCESS_TERMINATE, false, pid) else {
+                return;
+            };
+            let _ = TerminateProcess(handle, 1);
+            let _ = CloseHandle(handle);
+        }
+    }
+
+    fn still_running(&self, pids: &[u32]) -> Vec<u32> {
+        let ids: Vec<sysinfo::Pid> = pids.iter().map(|&p| sysinfo::Pid::from_u32(p)).collect();
+        let mut system = System::new();
+        system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&ids), true);
+        pids.iter()
+            .copied()
+            .filter(|&pid| system.process(sysinfo::Pid::from_u32(pid)).is_some())
+            .collect()
+    }
+
+    fn pause(&self) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Async like the other heavy commands: the first call builds the catalogue if
 /// the startup warm-up has not finished yet, and that must not happen on the
 /// thread pumping the window events.
@@ -571,6 +715,14 @@ pub async fn clean(
         })
     })
     .await
+}
+
+/// Async + `spawn_blocking` like the other heavy commands: the wait for the
+/// children to exit lasts up to three seconds, which the thread pumping the
+/// window events must not spend.
+#[tauri::command]
+pub async fn quit_browser(process: String) -> Result<u32, String> {
+    blocking(move || quit_browser_with(&process, &Machine)).await
 }
 
 #[tauri::command]
@@ -1429,6 +1581,118 @@ pub async fn space_reveal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A table of processes standing in for the machine, so `quit_browser_with`
+    /// is exercised without a real browser: every pid here is imaginary and
+    /// `terminate` only writes it down. A child disappears when its parent is
+    /// terminated, which is what Chrome actually does — unless it is listed in
+    /// `stubborn`, the case the wait and the second pass exist for.
+    struct FakeMachine {
+        processes: Vec<BrowserProcess>,
+        windows: Vec<u32>,
+        stubborn: Vec<u32>,
+        killed: std::cell::RefCell<Vec<u32>>,
+        pauses: std::cell::Cell<u32>,
+    }
+
+    impl FakeMachine {
+        fn with(processes: Vec<BrowserProcess>) -> Self {
+            FakeMachine {
+                processes,
+                windows: Vec::new(),
+                stubborn: Vec::new(),
+                killed: std::cell::RefCell::new(Vec::new()),
+                pauses: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    fn main_process(pid: u32) -> BrowserProcess {
+        BrowserProcess {
+            pid,
+            is_child: false,
+        }
+    }
+
+    fn child_process(pid: u32) -> BrowserProcess {
+        BrowserProcess {
+            pid,
+            is_child: true,
+        }
+    }
+
+    impl ProcessControl for FakeMachine {
+        fn list(&self, _process: &str) -> Vec<BrowserProcess> {
+            self.processes.clone()
+        }
+
+        fn has_visible_window(&self, pid: u32) -> bool {
+            self.windows.contains(&pid)
+        }
+
+        fn terminate(&self, pid: u32) {
+            self.killed.borrow_mut().push(pid);
+        }
+
+        fn still_running(&self, pids: &[u32]) -> Vec<u32> {
+            let parent_gone = self
+                .processes
+                .iter()
+                .any(|p| !p.is_child && self.killed.borrow().contains(&p.pid));
+            pids.iter()
+                .copied()
+                .filter(|pid| !self.killed.borrow().contains(pid))
+                .filter(|pid| {
+                    let child = self.processes.iter().any(|p| p.pid == *pid && p.is_child);
+                    !(child && parent_gone) || self.stubborn.contains(pid)
+                })
+                .collect()
+        }
+
+        fn pause(&self) {
+            self.pauses.set(self.pauses.get() + 1);
+        }
+    }
+
+    #[test]
+    fn quitting_a_process_that_is_not_a_tracked_browser_is_refused() {
+        let machine = FakeMachine::with(vec![main_process(1)]);
+        assert_eq!(
+            quit_browser_with("notepad.exe", &machine),
+            Err(QUIT_UNKNOWN_BROWSER.to_string())
+        );
+        assert!(machine.killed.borrow().is_empty());
+    }
+
+    #[test]
+    fn quitting_a_browser_that_has_a_visible_window_is_refused() {
+        let mut machine = FakeMachine::with(vec![main_process(1), child_process(2)]);
+        machine.windows = vec![2];
+        assert_eq!(
+            quit_browser_with("chrome.exe", &machine),
+            Err(QUIT_HAS_WINDOW.to_string())
+        );
+        assert!(machine.killed.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_main_process_goes_first_and_its_children_follow_it_out() {
+        let machine = FakeMachine::with(vec![child_process(2), main_process(1), child_process(3)]);
+        // Spelled as the front end might send it: the name is matched the way
+        // `summarise` groups it, without regard to case.
+        assert_eq!(quit_browser_with("Chrome.exe", &machine), Ok(3));
+        assert_eq!(*machine.killed.borrow(), vec![1]);
+        assert_eq!(machine.pauses.get(), 0);
+    }
+
+    #[test]
+    fn a_child_outliving_its_parent_is_terminated_in_turn() {
+        let mut machine = FakeMachine::with(vec![main_process(1), child_process(2)]);
+        machine.stubborn = vec![2];
+        assert_eq!(quit_browser_with("chrome.exe", &machine), Ok(2));
+        assert_eq!(*machine.killed.borrow(), vec![1, 2]);
+        assert_eq!(machine.pauses.get(), QUIT_POLLS);
+    }
 
     /// No pid ever owns a window: the default stand-in for `has_window` in
     /// tests that only care about which browsers and counts come out.

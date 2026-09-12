@@ -148,6 +148,7 @@ pub fn run() {
             commands::scan,
             commands::clean,
             commands::running_browsers,
+            commands::quit_browser,
             commands::list_startup,
             commands::set_startup_enabled,
             commands::check_for_updates,

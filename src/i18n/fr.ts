@@ -59,7 +59,13 @@ export const fr: Dictionary = {
   "browser.open":
     "{name} est ouvert : ses fichiers de cache en cours d’utilisation seront ignorés. Fermez-le pour un nettoyage complet.",
   "browser.background":
-    "{name} tourne encore en arrière-plan ({processes}) : quittez-le depuis la zone de notification, sans quoi ses fichiers de cache en cours d’utilisation seront ignorés.",
+    "{name} tourne encore en arrière-plan ({processes}) : quittez-le depuis la zone de notification, sans quoi ses fichiers de cache en cours d’utilisation seront ignorés. Pour éviter cela, désactivez « Continuer à exécuter les applications en arrière-plan à la fermeture de {name} » dans les paramètres de {name}.",
+  "browser.quit": "Quitter {name}",
+  "browser.quitConfirm":
+    "{name} sera forcé à se fermer. Rien n’est ouvert à l’écran, mais {name} proposera peut-être de restaurer sa session à son prochain démarrage.",
+  "browser.quitDone": "{name} arrêté ({processes})",
+  "browser.quitFailed": "{name} n’a pas pu être arrêté.",
+  "browser.quitHasWindow": "{name} vient d’ouvrir une fenêtre : fermez-la vous-même.",
   "browser.processes.one": "{count} processus",
   "browser.processes.other": "{count} processus",
 

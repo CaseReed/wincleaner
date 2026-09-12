@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Quitting a browser that only runs in the background.** Chrome and Edge
+  keep a handful of processes alive after the last window is closed, and one
+  extension is enough to hold them there for the rest of the session: on the
+  machine this was written for, nine `chrome.exe` processes with no window
+  between them, and a Clean that reported the cache files "in use" every time.
+  The banner that already told those two cases apart now does something about
+  the second one: a **Quit {browser}** button next to the warning, a
+  confirmation that says what it costs — the browser is force-closed, and it
+  may offer to restore its session next time — and a count of the processes
+  stopped. Chrome has no external "quit" command, so the new `quit_browser`
+  terminates its main process (the one with no `--type=` on its command line)
+  and gives the children three seconds to follow it out before terminating
+  whatever is left. It takes an executable name and matches it against the
+  three browsers the detection already knows, never a path, and it re-checks
+  at the moment of the click that no window has appeared since the banner was
+  painted — a browser you can see is one you close yourself. The banner also
+  names the permanent fix now: the "Continue running background apps" setting
+  in the browser itself.
+
 ## [0.9.1] - 2026-09-12
 
 ### Fixed

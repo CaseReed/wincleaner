@@ -24,6 +24,7 @@ import {
   listRules,
   onCleanProgress,
   onScanProgress,
+  quitBrowser,
   rulesSummary,
   runningBrowsers,
   sandboxVerify,
@@ -344,6 +345,16 @@ export function CleanPanel({
   const [verdictError, setVerdictError] = useState<string | null>(null);
   const [mode, setMode] = useState<CleanMode>("auto");
   const [browsers, setBrowsers] = useState<RunningBrowser[]>([]);
+  /// The background-only browser whose Quit button has been pressed, waiting
+  /// for the confirmation next to it. One at a time, like the Clean button.
+  const [quitting, setQuitting] = useState<RunningBrowser | null>(null);
+  /// The browser being stopped, while the call is in flight.
+  const [quitBusy, setQuitBusy] = useState<string | null>(null);
+  const quitConfirmRef = useRef<HTMLDivElement | null>(null);
+  /// The Quit button that raised the confirmation, so Escape and Cancel send
+  /// the focus back to it — it is one button among several in the banner, so
+  /// the element itself is kept rather than a ref per browser.
+  const quitTrigger = useRef<HTMLButtonElement | null>(null);
   const [busyAction, setBusyAction] = useState<"scan" | "clean" | null>(null);
   /// The last `scan-progress` event of the running scan, or null before the
   /// first one arrives. Read only while a scan is pending.
@@ -534,6 +545,60 @@ export function CleanPanel({
   function cancelConfirm() {
     returnFocus.current = true;
     setConfirming(false);
+  }
+
+  /// The quit confirmation follows the Clean one: focused as it appears so it
+  /// is read out, `Escape` steps back out of it, and the focus returns to the
+  /// button that raised it.
+  useEffect(() => {
+    if (quitting) quitConfirmRef.current?.focus();
+  }, [quitting]);
+
+  useEffect(() => {
+    if (!quitting) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancelQuit();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [quitting]);
+
+  function cancelQuit() {
+    setQuitting(null);
+    quitTrigger.current?.focus();
+  }
+
+  /// Force-closes a background-only browser, then re-reads the banner: the
+  /// count it showed is stale either way, and a browser that refused to die
+  /// must keep its warning.
+  async function onQuitBrowser(browser: RunningBrowser) {
+    setQuitBusy(browser.process);
+    try {
+      const stopped = await quitBrowser(browser.process);
+      toast.success(
+        t("browser.quitDone", {
+          name: browser.name,
+          processes: tn("browser.processes", stopped),
+        })
+      );
+    } catch (error) {
+      // The one error worth its own sentence: a window appeared between the
+      // banner and the click, and the back end refused rather than take it
+      // away from the user.
+      toast.error(
+        String(error) === "browser-has-window"
+          ? t("browser.quitHasWindow", { name: browser.name })
+          : t("browser.quitFailed", { name: browser.name })
+      );
+    } finally {
+      setQuitBusy(null);
+      setQuitting(null);
+      runningBrowsers()
+        .then(setBrowsers)
+        .catch(() => setBrowsers([]));
+    }
   }
 
   /// `ScanProgress`/`CleanProgress` carry the rule's English label straight
@@ -870,9 +935,51 @@ export function CleanPanel({
             className="flex items-start gap-2.5 rounded-lg border border-warning/40 bg-warning/12 px-4 py-3 text-sm text-warning-foreground"
           >
             <TriangleAlert className="mt-px size-4 shrink-0 text-warning" />
-            <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1">
               {browsers.map((browser) => (
-                <p key={browser.process}>{browserWarningLine(browser, i18n)}</p>
+                <div key={browser.process} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <p className="min-w-0">{browserWarningLine(browser, i18n)}</p>
+                  {/* Only a browser with no window left gets the button: one
+                      the user can see is one they close themselves. */}
+                  {!browser.has_window &&
+                    (quitting?.process === browser.process ? (
+                      <div
+                        data-testid="confirm-quit"
+                        ref={quitConfirmRef}
+                        tabIndex={-1}
+                        role="group"
+                        aria-label={t("browser.quit", { name: browser.name })}
+                        className="flex flex-wrap items-center gap-2 outline-none focus-visible:ring-3 focus-visible:ring-ring"
+                      >
+                        <p className="text-xs">
+                          {t("browser.quitConfirm", { name: browser.name })}
+                        </p>
+                        <Button size="sm" variant="outline" onClick={cancelQuit}>
+                          {t("common.cancel")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => onQuitBrowser(browser)}
+                          disabled={quitBusy !== null}
+                        >
+                          {t("browser.quit", { name: browser.name })}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(event) => {
+                          quitTrigger.current = event.currentTarget;
+                          setQuitting(browser);
+                        }}
+                        disabled={quitBusy !== null}
+                      >
+                        {t("browser.quit", { name: browser.name })}
+                      </Button>
+                    ))}
+                </div>
               ))}
             </div>
           </div>

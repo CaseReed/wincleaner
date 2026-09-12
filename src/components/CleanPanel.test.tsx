@@ -8,6 +8,7 @@ const api = {
   scan: vi.fn(),
   clean: vi.fn(),
   runningBrowsers: vi.fn(),
+  quitBrowser: vi.fn(),
   onScanProgress: vi.fn(),
   onCleanProgress: vi.fn(),
   sandboxVerify: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("@/lib/api", async () => {
     scan: (ids: string[]) => api.scan(ids),
     clean: (ids: string[], mode: string) => api.clean(ids, mode),
     runningBrowsers: () => api.runningBrowsers(),
+    quitBrowser: (process: string) => api.quitBrowser(process),
     onScanProgress: (cb: (p: unknown) => void) => api.onScanProgress(cb),
     onCleanProgress: (cb: (p: unknown) => void) => api.onCleanProgress(cb),
     sandboxVerify: (ids: string[]) => api.sandboxVerify(ids),
@@ -105,6 +107,7 @@ describe("CleanPanel", () => {
     api.scan.mockReset().mockResolvedValue([]);
     api.clean.mockReset().mockResolvedValue({ freed_bytes: 0, deleted: 0, skipped: [] });
     api.runningBrowsers.mockReset().mockResolvedValue([]);
+    api.quitBrowser.mockReset().mockResolvedValue(9);
     api.sandboxVerify.mockReset();
     vi.mocked(toast.error).mockReset();
     vi.mocked(toast.success).mockReset();
@@ -606,6 +609,65 @@ describe("CleanPanel", () => {
     render(<CleanPanel />);
     expect(await screen.findByTestId("browser-warning")).toHaveTextContent(
       "Google Chrome is still running in the background (9 processes): quit it from the notification area, or its cache files in use will be skipped."
+    );
+  });
+
+  it("offers no Quit button for a browser that has a window open", async () => {
+    api.runningBrowsers.mockResolvedValue([
+      { process: "msedge.exe", name: "Microsoft Edge", processes: 3, has_window: true },
+    ]);
+    render(<CleanPanel />);
+    await screen.findByTestId("browser-warning");
+    expect(screen.queryByRole("button", { name: "Quit Microsoft Edge" })).toBeNull();
+  });
+
+  it("names what force-closing costs before quitting a background browser", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers.mockResolvedValue([
+      { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+    ]);
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+
+    expect(screen.getByTestId("confirm-quit")).toHaveTextContent(
+      "Google Chrome will be force-closed. Nothing is open on screen, but Google Chrome may offer to restore its session next time it starts."
+    );
+    expect(api.quitBrowser).not.toHaveBeenCalled();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("confirm-quit")).toBeNull();
+  });
+
+  it("stops the browser by process name and re-reads the banner", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers
+      .mockResolvedValueOnce([
+        { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+      ])
+      .mockResolvedValue([]);
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+    await user.click(screen.getByRole("button", { name: "Quit Google Chrome" }));
+
+    expect(api.quitBrowser).toHaveBeenCalledWith("chrome.exe");
+    expect(toast.success).toHaveBeenCalledWith("Google Chrome stopped (9 processes)");
+    await waitFor(() => expect(screen.queryByTestId("browser-warning")).toBeNull());
+  });
+
+  it("says so when a window appeared between the banner and the click", async () => {
+    const user = userEvent.setup();
+    api.runningBrowsers.mockResolvedValue([
+      { process: "chrome.exe", name: "Google Chrome", processes: 9, has_window: false },
+    ]);
+    api.quitBrowser.mockRejectedValue("browser-has-window");
+    render(<CleanPanel />);
+    await user.click(await screen.findByRole("button", { name: "Quit Google Chrome" }));
+    await user.click(screen.getByRole("button", { name: "Quit Google Chrome" }));
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "Google Chrome has just opened a window: close it yourself instead."
+      )
     );
   });
 

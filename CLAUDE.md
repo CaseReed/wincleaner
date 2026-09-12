@@ -62,6 +62,13 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   is derived there from the raw message, so no call site can set one that
   disagrees with the sentence next to it. The window shows the translated
   code; the raw message stays in a `title` and in the JSON report.
+- `quit_browser` (`commands.rs`) takes an **executable name**, never a path or
+  a pid: it is matched against `BROWSER_PROCESSES` and anything else is refused
+  (`unknown-browser`), and a browser that owns a visible window is refused too
+  (`browser-has-window`), re-checked at the moment of the call rather than
+  trusted from the banner. It terminates the main process first (no `--type=`
+  argument) and only then whatever outlived it. The machine is behind
+  `ProcessControl`, so no test ever terminates anything.
 - Every rule lives in `src-tauri/rules.toml`; allowed variables: TEMP,
   LOCALAPPDATA, APPDATA, USERPROFILE; the resolved path must be under the
   profile. Variable values go through `globset::escape` (a `[` in an account

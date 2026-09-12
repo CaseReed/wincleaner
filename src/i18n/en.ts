@@ -65,7 +65,13 @@ export const en = {
   "browser.open":
     "{name} is open: its cache files in use will be skipped. Close it for a complete cleanup.",
   "browser.background":
-    "{name} is still running in the background ({processes}): quit it from the notification area, or its cache files in use will be skipped.",
+    "{name} is still running in the background ({processes}): quit it from the notification area, or its cache files in use will be skipped. To stop this, turn off “Continue running background apps when {name} is closed” in {name}’s settings.",
+  "browser.quit": "Quit {name}",
+  "browser.quitConfirm":
+    "{name} will be force-closed. Nothing is open on screen, but {name} may offer to restore its session next time it starts.",
+  "browser.quitDone": "{name} stopped ({processes})",
+  "browser.quitFailed": "{name} could not be stopped.",
+  "browser.quitHasWindow": "{name} has just opened a window: close it yourself instead.",
   "browser.processes.one": "{count} process",
   "browser.processes.other": "{count} processes",
 
