@@ -345,7 +345,7 @@ function ExclusionsSection() {
         );
         return (
         <li
-          key={`${exclusion.rule_id} ${exclusion.pattern}`}
+          key={`${exclusion.rule_id}${exclusion.pattern}`}
           className="flex items-center gap-3"
         >
           <div className="min-w-0 flex-1">
