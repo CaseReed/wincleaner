@@ -10,6 +10,7 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   `%USERPROFILE%\.cargo\bin`.
 - Front end: `npm test` (Vitest), `npm run build` (tsc + vite).
 - Binary: `npm run tauri build` → `src-tauri/target/release/` (exe, MSI, NSIS).
+- `src-tauri/examples/scan_bench.rs` is an opt-in, read-only benchmark of a full Analyze (`cargo run --release --example scan_bench` from `src-tauri`), never run by `cargo test` or CI.
 - `src-tauri/examples/trash_bench.rs` is an opt-in throughput benchmark for
   Recycle Bin deletion (`cargo run --release --example trash_bench` from
   `src-tauri`); it is never run by `cargo test` or CI, and it sends real files

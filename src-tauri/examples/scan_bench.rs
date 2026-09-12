@@ -1,0 +1,66 @@
+//! Opt-in throughput benchmark for the Analyze (scan) path.
+//!
+//! Not a test: never run under `cargo test` or CI. Run by hand, in release
+//! (a debug build is not representative):
+//!
+//!     cargo run --release --example scan_bench
+//!
+//! It loads the rule catalogue exactly as the application does at startup
+//! (`commands::catalogue`: native rules from `rules.toml`, then the Winapp2
+//! rules whose application is detected on this machine) and scans every rule
+//! in it with the same `scan::scan_rule` the `scan` Tauri command calls. This
+//! is READ-ONLY: it only walks directories and reads file metadata (plus one
+//! `SHQueryRecycleBinW` call for the recycle-bin rule), and never deletes or
+//! modifies anything on disk.
+
+use std::time::Instant;
+use wincleaner_lib::commands::catalogue;
+use wincleaner_lib::scan::scan_rule;
+
+fn main() {
+    println!("Analyze (scan) benchmark\n");
+
+    let load_start = Instant::now();
+    let cat = catalogue().expect("failed to build the rule catalogue");
+    let load_elapsed = load_start.elapsed();
+    println!(
+        "catalogue load: {:.3}s ({} native, {} winapp2 detected, {} winapp2 dropped)",
+        load_elapsed.as_secs_f64(),
+        cat.summary.native,
+        cat.summary.winapp2_detected,
+        cat.summary.winapp2_dropped
+    );
+    println!("total rules to scan: {}\n", cat.rules.len());
+
+    let mut timings: Vec<(String, std::time::Duration, u64, u32)> = Vec::new();
+    let scan_start = Instant::now();
+    for rule in &cat.rules {
+        let t = Instant::now();
+        match scan_rule(rule) {
+            Ok(res) => timings.push((rule.id.clone(), t.elapsed(), res.file_count, res.skipped)),
+            Err(e) => {
+                // A machine-specific load error (missing var, outside profile)
+                // is expected for some rules; report it and move on, exactly
+                // as `scan_rules_with` does per-rule in `commands.rs`.
+                eprintln!("  {} failed: {e}", rule.id);
+            }
+        }
+    }
+    let scan_elapsed = scan_start.elapsed();
+
+    println!("total scan time: {:.3}s over {} rules\n", scan_elapsed.as_secs_f64(), timings.len());
+
+    timings.sort_by_key(|t| std::cmp::Reverse(t.1));
+    println!("10 slowest rules:");
+    for (id, elapsed, file_count, skipped) in timings.iter().take(10) {
+        println!(
+            "  {:<40} {:>8.3}s  {:>8} files  {:>5} skipped",
+            id,
+            elapsed.as_secs_f64(),
+            file_count,
+            skipped
+        );
+    }
+
+    println!("\nNothing was deleted or modified: this benchmark only scans.");
+}
