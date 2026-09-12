@@ -7,6 +7,7 @@ import { I18nProvider, LANGUAGE_KEY } from "@/i18n";
 import { SettingsPanel } from "./SettingsPanel";
 
 vi.mock("@/lib/api", () => ({
+  appMode: vi.fn(),
   checkForUpdates: vi.fn(),
   listExclusions: vi.fn(),
   listRules: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  appMode,
   checkForUpdates,
   listExclusions,
   listRules,
@@ -27,6 +29,7 @@ import {
   sandboxRemoveOrphans,
 } from "@/lib/api";
 
+const mockedAppMode = vi.mocked(appMode);
 const mockedCheck = vi.mocked(checkForUpdates);
 const mockedOrphans = vi.mocked(sandboxOrphans);
 const mockedRemoveOrphans = vi.mocked(sandboxRemoveOrphans);
@@ -57,6 +60,8 @@ function answer(over: Partial<Awaited<ReturnType<typeof checkForUpdates>>> = {})
 beforeEach(() => {
   localStorage.clear();
   mockedCheck.mockReset();
+  // An installed build is the normal case; the portable line stays hidden.
+  mockedAppMode.mockReset().mockResolvedValue(false);
   // Nothing left behind is the normal case, and the one every other test here
   // renders against.
   mockedOrphans.mockReset().mockResolvedValue([]);
@@ -80,6 +85,20 @@ describe("SettingsPanel", () => {
       "Open source, MIT. No telemetry, and no network access except one request to GitHub when you click Check for updates or enable automatic checks (off by default).",
     );
     expect(screen.getByTestId("about")).toHaveTextContent("github.com/CaseReed/wincleaner");
+  });
+
+  it("says nothing about portable mode in an installed build", async () => {
+    render(<SettingsPanel />);
+    await waitFor(() => expect(mockedAppMode).toHaveBeenCalled());
+    expect(screen.queryByTestId("app-portable")).toBeNull();
+  });
+
+  it("says where the stores live when the build is portable", async () => {
+    mockedAppMode.mockResolvedValue(true);
+    render(<SettingsPanel />);
+    expect(await screen.findByTestId("app-portable")).toHaveTextContent(
+      "stored next to the executable",
+    );
   });
 
   it("renders the changelog body as plain text under the version heading", () => {

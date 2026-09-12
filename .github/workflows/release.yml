@@ -80,6 +80,22 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+      # The bare executable from the build tauri-action has just run, attached
+      # next to the MSI and the NSIS installer. It is what "portable" means
+      # here: dropping a `portable.txt` beside it moves the stores next to it
+      # (`src-tauri/src/paths.rs`, README "Portable"). tauri-action publishes
+      # only the bundles, so this renames the exe to the documented asset name
+      # and uploads it with the same `gh` the signing steps below use.
+      # `--clobber` keeps a re-run idempotent.
+      - name: Attach the portable executable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          asset="WinCleaner_${{ steps.version.outputs.version }}_x64-portable.exe"
+          cp src-tauri/target/release/wincleaner.exe "$asset"
+          gh release upload "${{ github.ref_name }}" "$asset" --clobber
+
       # --- SignPath signing skeleton (free for OSS) --------------------------
       #
       # This job only runs when the four SignPath secrets are set in the

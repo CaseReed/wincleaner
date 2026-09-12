@@ -220,6 +220,13 @@ export function quitBrowser(process: string): Promise<number> {
   return invoke<number>("quit_browser", { process });
 }
 
+/// True when a `portable.txt` sits next to the executable: the stores live in
+/// `<exe dir>\WinCleaner` instead of `%APPDATA%` (`src-tauri/src/paths.rs`).
+/// A flag, never a path — the directory itself never crosses the boundary.
+export function appMode(): Promise<boolean> {
+  return invoke<boolean>("app_mode");
+}
+
 export function rulesSummary(): Promise<RulesSummary> {
   return invoke<RulesSummary>("rules_summary");
 }

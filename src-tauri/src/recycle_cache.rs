@@ -28,12 +28,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Name of the store, under `%APPDATA%\WinCleaner`.
+/// Name of the store, in `paths::config_dir` — the same directory
+/// `exclusions.rs` uses.
 pub const RECYCLE_CACHE_FILE: &str = "recycle-bin.toml";
-
-/// Directory the store lives in, under `%APPDATA%`. Same one `exclusions.rs`
-/// uses.
-const APP_DIR: &str = "WinCleaner";
 
 /// The stored measurement and the state of the bin it describes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,9 +41,7 @@ pub struct Cached {
 }
 
 pub fn store_path() -> Result<PathBuf, String> {
-    let appdata =
-        std::env::var("APPDATA").map_err(|_| "%APPDATA% is not defined".to_string())?;
-    Ok(Path::new(&appdata).join(APP_DIR).join(RECYCLE_CACHE_FILE))
+    Ok(crate::paths::config_dir()?.join(RECYCLE_CACHE_FILE))
 }
 
 /// Reads the store. Anything that is not a well-formed entry — absent,

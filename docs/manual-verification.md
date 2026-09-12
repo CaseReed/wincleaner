@@ -541,3 +541,54 @@ only check that a real browser actually dies and that its cache stops being
    before confirming, and confirm: the toast must read **Google Chrome has just
    opened a window: close it yourself instead.**, and the window must still be
    there.
+
+## VM-24 — Portable mode — to be run by the user
+
+Not run automatically: the resolver is unit-tested with an injected executable
+directory (`src-tauri/src/paths.rs`), but nothing proves on CI that the real
+`current_exe()` of a real build lands where it should.
+
+1. Copy `src-tauri/target/release/wincleaner.exe` alone into an empty
+   directory — a USB stick is the real case. Start it: the window opens as
+   usual, and Settings → About must **not** mention portable mode.
+2. Close it. Create an empty file named `portable.txt` next to the exe and
+   start it again. Settings → About must now carry the **Portable** line.
+3. Cleanup > **Analyze**, "Show the paths" on any rule, and exclude one file.
+   `<exe dir>\WinCleaner\exclusions.toml` must appear, and
+   `%APPDATA%\WinCleaner\exclusions.toml` must be untouched (check its
+   timestamp: a portable run must never write to the roaming profile).
+4. Analyze with the Recycle Bin ticked, twice. `<exe dir>\WinCleaner\
+   recycle-bin.toml` must appear as well, and the second run must read
+   **cached** exactly as VM-22 describes.
+5. Delete `portable.txt` and start again. The exclusion added in step 3 must be
+   gone from Settings — the real store is `%APPDATA%` again — and the files
+   under `<exe dir>\WinCleaner\` must still be there, untouched.
+6. Settings > **Create a sandbox** while portable. The sandbox store stays
+   under the sandbox root: `<exe dir>\WinCleaner\exclusions.toml` must not
+   change while the sandbox is active.
+
+## VM-25 — The command line — to be run by the user
+
+Not run automatically: only a release binary carries
+`windows_subsystem = "windows"`, and the whole point of this check is that such
+a binary prints in a terminal without opening a window.
+
+1. From PowerShell, in `src-tauri/target/release`:
+   `.\wincleaner.exe --analyze | Out-String`. A table must appear — rule,
+   label, files, size, skipped, cached — closed by a totals line. **No window
+   must open**, not even briefly, and the process must be gone when the
+   prompt returns (`Get-Process wincleaner` finds nothing).
+2. `.\wincleaner.exe --analyze --json | ConvertFrom-Json` must parse, and its
+   `totals.rules` must equal the number of rules Settings reports. No progress
+   line may pollute the JSON on standard output.
+3. The figures must match the window's: run Analyze in the application on the
+   same profile and compare a couple of rules. They are the same catalogue and
+   the same scan, so a difference is a bug.
+4. `.\wincleaner.exe --analyze --rules recycle-bin` must measure that one rule.
+   `--rules nope` must print `unknown rule id: nope`, the usage, and exit **2**
+   (`$LASTEXITCODE`). `--clean` must do the same: it does not exist and never
+   will.
+5. `.\wincleaner.exe` with no argument at all must open the window as usual.
+6. Double-click the exe with a `--analyze` shortcut (Properties > Target):
+   nothing must appear on screen and nothing must be written — no console, no
+   window, no crash dialog.

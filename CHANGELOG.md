@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A portable build.** Drop a file named `portable.txt` next to
+  `wincleaner.exe` and the application stops writing to `%APPDATA%`: the
+  exclusions list and the Recycle Bin measurement move to
+  `<exe dir>\WinCleaner\`, so a copy on a USB stick leaves nothing behind on
+  the machine it is run from. The content of the marker is never read — it is
+  a marker, not a configuration file, and a user creating it by hand cannot
+  get it wrong. One resolver decides for both stores, so a store added later
+  cannot quietly stay in the roaming profile, and a sandbox still keeps
+  precedence over both layouts. Settings → About says "Portable" when the mode
+  is active, which is the only way to tell the two apart from inside the
+  window: no path crosses the IPC boundary here either. Theme, language and
+  the automatic-update consent stay in WebView2's own storage and do not
+  move. Releases now carry `WinCleaner_<version>_x64-portable.exe` next to the
+  MSI and the NSIS installer; WebView2 is still required, and it ships with
+  Windows 11.
+
+- **A read-only command line.** `wincleaner --analyze` measures every rule and
+  prints a table; `--json` prints one stable object instead, for a script or a
+  support ticket, and `--rules id,id` narrows the run. It opens no window: the
+  arguments are answered before Tauri starts, and the release binary attaches
+  the calling terminal's console to print at all. The measurement is the
+  application's own — same catalogue, same detected Winapp2 entries, same
+  stored exclusions with the same fail-closed rule, same concurrent scan — so a
+  figure printed here is the figure the window would show. There is no
+  `--clean` and there never will be: the confirmation before a deletion is an
+  invariant, and an unattended flag would be the way around it. No option
+  takes a path either — `--rules` accepts rule ids and refuses anything the
+  catalogue does not know. Exit codes are 0 for a run, 1 for a scan error and
+  2 for a bad argument, which is what a script actually branches on.
+
 ## [0.9.2] - 2026-09-13
 
 ### Added

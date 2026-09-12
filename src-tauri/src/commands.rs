@@ -437,6 +437,16 @@ impl ProcessControl for Machine {
     }
 }
 
+/// Whether this run is portable: a `portable.txt` next to the executable, so
+/// the stores live beside it instead of in `%APPDATA%` (`paths.rs`). Settings
+/// → About shows it. A flag and nothing else — the directory itself is a path
+/// and never crosses the boundary. Sync, unlike the commands below: one
+/// `is_file` on a path already in memory.
+#[tauri::command]
+pub fn app_mode() -> bool {
+    crate::paths::is_portable()
+}
+
 /// Async like the other heavy commands: the first call builds the catalogue if
 /// the startup warm-up has not finished yet, and that must not happen on the
 /// thread pumping the window events.

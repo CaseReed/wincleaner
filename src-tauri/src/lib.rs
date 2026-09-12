@@ -1,6 +1,8 @@
 pub mod clean;
+pub mod cli;
 pub mod commands;
 pub mod exclusions;
+pub mod paths;
 pub mod recycle_cache;
 pub mod rules;
 pub mod sandbox;
@@ -143,6 +145,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app_mode,
             commands::list_rules,
             commands::rules_summary,
             commands::scan,

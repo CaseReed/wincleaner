@@ -22,11 +22,8 @@ use crate::rules::{Rule, ALLOWED_VARS, EnvLookup};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Name of the store, under `%APPDATA%\WinCleaner` or under a sandbox root.
+/// Name of the store, in `paths::config_dir` or under a sandbox root.
 pub const EXCLUSIONS_FILE: &str = "exclusions.toml";
-
-/// Directory the real (non-sandbox) store lives in, under `%APPDATA%`.
-const APP_DIR: &str = "WinCleaner";
 
 /// What the user pointed at: the file itself, or the directory holding it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +52,7 @@ struct ExclusionFile {
 /// Days to `(year, month, day)`, proleptic Gregorian (Howard Hinnant's
 /// `civil_from_days`). Written out rather than pulling in `chrono` or `time`
 /// for one date a user reads and nothing computes against.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -202,15 +199,14 @@ pub fn pattern_for_rule(
 }
 
 /// Where the store lives. Under a sandbox root when one is active, so a
-/// sandbox never reads nor writes the user's real exclusions.
+/// sandbox never reads nor writes the user's real exclusions — that override
+/// is checked first and therefore wins over portable mode too. Otherwise
+/// wherever `paths::config_dir` says: `%APPDATA%\WinCleaner`, or next to the
+/// executable when the portable marker is there.
 pub fn store_path(sandbox_root: Option<&Path>) -> Result<PathBuf, String> {
     match sandbox_root {
         Some(root) => Ok(root.join(EXCLUSIONS_FILE)),
-        None => {
-            let appdata = std::env::var("APPDATA")
-                .map_err(|_| "%APPDATA% is not defined".to_string())?;
-            Ok(Path::new(&appdata).join(APP_DIR).join(EXCLUSIONS_FILE))
-        }
+        None => Ok(crate::paths::config_dir()?.join(EXCLUSIONS_FILE)),
     }
 }
 

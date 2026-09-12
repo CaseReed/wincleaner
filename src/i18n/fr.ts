@@ -257,6 +257,8 @@ export const fr: Dictionary = {
   "settings.about": "À propos",
   "settings.aboutBody":
     "Open source, MIT. Aucune télémétrie et aucun accès réseau, hormis une requête vers GitHub lorsque vous cliquez sur Rechercher des mises à jour ou que vous activez la recherche automatique (désactivée par défaut).",
+  "settings.portable":
+    "Portable : les exclusions et la mesure de la corbeille sont enregistrées à côté de l’exécutable, pas dans %APPDATA%.",
   "settings.whatsNew": "Nouveautés de la version {version}",
   "settings.updates": "Mises à jour",
   "settings.sandbox": "Bac à sable",

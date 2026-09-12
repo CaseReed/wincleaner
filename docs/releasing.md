@@ -43,7 +43,16 @@ Pushing a tag matching `v*` triggers `.github/workflows/release.yml` on
    `src-tauri/target/release/bundle/` attached as release assets. The release
    is published directly (not a draft); it is marked as a prerelease when the
    tag contains a hyphen (e.g. `v0.2.0-beta.1`).
-5. If the four `SIGNPATH_*` repository secrets are set, the installers are
+5. Uploads the bare executable built in the same step,
+   `src-tauri/target/release/wincleaner.exe`, renamed to
+   **`WinCleaner_<version>_x64-portable.exe`**, as a third asset next to the
+   two installers. `tauri-action` publishes only the bundles, so this step
+   uses `gh release upload --clobber` — the same `gh` the signing steps use,
+   and idempotent on a re-run. That asset is what the README calls the
+   portable build: a `portable.txt` next to it moves the stores beside the
+   executable (`src-tauri/src/paths.rs`). It is not submitted to SignPath and
+   stays unsigned even once the installers are signed.
+6. If the four `SIGNPATH_*` repository secrets are set, the installers are
    also submitted to SignPath for signing (see `docs/code-signing.md`); while
    they are unset, that step is skipped and the release stays unsigned.
 
@@ -62,8 +71,12 @@ installers are signed, without touching the changelog section.
 
 - Locally: `src-tauri/target/release/bundle/msi/*.msi` and
   `src-tauri/target/release/bundle/nsis/*-setup.exe`.
+- Portable, locally: `src-tauri/target/release/wincleaner.exe` (the bare exe,
+  built by `cargo build --release` as well as by `npm run tauri build`).
 - On CI: attached to the GitHub Release at
-  `https://github.com/CaseReed/wincleaner/releases/tag/vx.y.z`.
+  `https://github.com/CaseReed/wincleaner/releases/tag/vx.y.z`, as
+  `WinCleaner_x.y.z_x64_en-US.msi`, `WinCleaner_x.y.z_x64-setup.exe` and
+  `WinCleaner_x.y.z_x64-portable.exe`.
 
 ## Signing note
 

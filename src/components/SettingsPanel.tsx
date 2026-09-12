@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
+  appMode,
   checkForUpdates,
   listExclusions,
   listRules,
@@ -370,6 +371,28 @@ function ExclusionsSection() {
   );
 }
 
+/// Shown only in portable mode: the one place the user can tell the two
+/// layouts apart, since no path ever reaches the front end. A failure is not
+/// worth a toast — the line is informative, and the stores work either way.
+function PortableLine() {
+  const { t } = useI18n();
+  const [portable, setPortable] = useState(false);
+
+  useEffect(() => {
+    void appMode()
+      .then(setPortable)
+      .catch(() => {});
+  }, []);
+
+  if (!portable) return null;
+
+  return (
+    <p data-testid="app-portable" className="text-muted-foreground">
+      {t("settings.portable")}
+    </p>
+  );
+}
+
 function SandboxOrphansLine() {
   const { t, tn, txn, formatBytes, formatCount } = useI18n();
   const [orphans, setOrphans] = useState<SandboxOrphan[]>([]);
@@ -482,6 +505,7 @@ export function SettingsPanel({
             <p className="font-medium">
               WinCleaner <span data-testid="app-version">{whatsNew.version}</span>
             </p>
+            <PortableLine />
             <p className="text-muted-foreground">{t("settings.aboutBody")}</p>
             <p className="font-mono text-xs text-muted-foreground">{GITHUB_URL}</p>
           </Section>

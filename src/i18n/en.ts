@@ -258,6 +258,8 @@ export const en = {
   "settings.about": "About",
   "settings.aboutBody":
     "Open source, MIT. No telemetry, and no network access except one request to GitHub when you click Check for updates or enable automatic checks (off by default).",
+  "settings.portable":
+    "Portable: exclusions and the Recycle Bin measurement are stored next to the executable, not in %APPDATA%.",
   "settings.whatsNew": "What's new in {version}",
   "settings.updates": "Updates",
   "settings.sandbox": "Sandbox",

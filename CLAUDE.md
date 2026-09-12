@@ -41,14 +41,34 @@ Spec: `docs/design.md`. Manual checklist: `docs/manual-verification.md`.
   pattern is refused like a bad rule. Merging at clean time is what makes an
   exclusion added after the last Analyze effective: `clean_rule_with_trash`
   re-walks the rule rather than trusting front-end paths.
-- The exclusions store **fails closed**: `%APPDATA%\WinCleaner\exclusions.toml`
-  (or `<sandbox root>\exclusions.toml` while a sandbox is active, so a sandbox
-  never reads the user's real list) that is absent is an empty list, but one
-  that exists and cannot be read or parsed makes scan and clean **error**, never
-  proceed as if nothing were excluded. Written atomically: temporary file, then
-  rename over the target.
+- One resolver decides where the per-user stores live
+  (`src-tauri/src/paths.rs::config_dir`): `<exe dir>\WinCleaner` when a file
+  named `portable.txt` sits next to the executable (content never read — a
+  marker, not a configuration file), `%APPDATA%\WinCleaner` otherwise. Both
+  `exclusions.toml` and `recycle-bin.toml` go through it rather than reading
+  `%APPDATA%` themselves, so a store added later cannot quietly stay in the
+  roaming profile. The **sandbox override keeps precedence** over both
+  branches: `exclusions::store_path` checks the sandbox root first and returns
+  before the resolver is ever called. Front-end settings (theme, language,
+  update consent) are WebView2 `localStorage` and are not moved by portable
+  mode. `app_mode` hands the front end a single flag, never the directory.
+- The command line (`src-tauri/src/cli.rs`) is **read-only and takes no
+  path**. There is no `--clean`: the confirmation before a deletion is an
+  invariant, and an unattended flag would be the way around it. `--rules`
+  accepts rule ids validated against the catalogue and nothing else — the same
+  rule the IPC boundary obeys, extended to `argv` — and the printed report
+  carries no path either. `main.rs` answers it before `tauri::Builder`, so
+  `--analyze` opens no window; the measurement is `commands::scan_rules_in`
+  itself, so the CLI can never drift from what the window shows. Exit codes:
+  0 a run, 1 a scan error, 2 a bad argument.
+- The exclusions store **fails closed**: the `exclusions.toml` of the directory
+  named above (or `<sandbox root>\exclusions.toml` while a sandbox is active,
+  so a sandbox never reads the user's real list) that is absent is an empty
+  list, but one that exists and cannot be read or parsed makes scan and clean
+  **error**, never proceed as if nothing were excluded. Written atomically:
+  temporary file, then rename over the target.
 - The Recycle Bin measurement cache (`src-tauri/src/recycle_cache.rs`,
-  `%APPDATA%\WinCleaner\recycle-bin.toml`) **fails open**, the exact opposite
+  `recycle-bin.toml` in that same directory) **fails open**, the exact opposite
   of the exclusions store above, and that asymmetry is deliberate: a missing,
   unreadable or corrupt entry is ignored and rewritten, because a lost cache
   costs one slow Analyze while a lost exclusion costs a file. Nothing is ever
